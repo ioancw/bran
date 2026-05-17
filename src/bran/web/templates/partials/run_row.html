@@ -1,0 +1,36 @@
+<tr id="run-{{ run.id }}"
+    {% if run.status in ('running', 'pending') %}
+      hx-get="/ui/runs/{{ run.id }}/row"
+      hx-trigger="every 3s"
+      hx-swap="outerHTML"
+    {% endif %}>
+  <td class="mono">
+    <a href="/runs/{{ run.id }}" class="text-fg-dim hover:text-accent-soft" style="text-decoration: none;">{{ run.id[:8] }}</a>
+  </td>
+  <td>
+    <span class="text-bright" style="font-weight: 500;">{{ run.agent }}</span>
+    {% set subs = run.metadata.get('subagents_invoked') if run.metadata else None %}
+    {% set spawns = run.metadata.get('spawned_runs') if run.metadata else None %}
+    {% if subs %}
+      <span class="ml-1 font-mono text-accent-soft" style="font-size: 10px;" title="delegated to: {{ subs|join(', ') }}">
+        → {{ subs[:3]|join(', ') }}{% if subs|length > 3 %} +{{ subs|length - 3 }}{% endif %}
+      </span>
+    {% endif %}
+    {% if spawns %}
+      <span class="ml-1 font-mono" style="font-size: 10px; color: var(--amber);" title="spawned background runs">
+        ⤳ {{ spawns|length }}
+      </span>
+    {% endif %}
+  </td>
+  <td>{% include 'partials/status_badge.html' %}</td>
+  <td class="text-dim" style="font-size: 12px;">{{ run.started_at[:19].replace('T', ' ') }}</td>
+  <td class="num text-dim">
+    {% if run.duration_ms is not none %}{{ '%.1f'|format(run.duration_ms / 1000) }}s{% else %}—{% endif %}
+  </td>
+  <td class="num text-dim">
+    {% if run.total_cost_usd is not none %}${{ '%.4f'|format(run.total_cost_usd) }}{% else %}—{% endif %}
+  </td>
+  <td class="text-dim" style="max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+    {{ run.task }}
+  </td>
+</tr>

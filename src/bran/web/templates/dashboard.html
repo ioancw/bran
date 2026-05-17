@@ -1,0 +1,128 @@
+{% extends 'base.html' %}
+{% block title %}bran · today{% endblock %}
+{% block heading %}Today{% endblock %}
+{% block subheading %}{{ today_label }}{% endblock %}
+
+{% block header_actions %}
+  <a href="/runs" class="btn-outline" style="text-decoration: none;">all runs →</a>
+{% endblock %}
+
+{% block content %}
+<div class="grid grid-cols-3 gap-8 stagger-in" style="max-width: 1100px;">
+
+  <!-- Left column: today's hero stats -->
+  <section class="col-span-2 space-y-6">
+
+    <!-- Activity hero: big numeral + by-agent breakdown -->
+    <div class="card" style="padding: 32px 36px;">
+      <div class="eyebrow" style="text-align: center; margin-bottom: 8px;">today</div>
+
+      <div style="text-align: center; padding: 12px 0 18px;">
+        <div class="numeral xl">{{ stats.runs_completed + stats.runs_failed + stats.runs_running }}</div>
+        <div class="eyebrow" style="margin-top: 8px;">
+          run{{ '' if (stats.runs_completed + stats.runs_failed + stats.runs_running) == 1 else 's' }}
+          {% if stats.total_cost_usd %}
+            &nbsp;·&nbsp; <span class="text-fg">${{ '%.2f'|format(stats.total_cost_usd) }}</span> spent
+          {% endif %}
+        </div>
+        {% if stats.runs_running %}
+          <div style="margin-top: 14px; font-family: var(--font-mono); font-size: 11px; color: var(--amber); letter-spacing: 0.14em; text-transform: uppercase;">
+            <span class="live-dot" style="vertical-align: middle; margin-right: 6px;"></span>
+            {{ stats.runs_running }} in flight
+          </div>
+        {% endif %}
+      </div>
+
+      {% if stats.per_agent %}
+        <div class="ornament-rule"><span class="glyph" aria-hidden="true"></span></div>
+        <div style="padding: 0 24px;">
+          {% for ag in stats.per_agent %}
+            <div class="stat-row">
+              <span class="stat-name">{{ ag.name }}</span>
+              <span class="stat-count">{{ ag.count }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="empty-state" style="padding: 28px 0 12px;">
+          <div class="brackets">[    ]</div>
+          <h3>no runs today</h3>
+          <p class="cta">try: <code>bran "summarise today's AI news"</code></p>
+        </div>
+      {% endif %}
+    </div>
+
+    <!-- Latest briefing preview -->
+    {% if briefing %}
+      <a href="/briefings/{{ briefing.name }}" class="card block" style="text-decoration: none; padding: 28px 32px; transition: border-color 0.2s var(--transition);"
+         onmouseover="this.style.borderColor='var(--accent-soft)'"
+         onmouseout="this.style.borderColor='var(--border)'">
+        <div class="eyebrow" style="margin-bottom: 6px;">latest briefing</div>
+        <div style="font-family: var(--font-prose); font-size: 22px; color: var(--fg-bright); font-weight: 500; letter-spacing: -0.01em; margin-bottom: 12px;">
+          {{ briefing.name.replace('.md', '').replace('briefing_', '').replace('_', ' ') }}
+        </div>
+        <p style="font-family: var(--font-prose); font-size: 15px; color: var(--fg-dim); line-height: 1.6;">
+          {{ briefing.snippet }}
+        </p>
+        <div style="margin-top: 14px; font-family: var(--font-mono); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.14em;">
+          read full briefing →
+        </div>
+      </a>
+    {% endif %}
+
+  </section>
+
+  <!-- Right column: upcoming + ad-hoc launcher -->
+  <aside class="col-span-1 space-y-6">
+
+    <!-- Next scheduled runs -->
+    <div class="card" style="padding: 22px 24px;">
+      <div class="eyebrow" style="margin-bottom: 14px;">upcoming</div>
+      {% if upcoming %}
+        {% for u in upcoming %}
+          <div style="padding: 10px 0; {% if not loop.last %}border-bottom: 1px solid var(--border);{% endif %}">
+            <div style="display: flex; align-items: baseline; gap: 8px;">
+              <span style="font-family: var(--font-prose); font-size: 15px; color: var(--fg-bright); font-weight: 500;">{{ u.name }}</span>
+              <span class="ml-auto" style="font-family: var(--font-mono); font-size: 10px; color: var(--accent-soft); text-transform: uppercase; letter-spacing: 0.1em;">{{ u.countdown }}</span>
+            </div>
+            <div style="display: flex; align-items: baseline; gap: 6px; margin-top: 2px;">
+              <span class="text-dim" style="font-family: var(--font-prose); font-size: 13px; font-style: italic;">{{ u.agent }}</span>
+              <span class="ml-auto text-muted font-mono" style="font-size: 10px;">{{ u.cron }}</span>
+            </div>
+          </div>
+        {% endfor %}
+        <div style="margin-top: 12px; text-align: right;">
+          <a href="/schedules" class="text-accent-soft" style="font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.14em;">all schedules →</a>
+        </div>
+      {% else %}
+        <div class="empty-state" style="padding: 16px 0;">
+          <div class="brackets" style="font-size: 22px;">[  ]</div>
+          <h3 style="font-size: 16px;">no schedules</h3>
+          <p class="cta" style="font-size: 10px;">add one in <a href="/schedules" class="text-accent-soft">/schedules</a></p>
+        </div>
+      {% endif %}
+    </div>
+
+    <!-- Ad-hoc launcher (quiet) -->
+    <div class="card-quiet">
+      <div class="eyebrow" style="margin-bottom: 10px;">fire a run</div>
+      <form hx-post="/ui/new-run"
+            hx-target="body"
+            hx-swap="none"
+            hx-on::after-request="if (event.detail.successful) { this.reset(); window.location.reload(); }"
+            class="space-y-3">
+        <select name="agent" required class="field">
+          {% for p in agents %}
+            <option value="{{ p.name }}" {% if p.name == 'orchestrator' %}selected{% endif %}>{{ p.name }}</option>
+          {% endfor %}
+        </select>
+        <textarea name="task" rows="3" required placeholder="task…" class="field" style="resize: vertical; font-family: var(--font-prose); font-size: 14px;"></textarea>
+        <div style="display: flex; align-items: center; justify-content: flex-end;">
+          <button type="submit" class="btn-primary">Launch</button>
+        </div>
+      </form>
+    </div>
+
+  </aside>
+</div>
+{% endblock %}

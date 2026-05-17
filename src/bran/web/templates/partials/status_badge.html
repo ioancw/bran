@@ -1,0 +1,10 @@
+{% set palette = {
+    'completed': ('ok',   '✓', 'completed'),
+    'failed':    ('err',  '✗', 'failed'),
+    'running':   ('warn', '◐', 'running'),
+    'pending':   ('mute', '·', 'pending'),
+}.get(status, ('mute', '?', status)) %}
+<span class="pill {{ palette[0] }}">
+  <span style="font-size: 9px;">{{ palette[1] }}</span>
+  <span>{{ palette[2] }}</span>
+</span>

@@ -1,0 +1,64 @@
+{# One renderable entry in the transcript timeline. #}
+{% if e.kind == 'user_text' %}
+  <div class="card" style="background: var(--accent-glow); border-color: rgba(255,255,255,0.04);">
+    <div class="label-cap" style="color: var(--accent-soft); margin-bottom: 6px;">User</div>
+    <div class="text-fg" style="font-size: 14px; line-height: 1.55; white-space: pre-wrap;">{{ e.text }}</div>
+  </div>
+
+{% elif e.kind == 'assistant_text' %}
+  <div class="card">
+    <div class="label-cap" style="margin-bottom: 6px;">Assistant</div>
+    <pre data-md class="hidden">{{ e.text }}</pre>
+  </div>
+
+{% elif e.kind == 'thinking' %}
+  <details class="card" style="padding: 0;">
+    <summary class="label-cap" style="padding: 10px 16px; cursor: pointer;">
+      💭 thinking · {{ e.text|length }} chars
+    </summary>
+    <div class="text-dim" style="padding: 4px 16px 12px; font-size: 12px; font-style: italic; white-space: pre-wrap;">{{ e.text }}</div>
+  </details>
+
+{% elif e.kind == 'tool_call' %}
+  <details class="card" style="padding: 0;">
+    <summary class="flex items-center gap-2 hover:cursor-pointer" style="padding: 8px 14px; cursor: pointer;">
+      <span class="text-muted">→</span>
+      <code class="text-accent-soft" style="font-family: var(--font-mono); font-size: 12px; font-weight: 500;">{{ e.tool_name }}</code>
+      <span class="text-dim font-mono" style="font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ (e.tool_input|tojson)[:120] }}{% if (e.tool_input|tojson)|length > 120 %}…{% endif %}</span>
+    </summary>
+    <div style="padding: 4px 14px 12px;">
+      <pre class="font-mono" style="background: var(--bg); color: var(--fg); padding: 12px; border-radius: 4px; font-size: 11px; overflow-x: auto; border: 1px solid var(--border2);">{{ e.tool_input|tojson(indent=2) }}</pre>
+    </div>
+  </details>
+
+{% elif e.kind == 'delegation' %}
+  <div class="card" style="background: var(--amber-soft); border-color: var(--amber);">
+    <div class="flex items-center gap-2" style="font-size: 12px;">
+      <span style="color: var(--amber);">⇢</span>
+      <span style="color: var(--amber);">Delegated to sub-agent</span>
+      <code class="font-mono" style="color: var(--amber); font-weight: 600;">{{ e.subagent_type or '(unknown)' }}</code>
+      <span class="ml-auto label-cap" style="color: var(--amber);">see Sub-agents panel</span>
+    </div>
+    {% if e.tool_input and e.tool_input.get('prompt') %}
+      <details style="margin-top: 8px;">
+        <summary class="label-cap" style="color: var(--amber); cursor: pointer;">prompt sent to sub-agent</summary>
+        <pre class="text-fg" style="font-size: 11px; white-space: pre-wrap; margin-top: 6px; background: var(--surface); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">{{ e.tool_input.get('prompt') }}</pre>
+      </details>
+    {% endif %}
+  </div>
+
+{% elif e.kind == 'tool_result' %}
+  <details class="card" style="padding: 0; margin-left: 24px; {% if e.tool_is_error %}border-color: var(--red);{% endif %}">
+    <summary class="flex items-center gap-2" style="padding: 8px 14px; cursor: pointer; font-size: 12px;">
+      <span class="text-muted">←</span>
+      <span style="{% if e.tool_is_error %}color: var(--red);{% else %}color: var(--fg-dim);{% endif %}">
+        {% if e.tool_is_error %}error{% else %}result{% endif %}
+      </span>
+      <span class="text-dim font-mono" style="font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ (e.text or '')[:120] }}{% if e.text and e.text|length > 120 %}…{% endif %}</span>
+    </summary>
+    <div style="padding: 4px 14px 12px;">
+      <pre class="font-mono" style="background: {% if e.tool_is_error %}var(--red-soft); color: var(--red){% else %}var(--bg); color: var(--fg){% endif %}; padding: 12px; border-radius: 4px; font-size: 11px; white-space: pre-wrap; overflow-x: auto; max-height: 400px; border: 1px solid var(--border2);">{{ e.text }}</pre>
+    </div>
+  </details>
+
+{% endif %}

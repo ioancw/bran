@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+{% block title %}bran · {{ filename }}{% endblock %}
+{% block heading %}Briefing{% endblock %}
+{% block subheading %}{{ filename }}{% endblock %}
+
+{% block header_actions %}
+  <a href="/briefings" class="btn-outline" style="text-decoration: none;">← all briefings</a>
+{% endblock %}
+
+{% block content %}
+{# Title-page treatment: date eyebrow, large serif title taken from filename,
+   centred ornament, then the prose-rendered content with a drop-cap on the
+   first paragraph. #}
+{% set raw_title = filename.replace('.md', '').replace('briefing_', '').replace('_', ' ') %}
+<article class="card stagger-in" style="max-width: var(--content-max-w); margin: 0 auto; padding: 0;">
+  <header class="title-page">
+    <div class="date-eyebrow">{{ raw_title }}</div>
+    <h1 class="title">Finance Briefing</h1>
+    <div class="glyph" aria-hidden="true"></div>
+  </header>
+  <div style="padding: 0 48px 56px;">
+    <pre data-md class="hidden">{{ content }}</pre>
+  </div>
+</article>
+{% endblock %}

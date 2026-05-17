@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}bran{% endblock %}</title>
+  <link rel="icon" type="image/svg+xml" href="/static/crow.svg" />
+
+  <!-- Tailwind handles layout (flex, grid, spacing, sizes). Colour, typography
+       and component look-and-feel come from /static/global.css which uses
+       theme-aware CSS variables defined in themes.css. -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+
+  <!-- Fonts: DM Sans (UI), Geist Mono (code/labels), Source Serif 4 (prose) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=Geist+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="/static/global.css">
+
+  <!-- markdown-it for client-side rendering of <pre data-md> blocks. -->
+  <script src="https://cdn.jsdelivr.net/npm/markdown-it@14/dist/markdown-it.min.js"></script>
+  <script>
+    function renderMarkdown(root) {
+      if (!window.markdownit) return;
+      const md = window.markdownit({ html: false, linkify: true, breaks: false });
+      const targets = (root || document).querySelectorAll('pre[data-md]:not([data-md-rendered])');
+      targets.forEach(el => {
+        const rendered = md.render(el.textContent);
+        const wrapper = document.createElement('div');
+        wrapper.className = 'prose-md';
+        wrapper.innerHTML = rendered;
+        el.replaceWith(wrapper);
+      });
+    }
+    document.addEventListener('DOMContentLoaded', () => renderMarkdown());
+    document.addEventListener('htmx:afterSwap', e => renderMarkdown(e.target));
+  </script>
+
+  <!-- Theme handling: persists choice to localStorage, auto-detects OS pref.
+       Mirrors light_cc/src/theme.js so the user has the same five themes here.
+       Inline (not in static) so it runs before paint and avoids flash. -->
+  <script>
+    (function () {
+      const KEY = 'bran_theme';
+      const THEMES = [
+        { name: 'midnight',  label: 'Midnight' },
+        { name: 'light',     label: 'Light' },
+        { name: 'dracula',   label: 'Dracula' },
+        { name: 'solarized', label: 'Solarized' },
+        { name: 'nord',      label: 'Nord' },
+      ];
+      function apply(name) {
+        if (name === 'midnight' || !name) {
+          document.documentElement.removeAttribute('data-theme');
+        } else {
+          document.documentElement.setAttribute('data-theme', name);
+        }
+      }
+      function set(name) { localStorage.setItem(KEY, name); apply(name); }
+      const saved = localStorage.getItem(KEY);
+      if (saved) {
+        apply(saved);
+      } else {
+        const preferLight = window.matchMedia('(prefers-color-scheme: light)').matches;
+        apply(preferLight ? 'light' : 'midnight');
+      }
+      window.branThemes = THEMES;
+      window.branSetTheme = set;
+      window.branGetTheme = () => localStorage.getItem(KEY) || 'midnight';
+    })();
+  </script>
+</head>
+<body>
+  <div class="min-h-screen flex">
+    <!-- Sidebar -->
+    <aside class="sidebar shrink-0 flex flex-col">
+      <div class="px-5 py-5" style="border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px;">
+        <a href="/" class="wordmark with-crow" style="text-decoration: none;">
+          <!-- Raven icon by Material Symbols (Google), Apache 2.0 -->
+          <svg class="wordmark-crow" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="m10 18l-1.65 4l-1.85-.75l1.45-3.525q-2.65-.7-4.3-2.85T2 10V6q0-1.65 1.175-2.825T6 2q.55 0 1.05.187t1 .388L14 5l-4 1.5V8l7.85 5H10q-.825 0-1.412-.587T8 11H6q0 1.65 1.175 2.825T10 15h11l1 5h-2l-1-2h-5v4h-2v-4zM5.288 5.288Q5 5.575 5 6t.288.713T6 7t.713-.288T7 6t-.288-.712T6 5t-.712.288"/>
+          </svg>
+          <span>bran</span>
+        </a>
+        <span class="ml-auto label-cap">{{ version }}</span>
+      </div>
+      <nav class="p-3 space-y-0.5 text-sm">
+        {% for item in nav %}
+          <a href="{{ item.href }}" class="nav-item {% if item.active %}active{% endif %}">
+            <span>{{ item.label }}</span>
+            {% if item.count is not none %}
+              <span class="count">{{ item.count }}</span>
+            {% endif %}
+          </a>
+        {% endfor %}
+      </nav>
+
+      <div class="mt-auto p-3 space-y-2" style="border-top: 1px solid var(--border);">
+        <div class="label-cap px-3">Theme</div>
+        <select id="theme-picker" class="field"
+                onchange="window.branSetTheme(this.value)"
+                style="font-size: 12px;">
+          <!-- Options injected by inline script below so we can mark the
+               currently-active one selected without a server round-trip. -->
+        </select>
+        <div class="px-3 text-xs text-muted">
+          signed in as <span class="text-fg">{{ user.name }}</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="flex-1 min-w-0">
+      <header class="page-header">
+        <h1>{% block heading %}{% endblock %}</h1>
+        <span class="subheading">{% block subheading %}{% endblock %}</span>
+        <div class="ml-auto flex items-center gap-2">
+          {% block header_actions %}{% endblock %}
+        </div>
+      </header>
+      <div class="px-8 py-6 stagger-in">
+        {% block content %}{% endblock %}
+      </div>
+    </main>
+  </div>
+
+  <script>
+    // Populate the theme picker with the saved choice highlighted.
+    (function () {
+      const sel = document.getElementById('theme-picker');
+      if (!sel) return;
+      const current = window.branGetTheme();
+      for (const t of window.branThemes) {
+        const opt = document.createElement('option');
+        opt.value = t.name;
+        opt.textContent = t.label;
+        if (t.name === current) opt.selected = true;
+        sel.appendChild(opt);
+      }
+    })();
+  </script>
+</body>
+</html>

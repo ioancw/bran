@@ -1,0 +1,37 @@
+{% extends 'base.html' %}
+{% block title %}bran · briefings{% endblock %}
+{% block heading %}Briefings{% endblock %}
+{% block subheading %}saved markdown from finance-news and other write-to-disk agents{% endblock %}
+
+{% block content %}
+{% if briefings %}
+  <table class="bran-table">
+    <thead>
+      <tr>
+        <th>File</th>
+        <th class="num" style="width: 90px;">Size</th>
+        <th style="width: 200px;">Modified</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for b in briefings %}
+        <tr>
+          <td>
+            <a href="/briefings/{{ b.name }}" class="text-accent-soft" style="font-weight: 500;">{{ b.name }}</a>
+          </td>
+          <td class="num text-dim">{{ b.size_kb }} KB</td>
+          <td class="text-dim font-mono" style="font-size: 11px;">
+            <span x-text="new Date({{ b.mtime * 1000 }}).toLocaleString()">{{ b.mtime }}</span>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <div class="empty-state">
+    <div class="brackets">[       ]</div>
+    <h3>nothing in the archive</h3>
+    <p class="cta">try: <code>bran ask finance-news ""</code></p>
+  </div>
+{% endif %}
+{% endblock %}

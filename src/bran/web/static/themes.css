@@ -1,0 +1,148 @@
+/* Theme variable sets — ported from light_cc/frontend/src/styles/themes.css
+   so bran shares the visual language of Ioan's other Svelte project.
+
+   Five themes swappable via [data-theme="..."] on <html>. Default (no attr)
+   is the midnight dark theme. Theme switching lives in base.html. */
+
+:root {
+  --font-ui:      'DM Sans', system-ui, -apple-system, sans-serif;
+  --font-mono:    'Geist Mono', monospace;
+  --font-prose:   'Source Serif 4', Georgia, serif;
+  --bg:           #0c0c0e;
+  --surface:      #15151b;
+  --surface2:     #1c1c24;
+  --border:       #2a2a36;
+  --border2:      #383846;
+  --muted:        #7a7a92;
+  --dim:          #8a8ab0;
+  --fg:           #c4c4d4;
+  --fg-bright:    #e8e8f2;
+  --fg-dim:       #8888a0;
+  --accent:       #c17b5b;
+  --accent-soft:  #d89878;
+  --accent-glow:  rgba(193,123,91,0.15);
+  --accent2:      #f59e0b;
+  --accent2-soft: #fbbf24;
+  --accent2-glow: rgba(245,158,11,0.12);
+  --green:        #10b981;
+  --green-soft:   rgba(16,185,129,0.12);
+  --amber:        #f59e0b;
+  --amber-soft:   rgba(245,158,11,0.1);
+  --red:          #ef4444;
+  --red-soft:     rgba(239,68,68,0.1);
+  --blue:         #38bdf8;
+  --blue-soft:    rgba(56,189,248,0.1);
+  --sidebar-w:    240px;
+  --radius:       6px;
+  --transition:   cubic-bezier(0.4, 0, 0.2, 1);
+  --content-max-w: 720px;
+}
+
+[data-theme="light"] {
+  --bg:           #faf0e6;
+  --surface:      #fdf5ec;
+  --surface2:     #f0e2d2;
+  --border:       #ead9c4;
+  --border2:      #dcc6aa;
+  --muted:        #6d6454;
+  --dim:          #4e4638;
+  --fg:           #4a4138;
+  --fg-bright:    #26201a;
+  --fg-dim:       #6b6356;
+  --accent:       #a04a5f;
+  --accent-soft:  #b55e73;
+  --accent-glow:  rgba(160,74,95,0.08);
+  --accent2:      #b45309;
+  --accent2-soft: #d97706;
+  --accent2-glow: rgba(180,83,9,0.06);
+  --green:        #16a34a;
+  --green-soft:   rgba(22,163,74,0.06);
+  --amber:        #ca8a04;
+  --amber-soft:   rgba(202,138,4,0.04);
+  --red:          #dc2626;
+  --red-soft:     rgba(220,38,38,0.05);
+  --blue:         #0369a1;
+  --blue-soft:    rgba(3,105,161,0.05);
+}
+
+[data-theme="dracula"] {
+  --bg:           #282a36;
+  --surface:      #2d2f3d;
+  --surface2:     #343647;
+  --border:       #44475a;
+  --border2:      #515470;
+  --muted:        #8494c8;
+  --dim:          #9daacd;
+  --fg:           #cdd6f4;
+  --fg-bright:    #f8f8f2;
+  --fg-dim:       #a0aece;
+  --accent:       #bd93f9;
+  --accent-soft:  #caa6fc;
+  --accent-glow:  rgba(189,147,249,0.15);
+  --green:        #50fa7b;
+  --green-soft:   rgba(80,250,123,0.12);
+  --amber:        #f1fa8c;
+  --amber-soft:   rgba(241,250,140,0.1);
+  --red:          #ff5555;
+  --red-soft:     rgba(255,85,85,0.1);
+  --blue:         #8be9fd;
+  --blue-soft:    rgba(139,233,253,0.1);
+  --accent2:      #f1fa8c;
+  --accent2-soft: #f5fc9e;
+  --accent2-glow: rgba(241,250,140,0.12);
+}
+
+[data-theme="solarized"] {
+  --bg:           #002b36;
+  --surface:      #073642;
+  --surface2:     #0a3f4e;
+  --border:       #1a4f5e;
+  --border2:      #2a5f6e;
+  --muted:        #7a94a0;
+  --dim:          #93a9b4;
+  --fg:           #93a1a1;
+  --fg-bright:    #eee8d5;
+  --fg-dim:       #839496;
+  --accent:       #268bd2;
+  --accent-soft:  #4aa3e0;
+  --accent-glow:  rgba(38,139,210,0.15);
+  --green:        #859900;
+  --green-soft:   rgba(133,153,0,0.12);
+  --amber:        #b58900;
+  --amber-soft:   rgba(181,137,0,0.1);
+  --red:          #dc322f;
+  --red-soft:     rgba(220,50,47,0.1);
+  --blue:         #2aa198;
+  --blue-soft:    rgba(42,161,152,0.1);
+  --accent2:      #b58900;
+  --accent2-soft: #cb9a00;
+  --accent2-glow: rgba(181,137,0,0.12);
+}
+
+[data-theme="nord"] {
+  --bg:           #2e3440;
+  --surface:      #3b4252;
+  --surface2:     #434c5e;
+  --border:       #4c566a;
+  --border2:      #5a657a;
+  --muted:        #8a96b0;
+  --dim:          #a3aec6;
+  --fg:           #d8dee9;
+  --fg-bright:    #eceff4;
+  --fg-dim:       #a3b1cc;
+  --accent:       #88c0d0;
+  --accent-soft:  #8fbcbb;
+  --accent-glow:  rgba(136,192,208,0.15);
+  --green:        #a3be8c;
+  --green-soft:   rgba(163,190,140,0.12);
+  --amber:        #ebcb8b;
+  --amber-soft:   rgba(235,203,139,0.1);
+  --red:          #bf616a;
+  --red-soft:     rgba(191,97,106,0.1);
+  --blue:         #5e81ac;
+  --blue-soft:    rgba(94,129,172,0.1);
+  --accent2:      #ebcb8b;
+  --accent2-soft: #f0d89e;
+  --accent2-glow: rgba(235,203,139,0.12);
+}
+

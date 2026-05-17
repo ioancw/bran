@@ -1,0 +1,125 @@
+{% extends 'base.html' %}
+{% block title %}bran · run {{ run.id[:8] }}{% endblock %}
+{% block heading %}Run {{ run.id[:8] }}{% endblock %}
+{% block subheading %}{{ run.agent }}{% endblock %}
+
+{% block header_actions %}
+  {% with status = run.status %}{% include 'partials/status_badge.html' %}{% endwith %}
+  <a href="/runs/{{ run.id }}/transcript" class="btn-outline" style="text-decoration: none;">transcript →</a>
+  {% if run.status in ('completed', 'failed') %}
+    <form method="post" action="/ui/runs/{{ run.id }}/rerun" class="inline">
+      <button type="submit" class="btn-outline">↻ re-run</button>
+    </form>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="grid grid-cols-4 gap-6">
+  <!-- Metadata -->
+  <aside class="col-span-1 space-y-4">
+    <div class="card" style="font-size: 13px;">
+      <div class="space-y-4">
+
+        <!-- IDs: drop the labels — the mono-styled values are recognisable on
+             their own; saves two label-caps from the stack. -->
+        <div class="space-y-1.5">
+          <div class="font-mono text-dim" style="font-size: 11px; word-break: break-all;" title="run id">{{ run.id }}</div>
+          {% if run.session_id %}
+            <div class="font-mono text-muted" style="font-size: 10px; word-break: break-all;" title="session id">session {{ run.session_id }}</div>
+          {% endif %}
+        </div>
+
+        <!-- 2x2 stats grid: needs labels because numbers without context are
+             meaningless. Keep all four. -->
+        <div class="grid grid-cols-2 gap-3 pt-3" style="border-top: 1px solid var(--border);">
+          <div>
+            <div class="label-cap" style="margin-bottom: 4px;">Turns</div>
+            <div class="text-bright" style="font-variant-numeric: tabular-nums;">{{ run.num_turns if run.num_turns is not none else '—' }}</div>
+          </div>
+          <div>
+            <div class="label-cap" style="margin-bottom: 4px;">Cost</div>
+            <div class="text-bright" style="font-variant-numeric: tabular-nums;">{% if run.total_cost_usd is not none %}${{ '%.4f'|format(run.total_cost_usd) }}{% else %}—{% endif %}</div>
+          </div>
+          <div>
+            <div class="label-cap" style="margin-bottom: 4px;">Duration</div>
+            <div class="text-bright" style="font-variant-numeric: tabular-nums;">{% if run.duration_ms is not none %}{{ '%.1f'|format(run.duration_ms / 1000) }}s{% else %}—{% endif %}</div>
+          </div>
+          <div>
+            <div class="label-cap" style="margin-bottom: 4px;">Status</div>
+            {% with status = run.status %}{% include 'partials/status_badge.html' %}{% endwith %}
+          </div>
+        </div>
+
+        <!-- Timing collapsed to one line: started timestamp + relative ended.
+             "ran for Xs" already covered by Duration above, so just show start. -->
+        <div class="pt-3" style="border-top: 1px solid var(--border);">
+          <div class="text-dim font-mono" style="font-size: 11px;">
+            started {{ run.started_at[:19].replace('T', ' ') }}
+          </div>
+        </div>
+
+        {% if run.parent_run_id %}
+        <div class="pt-3" style="border-top: 1px solid var(--border);">
+          <div class="label-cap" style="margin-bottom: 4px;">Parent</div>
+          <a href="/runs/{{ run.parent_run_id }}" class="font-mono text-accent-soft" style="font-size: 11px;">{{ run.parent_run_id[:8] }}</a>
+        </div>
+        {% endif %}
+
+        {% set subs = run.metadata.get('subagents_invoked') if run.metadata else None %}
+        {% set spawns = run.metadata.get('spawned_runs') if run.metadata else None %}
+        {% if subs or spawns %}
+        <div class="pt-3 space-y-3" style="border-top: 1px solid var(--border);">
+          {% if subs %}
+          <div>
+            <div class="label-cap" style="margin-bottom: 6px;">Delegated to</div>
+            <div class="flex flex-wrap gap-1">
+              {% for s in subs %}
+                <span class="chip accent">→ {{ s }}</span>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
+          {% if spawns %}
+          <div>
+            <div class="label-cap" style="margin-bottom: 6px;">Spawned (background)</div>
+            <ul class="space-y-1">
+              {% for sp in spawns %}
+                <li style="font-size: 11px;">
+                  <span class="chip" style="background: var(--amber-soft); color: var(--amber); border-color: rgba(255,255,255,0.04);">⤳ {{ sp.agent }}</span>
+                  <span class="text-muted ml-1">{{ sp.task[:60] }}{% if sp.task|length > 60 %}…{% endif %}</span>
+                </li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% endif %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </aside>
+
+  <!-- Task + result -->
+  <section class="col-span-3 space-y-4">
+    <div class="card">
+      <div class="label-cap" style="margin-bottom: 8px;">Task</div>
+      <pre class="text-fg" style="white-space: pre-wrap; font-family: var(--font-ui); font-size: 14px; line-height: 1.55;">{{ run.task }}</pre>
+    </div>
+
+    <div class="card" {% if run.status == 'running' %}style="border-color: var(--amber);"{% elif run.status == 'failed' %}style="border-color: var(--red);"{% endif %}>
+      <div class="label-cap flex items-center" style="margin-bottom: 8px;">
+        Result
+        {% if run.status in ('running', 'pending') %}
+          <span class="ml-2" style="color: var(--amber); text-transform: none; letter-spacing: 0;">● live (refresh page for latest)</span>
+        {% endif %}
+      </div>
+      {% if run.status == 'failed' and run.error %}
+        <pre class="font-mono" style="background: var(--red-soft); color: var(--red); padding: 12px; border-radius: 6px; white-space: pre-wrap; font-size: 11px;">{{ run.error }}</pre>
+      {% elif run.result %}
+        <pre data-md class="hidden">{{ run.result }}</pre>
+      {% else %}
+        <p class="text-muted" style="font-style: italic; font-size: 13px;">no result yet</p>
+      {% endif %}
+    </div>
+  </section>
+</div>
+{% endblock %}
