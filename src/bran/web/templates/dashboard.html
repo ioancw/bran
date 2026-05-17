@@ -75,7 +75,9 @@
   <!-- Right column: upcoming + ad-hoc launcher -->
   <aside class="col-span-1 space-y-6">
 
-    <!-- Next scheduled runs -->
+    <!-- Next scheduled runs. Countdowns are rendered server-side but updated
+         client-side every 30s by the script below — so they tick down instead
+         of going stale at page load. -->
     <div class="card" style="padding: 22px 24px;">
       <div class="eyebrow" style="margin-bottom: 14px;">upcoming</div>
       {% if upcoming %}
@@ -83,7 +85,9 @@
           <div style="padding: 10px 0; {% if not loop.last %}border-bottom: 1px solid var(--border);{% endif %}">
             <div style="display: flex; align-items: baseline; gap: 8px;">
               <span style="font-family: var(--font-prose); font-size: 15px; color: var(--fg-bright); font-weight: 500;">{{ u.name }}</span>
-              <span class="ml-auto" style="font-family: var(--font-mono); font-size: 10px; color: var(--accent-soft); text-transform: uppercase; letter-spacing: 0.1em;">{{ u.countdown }}</span>
+              <span class="ml-auto countdown"
+                    data-next="{{ u.next_run.isoformat() if u.next_run else '' }}"
+                    style="font-family: var(--font-mono); font-size: 10px; color: var(--accent-soft); text-transform: uppercase; letter-spacing: 0.1em;">{{ u.countdown }}</span>
             </div>
             <div style="display: flex; align-items: baseline; gap: 6px; margin-top: 2px;">
               <span class="text-dim" style="font-family: var(--font-prose); font-size: 13px; font-style: italic;">{{ u.agent }}</span>
@@ -94,6 +98,32 @@
         <div style="margin-top: 12px; text-align: right;">
           <a href="/schedules" class="text-accent-soft" style="font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.14em;">all schedules →</a>
         </div>
+        <script>
+          (function () {
+            function fmt(ts) {
+              const target = new Date(ts).getTime();
+              const now = Date.now();
+              const s = Math.floor((target - now) / 1000);
+              if (s <= 0) return 'now';
+              if (s < 60) return `in ${s}s`;
+              if (s < 3600) return `in ${Math.floor(s/60)}m`;
+              if (s < 86400) {
+                const h = Math.floor(s/3600), m = Math.floor((s%3600)/60);
+                return `in ${h}h ${m}m`;
+              }
+              const d = Math.floor(s/86400), h = Math.floor((s%86400)/3600);
+              return `in ${d}d ${h}h`;
+            }
+            function tick() {
+              document.querySelectorAll('.countdown[data-next]').forEach(el => {
+                const ts = el.getAttribute('data-next');
+                if (ts) el.textContent = fmt(ts);
+              });
+            }
+            tick();                  // immediate, in case the server-rendered string is already minutes old
+            setInterval(tick, 30000); // 30s is enough — humans don't watch countdowns at second resolution
+          })();
+        </script>
       {% else %}
         <div class="empty-state" style="padding: 16px 0;">
           <div class="brackets" style="font-size: 22px;">[  ]</div>
@@ -103,13 +133,19 @@
       {% endif %}
     </div>
 
-    <!-- Ad-hoc launcher (quiet) -->
+    <!-- Ad-hoc launcher (quiet). Submits via HTMX, then redirects to the
+         new run's detail page so you can watch it land — no hard reload,
+         no scroll-position loss, no stale dashboard. -->
     <div class="card-quiet">
       <div class="eyebrow" style="margin-bottom: 10px;">fire a run</div>
       <form hx-post="/ui/new-run"
-            hx-target="body"
+            hx-target="this"
             hx-swap="none"
-            hx-on::after-request="if (event.detail.successful) { this.reset(); window.location.reload(); }"
+            hx-on::after-request="if (event.detail.successful) {
+              this.reset();
+              const m = event.detail.xhr.responseText.match(/href=&quot;(\/runs\/[^&quot;]+)&quot;/);
+              if (m) window.location.href = m[1];
+            }"
             class="space-y-3">
         <select name="agent" required class="field">
           {% for p in agents %}

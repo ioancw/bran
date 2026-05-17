@@ -8,24 +8,32 @@ place for future OAuth without touching individual handlers.
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from bran import __version__
 from bran.config import SETTINGS
 from bran.persistence import (
+    ChatRecord,
     RunRecord,
     ScheduleRecord,
+    delete_chat,
     delete_schedule,
+    get_chat,
     get_run,
     insert_run,
     insert_schedule,
+    list_chats,
     list_runs,
     list_schedules,
+    touch_chat,
+    upsert_chat,
 )
 from bran.agents import get_agent, list_agents
 from bran.dashboard_data import (
@@ -40,6 +48,7 @@ from bran.transcript import (
     parse_transcript,
     summarise_subagents,
 )
+from bran.runner import stream_agent
 from bran.runner import run_agent
 from bran.web.auth import WebUser, get_current_user
 
@@ -56,6 +65,7 @@ def _nav(active: str, *, runs_count: int | None = None) -> list[dict]:
     )
     return [
         {"href": "/",           "label": "Dashboard", "active": active == "dashboard", "count": None},
+        {"href": "/chat",       "label": "Chat",      "active": active == "chat",      "count": None},
         {"href": "/runs",       "label": "Runs",      "active": active == "runs",      "count": runs_count},
         {"href": "/agents",     "label": "Agents",    "active": active == "agents",    "count": len(list_agents())},
         {"href": "/schedules",  "label": "Schedules", "active": active == "schedules", "count": len(list_schedules())},
@@ -105,6 +115,352 @@ async def dashboard(
             today_label=now.strftime("%A, %d %B %Y"),
         ),
     )
+
+
+def _list_slash_commands() -> list[dict[str, str]]:
+    """Discover slash commands from `.claude/commands/*.md` for autocomplete.
+
+    Returns a list of {name, description} dicts. The description is parsed
+    from the optional YAML frontmatter `description:` field; if absent, falls
+    back to the first non-blank prose line.
+    """
+    out: list[dict[str, str]] = []
+    cmd_dir = SETTINGS.claude_dir / "commands"
+    if not cmd_dir.exists():
+        return out
+    for p in sorted(cmd_dir.glob("*.md")):
+        name = p.stem
+        desc = ""
+        try:
+            text = p.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        # Quick frontmatter parse — looking for `description: ...`
+        m = re.search(r"^description:\s*(.+)$", text, re.MULTILINE)
+        if m:
+            desc = m.group(1).strip().strip("\"'")
+        else:
+            # First non-blank, non-frontmatter line
+            for line in text.splitlines():
+                line = line.strip()
+                if line and not line.startswith(("---", "name:", "argument-hint:", "allowed-tools:")):
+                    desc = line[:120]
+                    break
+        out.append({"name": name, "description": desc})
+    return out
+
+
+def _parse_agent_prefix(prompt: str) -> tuple[str, str]:
+    """Detect `@name <rest>` or `@agent-name <rest>` and route accordingly.
+
+    Returns (agent_name, stripped_prompt). If no recognised agent is named,
+    returns ("orchestrator", original_prompt).
+    """
+    m = re.match(r"^@(?:agent-)?([\w-]+)\s+(.*)", prompt, re.DOTALL)
+    if not m:
+        return ("orchestrator", prompt)
+    candidate = m.group(1)
+    known = {a.name for a in list_agents()}
+    if candidate in known:
+        return (candidate, m.group(2).strip())
+    return ("orchestrator", prompt)
+
+
+def _chat_page_response(
+    request: Request,
+    user: WebUser,
+    active_session_id: str | None,
+):
+    """Shared rendering for `/chat` and `/chat/{session_id}`. Picks the active
+    chat (URL > most recent > none) and passes the full chat list + catalog
+    into the template."""
+    chats = list_chats(limit=100)
+    active = None
+    if active_session_id:
+        active = get_chat(active_session_id)
+    if active is None and chats:
+        active = chats[0]
+    catalog = {
+        "agents": [
+            {"name": a.name, "description": a.description}
+            for a in list_agents()
+        ],
+        "commands": _list_slash_commands(),
+    }
+    chats_payload = [
+        {"id": c.id, "title": c.title, "agent": c.agent,
+         "updated_at": c.updated_at, "created_at": c.created_at}
+        for c in chats
+    ]
+    return _templates.TemplateResponse(
+        request,
+        "chat.html",
+        _ctx(
+            request, user, "chat",
+            catalog_json=json.dumps(catalog),
+            chats_json=json.dumps(chats_payload),
+            active_chat=active,
+            active_chat_json=json.dumps(
+                {"id": active.id, "title": active.title, "agent": active.agent}
+                if active else None
+            ),
+        ),
+    )
+
+
+@router.get("/chat", response_class=HTMLResponse)
+async def chat_page(
+    request: Request,
+    user: Annotated[WebUser, Depends(get_current_user)],
+):
+    """Chat landing — opens the most recent chat, or empty state if none."""
+    return _chat_page_response(request, user, None)
+
+
+@router.get("/chat/{session_id}", response_class=HTMLResponse)
+async def chat_page_specific(
+    request: Request,
+    user: Annotated[WebUser, Depends(get_current_user)],
+    session_id: str,
+):
+    """URL-addressable chat — opens the specific session."""
+    return _chat_page_response(request, user, session_id)
+
+
+@router.get("/api/chats")
+async def api_list_chats(
+    user: Annotated[WebUser, Depends(get_current_user)],
+):
+    """Return recent chats as JSON for the sidebar to refresh after a new
+    message or after a new chat is created."""
+    return [
+        {"id": c.id, "title": c.title, "agent": c.agent,
+         "updated_at": c.updated_at, "created_at": c.created_at}
+        for c in list_chats(limit=100)
+    ]
+
+
+@router.delete("/api/chats/{chat_id}")
+async def api_delete_chat(
+    user: Annotated[WebUser, Depends(get_current_user)],
+    chat_id: str,
+):
+    """Remove a chat from the metadata table. NB: the underlying SDK session
+    JSONL file is NOT deleted — it stays in `~/.claude/projects/...` and can
+    still be resumed via `/chat/history/{id}` or the runs detail page."""
+    if not delete_chat(chat_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No chat {chat_id}")
+    return {"deleted": chat_id}
+
+
+# ---------------------------------------------------------------------------
+# Chat backend: SSE stream + history loader
+# ---------------------------------------------------------------------------
+
+def _serialize_block(block: Any) -> dict[str, Any] | None:
+    """Convert an SDK content block to a JSON shape the frontend understands."""
+    btype = type(block).__name__
+    if btype == "TextBlock":
+        return {"type": "text", "text": getattr(block, "text", "")}
+    if btype == "ThinkingBlock":
+        return {"type": "thinking", "text": getattr(block, "thinking", "")}
+    if btype == "ToolUseBlock":
+        name = getattr(block, "name", "")
+        inp = getattr(block, "input", {}) or {}
+        if name in ("Agent", "Task"):
+            return {
+                "type": "delegation",
+                "subagent": inp.get("subagent_type"),
+                "prompt": inp.get("prompt", ""),
+                "tool_id": getattr(block, "id", None),
+            }
+        return {
+            "type": "tool_use",
+            "name": name,
+            "input": inp,
+            "tool_id": getattr(block, "id", None),
+        }
+    if btype == "ToolResultBlock":
+        content = getattr(block, "content", None)
+        if isinstance(content, list):
+            parts = [c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text"]
+            text = "\n".join(parts)
+        else:
+            text = str(content or "")
+        return {
+            "type": "tool_result",
+            "tool_id": getattr(block, "tool_use_id", None),
+            "is_error": bool(getattr(block, "is_error", False)),
+            "text": text,
+        }
+    return None
+
+
+def _serialize_message(message: Any) -> dict[str, Any] | None:
+    """Convert one SDK message into one or more frontend events.
+
+    Returns a single event dict; the streamer wraps it as SSE. Returns None
+    for messages we don't surface to the chat UI (anything we can't classify).
+    """
+    mtype = type(message).__name__
+    if mtype == "SystemMessage" and getattr(message, "subtype", None) == "init":
+        sid = (getattr(message, "data", None) or {}).get("session_id")
+        return {"type": "session", "session_id": sid} if sid else None
+    if mtype == "AssistantMessage":
+        blocks = []
+        for b in getattr(message, "content", []) or []:
+            serialized = _serialize_block(b)
+            if serialized:
+                blocks.append(serialized)
+        if not blocks:
+            return None
+        return {"type": "assistant", "blocks": blocks}
+    if mtype == "UserMessage":
+        # User messages in the stream are typically tool results echoed back.
+        blocks = []
+        content = getattr(getattr(message, "message", None), "content", None) or getattr(message, "content", None)
+        if isinstance(content, list):
+            for b in content:
+                # The SDK gives us dicts here, not typed blocks
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    raw = b.get("content")
+                    if isinstance(raw, list):
+                        parts = [c.get("text", "") for c in raw if isinstance(c, dict) and c.get("type") == "text"]
+                        text = "\n".join(parts)
+                    else:
+                        text = str(raw or "")
+                    blocks.append({
+                        "type": "tool_result",
+                        "tool_id": b.get("tool_use_id"),
+                        "is_error": bool(b.get("is_error")),
+                        "text": text,
+                    })
+        return {"type": "user_tool_results", "blocks": blocks} if blocks else None
+    if mtype == "ResultMessage":
+        return {
+            "type": "result",
+            "session_id": getattr(message, "session_id", None),
+            "num_turns": getattr(message, "num_turns", None),
+            "total_cost_usd": getattr(message, "total_cost_usd", None),
+        }
+    return None
+
+
+@router.post("/chat/stream")
+async def chat_stream(
+    user: Annotated[WebUser, Depends(get_current_user)],
+    prompt: Annotated[str, Form()],
+    session_id: Annotated[str | None, Form()] = None,
+    chat_agent: Annotated[str | None, Form()] = None,
+):
+    """Stream an agent's response to a user prompt as SSE.
+
+    Routing precedence (highest → lowest):
+      1. `@<agent> <prompt>` in the prompt itself overrides everything else.
+      2. The chat's locked `chat_agent` (passed by the UI) when set.
+      3. Falls back to `orchestrator`.
+
+    `/<command> [args]` is passed through verbatim — the SDK auto-loads
+    .claude/commands/*.md so the slash command resolves itself.
+    """
+    sid = session_id or None
+    mentioned_agent, actual_prompt = _parse_agent_prefix(prompt)
+    if mentioned_agent != "orchestrator":
+        target_agent = mentioned_agent  # @-mention wins
+        sid = None  # don't resume across different agents
+    elif chat_agent and chat_agent in {a.name for a in list_agents()}:
+        target_agent = chat_agent
+    else:
+        target_agent = "orchestrator"
+
+    # Capture for chat-record upsert below
+    first_prompt = actual_prompt.strip()
+    title_seed = (first_prompt[:80].rstrip() + ("…" if len(first_prompt) > 80 else "")) or "(new chat)"
+
+    async def event_gen():
+        chat_initialised = False
+        # Surface the routing decision so the UI can show "routed to X"
+        if mentioned_agent != "orchestrator":
+            yield f"data: {json.dumps({'type': 'routed', 'agent': target_agent})}\n\n"
+        try:
+            async for msg in stream_agent(target_agent, actual_prompt, resume_session=sid):
+                event = _serialize_message(msg)
+                if event is None:
+                    continue
+                # On the first session event, upsert the chat metadata row.
+                # This is what makes a chat appear in the sidebar list.
+                if not chat_initialised and event.get("type") == "session":
+                    sid_now = event.get("session_id")
+                    if sid_now:
+                        existing = get_chat(sid_now)
+                        if existing is None:
+                            upsert_chat(ChatRecord(
+                                id=sid_now,
+                                title=title_seed,
+                                agent=target_agent,
+                            ))
+                        else:
+                            touch_chat(sid_now)
+                        chat_initialised = True
+                yield f"data: {json.dumps(event, default=str)}\n\n"
+        except Exception as exc:
+            err = {"type": "error", "message": f"{type(exc).__name__}: {exc}"}
+            yield f"data: {json.dumps(err)}\n\n"
+        yield "data: {\"type\": \"done\"}\n\n"
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",  # disable nginx buffering if proxied
+        },
+    )
+
+
+@router.get("/chat/history/{session_id}")
+async def chat_history(
+    user: Annotated[WebUser, Depends(get_current_user)],
+    session_id: str,
+):
+    """Replay a past session's transcript so the chat page can rehydrate on
+    refresh. Reuses the transcript parser used by /runs/{id}/transcript."""
+    path = find_session_file(session_id)
+    if path is None:
+        return {"entries": []}
+    entries = parse_transcript(path)
+    out = []
+    for e in entries:
+        # Pre-format into the same event shape the streamer emits, so the
+        # frontend can replay them through the same render path.
+        if e.kind == "user_text":
+            out.append({"kind": "user_text", "text": e.text})
+        elif e.kind == "assistant_text":
+            out.append({"kind": "assistant_text", "text": e.text})
+        elif e.kind == "thinking":
+            out.append({"kind": "thinking", "text": e.text})
+        elif e.kind == "tool_call":
+            out.append({
+                "kind": "tool_call",
+                "name": e.tool_name,
+                "input": e.tool_input,
+                "tool_id": e.tool_id,
+            })
+        elif e.kind == "delegation":
+            out.append({
+                "kind": "delegation",
+                "subagent": e.subagent_type,
+                "prompt": (e.tool_input or {}).get("prompt", ""),
+                "tool_id": e.tool_id,
+            })
+        elif e.kind == "tool_result":
+            out.append({
+                "kind": "tool_result",
+                "tool_id": e.tool_id,
+                "is_error": bool(e.tool_is_error),
+                "text": e.text,
+            })
+    return {"session_id": session_id, "entries": out}
 
 
 @router.get("/runs", response_class=HTMLResponse)

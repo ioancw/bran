@@ -466,6 +466,40 @@ table.bran-table .mono { font-family: var(--font-mono); font-size: 12px; color: 
   .prose-md h3 { font-size: 16px; }
 }
 
+/* ---------------------------------------------------------------------------
+   KaTeX integration
+   Math expressions are rendered client-side inside .prose-md content. KaTeX
+   defaults to black-on-white styling so we override to follow our theme
+   tokens — works automatically across all five themes. Display math gets
+   its own spacing block; inline math stays in the flow.
+   --------------------------------------------------------------------------- */
+
+.prose-md .katex { color: var(--fg-bright); font-size: 1.02em; }
+
+/* Display-math block (centered, generous vertical spacing) */
+.prose-md .katex-display {
+  margin: 20px 0;
+  padding: 8px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+}
+.prose-md .katex-display > .katex { display: inline-block; font-size: 1.1em; }
+
+/* Inline math sits flush with surrounding prose */
+.prose-md .katex .mord,
+.prose-md .katex .mbin,
+.prose-md .katex .mrel,
+.prose-md .katex .mopen,
+.prose-md .katex .mclose,
+.prose-md .katex .mpunct,
+.prose-md .katex .mop      { color: var(--fg-bright); }
+
+.prose-md .katex .mfrac .frac-line { border-color: var(--fg-dim); }
+.prose-md .katex .sqrt > .root     { color: var(--fg-bright); }
+.prose-md .katex .overline .overline-line,
+.prose-md .katex .underline .underline-line { border-color: var(--fg-dim); }
+
 /* ===========================================================================
    Library aesthetic — typographic ornaments, drop caps, numerals, motion.
    These are bran's "voice" elements: nothing functional, everything saying
@@ -659,6 +693,36 @@ table.bran-table .mono { font-family: var(--font-mono); font-size: 12px; color: 
   border-radius: 999px;
   background: var(--amber);
   animation: brn-pulse 1.6s ease-in-out infinite;
+}
+.live-dot.sm { width: 6px; height: 6px; }
+
+/* Chat-page viewport fill — when the chat page is active, override the
+   main element's normal flow so the chat layout fills the available
+   viewport height. Replaces the fragile `calc(100vh - 130px)` math that
+   broke when the page header wrapped. */
+body.chat-fill {
+  overflow: hidden;          /* no double-scrollbar; chat owns its scroll */
+}
+body.chat-fill main {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+body.chat-fill main > .page-header {
+  flex-shrink: 0;
+}
+body.chat-fill main > div.stagger-in {
+  flex: 1;
+  min-height: 0;
+  padding-top: 16px;
+  padding-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+}
+body.chat-fill main > div.stagger-in > #chat-layout {
+  flex: 1;
+  min-height: 0;
 }
 
 /* Per-agent stat row used on dashboard */

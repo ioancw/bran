@@ -1,0 +1,628 @@
+{% extends 'base.html' %}
+{% block title %}bran · chat{% endblock %}
+{% block heading %}Chat{% endblock %}
+{% block subheading %}{% if active_chat %}with {{ active_chat.agent }}{% else %}live conversation with the orchestrator{% endif %}{% endblock %}
+
+{% block header_actions %}
+  <span id="chat-status" class="text-muted" style="font-size: 11px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.1em;"></span>
+{% endblock %}
+
+{% block content %}
+{# Two-column layout: chat list on the left, message area on the right.
+   Height comes from `body.chat-fill` in global.css — the layout flexes to
+   fill the available viewport so the input bar stays anchored to the bottom
+   regardless of how the page header wraps. #}
+<script>document.body.classList.add('chat-fill');</script>
+<div id="chat-layout" style="display: flex; gap: 16px;">
+
+  <!-- ============ Left: chat list ============ -->
+  <aside id="chat-list-panel" class="card flush" style="width: 260px; flex-shrink: 0; display: flex; flex-direction: column; padding: 0;">
+    <div style="padding: 14px 14px 10px;">
+      <button id="new-chat-btn" class="btn-primary" style="width: 100%;">+ new chat</button>
+
+      <!-- Inline new-chat form (hidden until + clicked) -->
+      <div id="new-chat-form" style="display: none; margin-top: 10px;" class="card-quiet">
+        <label class="block" style="margin-bottom: 8px;">
+          <span class="label-cap" style="display: block; margin-bottom: 4px;">Agent</span>
+          <select id="new-chat-agent" class="field"></select>
+        </label>
+        <div style="display: flex; gap: 6px; justify-content: flex-end;">
+          <button id="new-chat-cancel" type="button" class="btn-ghost">cancel</button>
+          <button id="new-chat-confirm" type="button" class="btn-primary">start</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="padding: 0 14px 6px;">
+      <div class="label-cap">Conversations</div>
+    </div>
+
+    <div id="chat-list" style="flex: 1; overflow-y: auto; padding: 0 8px 14px;">
+      <!-- populated by JS -->
+    </div>
+  </aside>
+
+  <!-- ============ Right: message area + input ============ -->
+  <div id="chat-shell" style="flex: 1; min-width: 0; display: flex; flex-direction: column;">
+
+    <div id="chat-messages" style="flex: 1; overflow-y: auto; padding-right: 6px;" class="space-y-3">
+      <div id="chat-empty" class="empty-state" style="padding: 80px 24px;">
+        <div class="brackets">[       ]</div>
+        <h3 id="empty-title">start a conversation</h3>
+        <p class="cta" id="empty-cta">type a message below — try <code>/digest</code> or <code>@research</code></p>
+      </div>
+    </div>
+
+    <!-- Input bar -->
+    <div style="margin-top: 14px; position: relative;">
+
+      <!-- Autocomplete popup. Hidden by default; populated by JS when the
+           user types `/` or `@` at the start of the input. -->
+      <div id="chat-autocomplete" class="card" style="
+          display: none;
+          position: absolute;
+          bottom: 100%;
+          left: 0; right: 0;
+          margin-bottom: 6px;
+          padding: 4px;
+          max-height: 280px;
+          overflow-y: auto;
+          z-index: 50;
+          box-shadow: 0 -8px 24px rgba(0,0,0,0.25);
+        ">
+        <div class="ac-header label-cap" style="padding: 6px 10px 4px;"></div>
+        <div class="ac-list"></div>
+        <div class="ac-empty text-muted" style="display: none; padding: 12px; font-size: 12px; text-align: center; font-style: italic;">no matches</div>
+        <div class="ac-footer text-muted" style="padding: 6px 10px; font-size: 10px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.1em; border-top: 1px solid var(--border);">
+          ↑↓ navigate · ⏎ ⇥ select · esc close
+        </div>
+      </div>
+
+      <form id="chat-form" class="card-quiet" style="padding: 10px 12px;">
+        <div style="display: flex; gap: 10px; align-items: flex-end;">
+          <textarea id="chat-input" required rows="2" placeholder="Send a message… (try / or @)"
+                    class="field" style="resize: none; font-family: var(--font-prose); font-size: 15px;"></textarea>
+          <button type="submit" id="chat-send" class="btn-primary" style="white-space: nowrap;">Send ↵</button>
+        </div>
+        <div style="display: flex; align-items: center; gap: 12px; margin-top: 6px;">
+          <span class="text-muted" style="font-size: 10px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.12em;">
+            ⏎ send · ⇧⏎ newline · / commands · @ agents
+          </span>
+          <span id="chat-meta" class="ml-auto text-muted font-mono" style="font-size: 10px;"></span>
+        </div>
+      </form>
+    </div>
+
+  </div>
+</div>
+
+<script>
+(function () {
+  // Server-injected catalog (agents + slash commands) and chat list/active.
+  const CATALOG    = {{ catalog_json|safe }};
+  let CHATS        = {{ chats_json|safe }};
+  let ACTIVE_CHAT  = {{ active_chat_json|safe }};   // {id, title, agent} or null
+
+  /* -------------------------------------------------------------------------
+   * DOM refs
+   * ----------------------------------------------------------------------- */
+  const messagesEl    = document.getElementById('chat-messages');
+  const emptyEl       = document.getElementById('chat-empty');
+  const form          = document.getElementById('chat-form');
+  const input         = document.getElementById('chat-input');
+  const sendBtn       = document.getElementById('chat-send');
+  const statusEl      = document.getElementById('chat-status');
+  const metaEl        = document.getElementById('chat-meta');
+  const newBtn        = document.getElementById('new-chat-btn');
+  const newForm       = document.getElementById('new-chat-form');
+  const newAgentSel   = document.getElementById('new-chat-agent');
+  const newConfirmBtn = document.getElementById('new-chat-confirm');
+  const newCancelBtn  = document.getElementById('new-chat-cancel');
+  const chatListEl    = document.getElementById('chat-list');
+  const acEl          = document.getElementById('chat-autocomplete');
+  const acHeader      = acEl.querySelector('.ac-header');
+  const acList        = acEl.querySelector('.ac-list');
+  const acEmpty       = acEl.querySelector('.ac-empty');
+
+  let streaming = false;
+  // pendingAgent: when user clicks "+ new chat" and picks an agent, this is
+  // the agent we'll send the first message to (so the chat gets the right lock).
+  let pendingAgent = null;
+
+  /* -------------------------------------------------------------------------
+   * Utilities
+   * ----------------------------------------------------------------------- */
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function showEmpty(show) { emptyEl.style.display = show ? '' : 'none'; }
+  function scrollToBottom() { messagesEl.scrollTop = messagesEl.scrollHeight; }
+
+  /* Update the empty-state copy to reflect which agent the user will be
+   * talking to. Called whenever the active chat or pending agent changes. */
+  function updateEmptyCopy() {
+    const agent = (ACTIVE_CHAT && ACTIVE_CHAT.agent) || pendingAgent || null;
+    const title = document.getElementById('empty-title');
+    const cta   = document.getElementById('empty-cta');
+    if (!title || !cta) return;
+    if (agent && agent !== 'orchestrator') {
+      title.textContent = `start a chat with ${agent}`;
+      cta.innerHTML = `type a message below — locked to <code>${escapeHtml(agent)}</code>`;
+    } else {
+      title.textContent = 'start a conversation';
+      cta.innerHTML = `type a message below — try <code>/digest</code> or <code>@research</code>`;
+    }
+  }
+
+  function setStatus(text, busy) {
+    statusEl.textContent = text || '';
+    sendBtn.disabled = !!busy;
+    streaming = !!busy;
+    // Re-render the chat list so the active row shows / hides its live dot.
+    renderChatList();
+  }
+
+  function updateMeta() {
+    if (ACTIVE_CHAT) metaEl.textContent = `${ACTIVE_CHAT.agent} · session ${ACTIVE_CHAT.id.slice(0,8)}`;
+    else if (pendingAgent) metaEl.textContent = `${pendingAgent} · new chat`;
+    else metaEl.textContent = 'no chat selected';
+  }
+
+  function relativeTime(iso) {
+    const then = new Date(iso).getTime();
+    const now = Date.now();
+    const s = Math.max(1, Math.floor((now - then) / 1000));
+    if (s < 60)  return `${s}s ago`;
+    if (s < 3600) return `${Math.floor(s/60)}m ago`;
+    if (s < 86400) return `${Math.floor(s/3600)}h ago`;
+    return `${Math.floor(s/86400)}d ago`;
+  }
+
+  /* -------------------------------------------------------------------------
+   * Chat list rendering — left sidebar within /chat
+   * ----------------------------------------------------------------------- */
+  function renderChatList() {
+    chatListEl.innerHTML = '';
+    if (!CHATS.length) {
+      const e = document.createElement('div');
+      e.className = 'text-muted';
+      e.style.cssText = 'padding: 20px 14px; font-size: 12px; text-align: center; font-style: italic; line-height: 1.5;';
+      e.textContent = 'No conversations yet — fire one with the form to the right.';
+      chatListEl.appendChild(e);
+      return;
+    }
+    for (const c of CHATS) {
+      const active = ACTIVE_CHAT && ACTIVE_CHAT.id === c.id;
+      const row = document.createElement('a');
+      row.href = `/chat/${encodeURIComponent(c.id)}`;
+      row.style.cssText = `
+        display: block;
+        padding: 8px 10px;
+        border-radius: var(--radius);
+        margin-bottom: 3px;
+        text-decoration: none;
+        background: ${active ? 'var(--accent-glow)' : 'transparent'};
+        position: relative;
+      `;
+      // Live pulse next to the title when this chat is currently streaming
+      // (and it's the active one — we don't show streaming state for chats
+      // the user isn't currently looking at).
+      const livePulse = (active && streaming)
+        ? `<span class="live-dot sm" style="margin-right: 6px;" title="streaming…"></span>`
+        : '';
+      row.innerHTML = `
+        <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 2px;">
+          ${livePulse}
+          <span style="font-family: var(--font-prose); font-size: 13px; font-weight: 500; color: ${active ? 'var(--accent-soft)' : 'var(--fg-bright)'}; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(c.title)}</span>
+          <button class="chat-del" data-id="${c.id}" title="delete chat"
+                  style="background: transparent; border: 0; color: var(--muted); cursor: pointer; font-size: 12px; opacity: 0; padding: 0 4px;">×</button>
+        </div>
+        <div style="display: flex; align-items: baseline; gap: 6px;">
+          <span class="font-mono" style="font-size: 10px; color: ${active ? 'var(--accent-soft)' : 'var(--fg-dim)'};">${escapeHtml(c.agent)}</span>
+          <span class="ml-auto text-muted font-mono" style="font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em;">${relativeTime(c.updated_at)}</span>
+        </div>
+      `;
+      row.addEventListener('mouseenter', () => { row.querySelector('.chat-del').style.opacity = '1'; });
+      row.addEventListener('mouseleave', () => { row.querySelector('.chat-del').style.opacity = '0'; });
+      row.querySelector('.chat-del').addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!confirm(`Delete this chat?\n\n"${c.title}"\n\nThe SDK transcript stays on disk — only the sidebar entry is removed.`)) return;
+        await fetch(`/api/chats/${encodeURIComponent(c.id)}`, { method: 'DELETE' });
+        if (active) window.location.href = '/chat';
+        else { CHATS = CHATS.filter(x => x.id !== c.id); renderChatList(); }
+      });
+      chatListEl.appendChild(row);
+    }
+  }
+
+  async function refreshChatList() {
+    try {
+      const r = await fetch('/api/chats');
+      if (!r.ok) return;
+      CHATS = await r.json();
+      renderChatList();
+    } catch (e) { /* silent */ }
+  }
+
+  /* -------------------------------------------------------------------------
+   * Message rendering
+   * ----------------------------------------------------------------------- */
+  function appendUser(text) {
+    showEmpty(false);
+    const el = document.createElement('div');
+    el.className = 'card';
+    el.style.background = 'var(--accent-glow)';
+    el.style.borderColor = 'rgba(255,255,255,0.04)';
+    el.innerHTML = `
+      <div class="label-cap" style="color: var(--accent-soft); margin-bottom: 6px;">You</div>
+      <div class="text-fg" style="font-family: var(--font-prose); font-size: 15px; line-height: 1.55; white-space: pre-wrap;">${escapeHtml(text)}</div>
+    `;
+    messagesEl.appendChild(el);
+    scrollToBottom();
+  }
+
+  function appendAssistantText(text) {
+    showEmpty(false);
+    const el = document.createElement('div');
+    el.className = 'card';
+    const agentLabel = ACTIVE_CHAT ? ACTIVE_CHAT.agent : (pendingAgent || 'orchestrator');
+    el.innerHTML = `
+      <div class="label-cap" style="margin-bottom: 6px;">${escapeHtml(agentLabel)}</div>
+      <pre data-md class="hidden">${escapeHtml(text)}</pre>
+    `;
+    messagesEl.appendChild(el);
+    renderMarkdown(el);
+    scrollToBottom();
+  }
+
+  function appendToolCall(name, input) {
+    showEmpty(false);
+    const previewJson = JSON.stringify(input || {});
+    const preview = previewJson.length > 120 ? previewJson.slice(0, 119) + '…' : previewJson;
+    const el = document.createElement('details');
+    el.className = 'card';
+    el.style.padding = '0';
+    el.innerHTML = `
+      <summary style="padding: 8px 14px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 12px;">
+        <span class="text-muted">→</span>
+        <code class="text-accent-soft font-mono" style="font-size: 12px; font-weight: 500;">${escapeHtml(name)}</code>
+        <span class="text-dim font-mono" style="font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(preview)}</span>
+      </summary>
+      <div style="padding: 4px 14px 12px;">
+        <pre class="font-mono" style="background: var(--bg); color: var(--fg); padding: 12px; border-radius: 4px; font-size: 11px; overflow-x: auto; border: 1px solid var(--border2);">${escapeHtml(JSON.stringify(input || {}, null, 2))}</pre>
+      </div>
+    `;
+    messagesEl.appendChild(el);
+    scrollToBottom();
+  }
+
+  function appendDelegation(subagent, promptText) {
+    showEmpty(false);
+    const el = document.createElement('div');
+    el.className = 'card';
+    el.style.background = 'var(--amber-soft)';
+    el.style.borderColor = 'var(--amber)';
+    let html = `
+      <div style="display: flex; align-items: center; gap: 8px; font-size: 12px;">
+        <span style="color: var(--amber);">⇢</span>
+        <span style="color: var(--amber);">Delegated to sub-agent</span>
+        <code class="font-mono" style="color: var(--amber); font-weight: 600;">${escapeHtml(subagent || '(unknown)')}</code>
+        <span class="ml-auto label-cap" style="color: var(--amber);">working…</span>
+      </div>
+    `;
+    if (promptText) {
+      html += `
+        <details style="margin-top: 8px;">
+          <summary class="label-cap" style="color: var(--amber); cursor: pointer;">prompt sent to sub-agent</summary>
+          <pre class="text-fg" style="font-size: 11px; white-space: pre-wrap; margin-top: 6px; background: var(--surface); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">${escapeHtml(promptText)}</pre>
+        </details>
+      `;
+    }
+    el.innerHTML = html;
+    messagesEl.appendChild(el);
+    scrollToBottom();
+  }
+
+  function appendToolResult(text, isError) {
+    showEmpty(false);
+    const preview = (text || '').slice(0, 120);
+    const trunc = (text || '').length > 120 ? '…' : '';
+    const el = document.createElement('details');
+    el.className = 'card';
+    el.style.padding = '0';
+    el.style.marginLeft = '24px';
+    if (isError) el.style.borderColor = 'var(--red)';
+    el.innerHTML = `
+      <summary style="padding: 8px 14px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 12px;">
+        <span class="text-muted">←</span>
+        <span style="${isError ? 'color: var(--red);' : 'color: var(--fg-dim);'}">${isError ? 'error' : 'result'}</span>
+        <span class="text-dim font-mono" style="font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(preview)}${trunc}</span>
+      </summary>
+      <div style="padding: 4px 14px 12px;">
+        <pre class="font-mono" style="background: ${isError ? 'var(--red-soft)' : 'var(--bg)'}; color: ${isError ? 'var(--red)' : 'var(--fg)'}; padding: 12px; border-radius: 4px; font-size: 11px; white-space: pre-wrap; overflow-x: auto; max-height: 400px; border: 1px solid var(--border2);">${escapeHtml(text || '')}</pre>
+      </div>
+    `;
+    messagesEl.appendChild(el);
+    scrollToBottom();
+  }
+
+  function appendThinking(text) {
+    showEmpty(false);
+    const el = document.createElement('details');
+    el.className = 'card';
+    el.style.padding = '0';
+    el.innerHTML = `
+      <summary class="label-cap" style="padding: 10px 16px; cursor: pointer;">
+        💭 thinking · ${text.length} chars
+      </summary>
+      <div class="text-dim" style="padding: 4px 16px 12px; font-size: 12px; font-style: italic; white-space: pre-wrap;">${escapeHtml(text)}</div>
+    `;
+    messagesEl.appendChild(el);
+    scrollToBottom();
+  }
+
+  function appendResultFooter(numTurns, cost) {
+    const el = document.createElement('div');
+    el.style.padding = '4px 12px';
+    el.className = 'text-muted font-mono';
+    el.style.fontSize = '10px';
+    el.style.textTransform = 'uppercase';
+    el.style.letterSpacing = '0.12em';
+    el.textContent = `done · ${numTurns} turns${cost != null ? ' · $' + cost.toFixed(4) : ''}`;
+    messagesEl.appendChild(el);
+    scrollToBottom();
+  }
+
+  function appendRoutedNotice(agentName) {
+    showEmpty(false);
+    const el = document.createElement('div');
+    el.className = 'text-muted font-mono';
+    el.style.padding = '4px 12px';
+    el.style.fontSize = '10px';
+    el.style.textTransform = 'uppercase';
+    el.style.letterSpacing = '0.12em';
+    el.innerHTML = `→ routed to <span class="text-accent-soft">${escapeHtml(agentName)}</span>`;
+    messagesEl.appendChild(el);
+    scrollToBottom();
+  }
+
+  /* -------------------------------------------------------------------------
+   * Event rendering — handles both live stream (.type) and history (.kind)
+   * ----------------------------------------------------------------------- */
+  function renderEvent(ev) {
+    switch (ev.type || ev.kind) {
+      case 'session':
+        if (ev.session_id && !ACTIVE_CHAT) {
+          // First-message-of-new-chat: pivot the URL to the canonical one
+          // without doing a hard reload (the chat is already loaded into the
+          // current page state).
+          ACTIVE_CHAT = { id: ev.session_id, title: '(new)', agent: pendingAgent || 'orchestrator' };
+          history.replaceState(null, '', `/chat/${ev.session_id}`);
+          updateMeta();
+        }
+        return;
+      case 'routed':       appendRoutedNotice(ev.agent); return;
+      case 'assistant':
+        for (const b of (ev.blocks || [])) {
+          if (b.type === 'text') appendAssistantText(b.text);
+          else if (b.type === 'thinking') appendThinking(b.text);
+          else if (b.type === 'tool_use') appendToolCall(b.name, b.input);
+          else if (b.type === 'delegation') appendDelegation(b.subagent, b.prompt);
+        }
+        return;
+      case 'user_tool_results':
+        for (const b of (ev.blocks || [])) appendToolResult(b.text, b.is_error);
+        return;
+      case 'result':       appendResultFooter(ev.num_turns, ev.total_cost_usd); return;
+      case 'error':        appendToolResult(ev.message, true); return;
+      // History shape
+      case 'user_text':      appendUser(ev.text); return;
+      case 'assistant_text': appendAssistantText(ev.text); return;
+      case 'thinking':       appendThinking(ev.text); return;
+      case 'tool_call':      appendToolCall(ev.name, ev.input); return;
+      case 'delegation':     appendDelegation(ev.subagent, ev.prompt); return;
+      case 'tool_result':    appendToolResult(ev.text, ev.is_error); return;
+    }
+  }
+
+  /* -------------------------------------------------------------------------
+   * History (replay on load) and live send
+   * ----------------------------------------------------------------------- */
+  async function loadHistory() {
+    if (!ACTIVE_CHAT) return;
+    try {
+      const r = await fetch(`/chat/history/${encodeURIComponent(ACTIVE_CHAT.id)}`);
+      if (!r.ok) return;
+      const data = await r.json();
+      if (!data.entries || !data.entries.length) return;
+      for (const e of data.entries) renderEvent(e);
+    } catch (err) { console.warn('history load failed', err); }
+  }
+
+  async function send(text) {
+    if (streaming) return;
+    appendUser(text);
+    setStatus('thinking…', true);
+
+    const body = new URLSearchParams();
+    body.set('prompt', text);
+    if (ACTIVE_CHAT) {
+      body.set('session_id', ACTIVE_CHAT.id);
+      body.set('chat_agent', ACTIVE_CHAT.agent);
+    } else if (pendingAgent) {
+      body.set('chat_agent', pendingAgent);
+    }
+
+    let response;
+    try {
+      response = await fetch('/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body,
+      });
+    } catch (err) {
+      appendToolResult(`network error: ${err.message}`, true);
+      setStatus('', false); return;
+    }
+    if (!response.ok) {
+      appendToolResult(`HTTP ${response.status}: ${await response.text()}`, true);
+      setStatus('', false); return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let sep;
+      while ((sep = buffer.indexOf('\n\n')) !== -1) {
+        const rawEvent = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        for (const line of rawEvent.split('\n')) {
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (!payload) continue;
+          try {
+            const ev = JSON.parse(payload);
+            if (ev.type === 'done') { setStatus('', false); refreshChatList(); return; }
+            renderEvent(ev);
+          } catch (e) { console.warn('bad event', payload, e); }
+        }
+      }
+    }
+    setStatus('', false);
+    refreshChatList();
+  }
+
+  /* -------------------------------------------------------------------------
+   * New-chat flow
+   * ----------------------------------------------------------------------- */
+  // Populate the agent dropdown
+  for (const a of CATALOG.agents) {
+    const opt = document.createElement('option');
+    opt.value = a.name;
+    opt.textContent = a.name;
+    if (a.name === 'orchestrator') opt.selected = true;
+    newAgentSel.appendChild(opt);
+  }
+
+  newBtn.addEventListener('click', () => {
+    newForm.style.display = newForm.style.display === 'none' ? '' : 'none';
+    if (newForm.style.display === '') newAgentSel.focus();
+  });
+  newCancelBtn.addEventListener('click', () => { newForm.style.display = 'none'; });
+  newConfirmBtn.addEventListener('click', () => {
+    pendingAgent = newAgentSel.value;
+    ACTIVE_CHAT = null;
+    history.replaceState(null, '', '/chat');
+    newForm.style.display = 'none';
+    // Wipe message area + reset empty-state copy to reflect the picked agent
+    messagesEl.querySelectorAll(':scope > *:not(#chat-empty)').forEach(n => n.remove());
+    showEmpty(true);
+    updateEmptyCopy();
+    updateMeta();
+    renderChatList();  // refresh active-state highlighting
+    input.focus();
+  });
+
+  /* -------------------------------------------------------------------------
+   * Form submit + Enter handling (Enter = send unless autocomplete open)
+   * ----------------------------------------------------------------------- */
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    send(text);
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !acOpen) {
+      e.preventDefault();
+      form.requestSubmit();
+    }
+  });
+
+  /* -------------------------------------------------------------------------
+   * Autocomplete (slash commands + @-agents)
+   * ----------------------------------------------------------------------- */
+  let acOpen = false;
+  let acItems = [];
+  let acIndex = 0;
+
+  function classifyInput(value) {
+    const m = value.match(/^([/@])(\S*)$/);
+    if (!m) return null;
+    return { trigger: m[1], query: m[2].toLowerCase() };
+  }
+  function buildItems(trigger, query) {
+    if (trigger === '/') {
+      acHeader.textContent = 'slash commands';
+      return CATALOG.commands.filter(c => c.name.toLowerCase().startsWith(query))
+        .map(c => ({ trigger: '/', name: c.name, description: c.description, fullToken: `/${c.name} ` }));
+    }
+    acHeader.textContent = 'agents';
+    return CATALOG.agents.filter(a => a.name.toLowerCase().includes(query))
+      .map(a => ({ trigger: '@', name: a.name, description: a.description, fullToken: `@${a.name} ` }));
+  }
+  function renderAc() {
+    acList.innerHTML = '';
+    if (!acItems.length) { acEmpty.style.display = ''; return; }
+    acEmpty.style.display = 'none';
+    acItems.forEach((it, idx) => {
+      const row = document.createElement('div');
+      row.dataset.idx = idx;
+      const active = idx === acIndex;
+      row.style.cssText = `padding: 8px 10px; border-radius: var(--radius); cursor: pointer; display: flex; align-items: baseline; gap: 10px; background: ${active ? 'var(--accent-glow)' : 'transparent'};`;
+      row.innerHTML = `
+        <code class="font-mono" style="color: ${active ? 'var(--accent-soft)' : 'var(--fg-bright)'}; font-size: 13px; font-weight: 500; min-width: 110px;">${it.trigger}${escapeHtml(it.name)}</code>
+        <span class="text-dim" style="font-size: 12px; line-height: 1.35; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(it.description || '')}</span>
+      `;
+      row.addEventListener('mouseenter', () => { acIndex = idx; renderAc(); });
+      row.addEventListener('mousedown', (e) => { e.preventDefault(); selectAc(idx); });
+      acList.appendChild(row);
+    });
+  }
+  function openAc(trigger, query) {
+    acItems = buildItems(trigger, query); acIndex = 0; acOpen = true;
+    acEl.style.display = ''; renderAc();
+  }
+  function closeAc() { acOpen = false; acEl.style.display = 'none'; }
+  function selectAc(idx) {
+    const it = acItems[idx]; if (!it) return;
+    input.value = it.fullToken; closeAc(); input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
+  input.addEventListener('input', () => {
+    const cls = classifyInput(input.value);
+    if (cls) openAc(cls.trigger, cls.query); else closeAc();
+  });
+  input.addEventListener('keydown', (e) => {
+    if (!acOpen) return;
+    if (e.key === 'Escape')    { e.preventDefault(); closeAc(); return; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); acIndex = Math.min(acItems.length - 1, acIndex + 1); renderAc(); return; }
+    if (e.key === 'ArrowUp')   { e.preventDefault(); acIndex = Math.max(0, acIndex - 1); renderAc(); return; }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      if (acItems.length) { e.preventDefault(); e.stopPropagation(); selectAc(acIndex); }
+    }
+  }, true);
+  document.addEventListener('mousedown', (e) => {
+    if (acOpen && !acEl.contains(e.target) && e.target !== input) closeAc();
+  });
+
+  /* -------------------------------------------------------------------------
+   * Init
+   * ----------------------------------------------------------------------- */
+  updateMeta();
+  updateEmptyCopy();
+  renderChatList();
+  loadHistory();
+  input.focus();
+})();
+</script>
+{% endblock %}

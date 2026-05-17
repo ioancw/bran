@@ -70,6 +70,23 @@ def _maybe_tavily_tools() -> list[str]:
     return TAVILY_TOOLS if os.getenv("TAVILY_API_KEY") else []
 
 
+# Appended to every agent's system prompt so math expressions in their replies
+# get rendered by the web UI's KaTeX integration. Without this, models default
+# to plain text (e.g. `x^2` or `A = P(1+r/n)^(nt)`), which doesn't trigger
+# KaTeX and looks worse than no notation at all.
+_MATH_NOTATION_NOTE = (
+    "\n\n## Math notation\n"
+    "When your reply contains mathematical expressions, wrap them in LaTeX "
+    "delimiters so the web UI renders them with KaTeX:\n"
+    "- Inline: `\\(x^2\\)`, `\\(\\pi r^2\\)`, `\\(\\sigma_{xy}\\)`\n"
+    "- Display (centred block): `$$E = mc^2$$` or `\\[\\int_0^\\infty e^{-x^2}\\,dx\\]`\n"
+    "Do NOT use plain-text notation like `x^2` or `A = P(1+r/n)^(nt)` — that "
+    "renders as literal text and looks wrong. Do NOT use single `$...$` "
+    "delimiters either; the UI deliberately ignores them so prices in finance "
+    "content (e.g. `$0.46 spent`) don't accidentally get parsed as math."
+)
+
+
 @dataclass(frozen=True)
 class Agent:
     """A top-level bran agent — what the user invokes by name from any surface."""
@@ -112,6 +129,7 @@ RESEARCH_AGENT = AgentDefinition(
         "5. Write a tight, well-structured answer with inline citations as "
         "(Source: <domain>) and a Sources list at the end.\n"
         "Be skeptical of low-quality sources. Note uncertainty explicitly."
+        + _MATH_NOTATION_NOTE
     ),
     tools=["WebSearch", "WebFetch", "Read", "Write", "Glob", "Grep", *TAVILY_TOOLS],
     mcpServers=["tavily"] if os.getenv("TAVILY_API_KEY") else [],
@@ -130,6 +148,7 @@ SUMMARISER_AGENT = AgentDefinition(
         "- Key points (3-7 bullets)\n"
         "- Open questions or caveats\n"
         "Preserve every concrete number, name, and date. Never invent facts."
+        + _MATH_NOTATION_NOTE
     ),
     tools=["Read", "Glob", "Grep"],
     model="haiku",
@@ -194,6 +213,7 @@ FINANCE_NEWS_PROMPT = (
     "`.bran/briefings/briefing_<YYYY-MM-DD>.md` using the `Write` tool BEFORE "
     "returning your reply. The directory already exists. Use UTC date in the "
     "filename. Then return the full briefing as your final message."
+    + _MATH_NOTATION_NOTE
 )
 
 
@@ -237,6 +257,7 @@ ORCHESTRATOR = Agent(
         "- Be concise. Reflect tool/agent results back to the user faithfully.\n"
         "- If the user asks 'what can you do?', list the available agents and "
         "  the surfaces (chat REPL, CLI, HTTP, schedules)."
+        + _MATH_NOTATION_NOTE
     ),
     tools=[
         "Read", "Glob", "Grep", "WebSearch", "WebFetch",

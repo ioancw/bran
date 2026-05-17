@@ -49,6 +49,20 @@ CREATE TABLE IF NOT EXISTS schedules (
     enabled     INTEGER NOT NULL DEFAULT 1,
     created_at  TEXT NOT NULL
 );
+
+-- Chat metadata. Each row corresponds to a single conversation in the web UI.
+-- `id` mirrors the SDK session_id so we can resume via the SDK's `resume`
+-- option; `agent` locks each chat to one persona so we can route messages
+-- consistently regardless of which orchestrator was chatting last.
+CREATE TABLE IF NOT EXISTS chats (
+    id          TEXT PRIMARY KEY,
+    title       TEXT NOT NULL,
+    agent       TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chats_updated ON chats(updated_at DESC);
 """
 
 _lock = threading.Lock()
@@ -277,6 +291,73 @@ def get_schedule(name: str) -> ScheduleRecord | None:
 
 def run_to_dict(r: RunRecord) -> dict[str, Any]:
     return asdict(r)
+
+
+# ---------------------------------------------------------------------------
+# Chats (web UI conversations)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ChatRecord:
+    id: str                 # SDK session_id — used as primary key
+    title: str              # truncated first user prompt
+    agent: str              # which agent this chat is locked to
+    created_at: str = field(default_factory=_utcnow_iso)
+    updated_at: str = field(default_factory=_utcnow_iso)
+
+
+def upsert_chat(record: ChatRecord) -> None:
+    """Insert a new chat row or update the existing one (matching by id)."""
+    with _lock, _conn() as conn:
+        conn.execute(
+            """INSERT INTO chats (id, title, agent, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                 updated_at = excluded.updated_at""",
+            (record.id, record.title, record.agent, record.created_at, record.updated_at),
+        )
+
+
+def touch_chat(chat_id: str) -> None:
+    """Bump updated_at on an existing chat (e.g. on a new message)."""
+    with _lock, _conn() as conn:
+        conn.execute(
+            "UPDATE chats SET updated_at = ? WHERE id = ?",
+            (_utcnow_iso(), chat_id),
+        )
+
+
+def list_chats(limit: int = 100) -> list[ChatRecord]:
+    """Return chats sorted by most-recently updated."""
+    with _lock, _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM chats ORDER BY updated_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [
+        ChatRecord(
+            id=r["id"], title=r["title"], agent=r["agent"],
+            created_at=r["created_at"], updated_at=r["updated_at"],
+        )
+        for r in rows
+    ]
+
+
+def get_chat(chat_id: str) -> ChatRecord | None:
+    with _lock, _conn() as conn:
+        row = conn.execute("SELECT * FROM chats WHERE id = ?", (chat_id,)).fetchone()
+    if not row:
+        return None
+    return ChatRecord(
+        id=row["id"], title=row["title"], agent=row["agent"],
+        created_at=row["created_at"], updated_at=row["updated_at"],
+    )
+
+
+def delete_chat(chat_id: str) -> bool:
+    with _lock, _conn() as conn:
+        cur = conn.execute("DELETE FROM chats WHERE id = ?", (chat_id,))
+        return cur.rowcount > 0
 
 
 # Ensure schema exists on import — cheap, idempotent.

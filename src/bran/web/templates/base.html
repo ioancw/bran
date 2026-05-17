@@ -19,18 +19,69 @@
 
   <link rel="stylesheet" href="/static/global.css">
 
-  <!-- markdown-it for client-side rendering of <pre data-md> blocks. -->
+  <!-- markdown-it for client-side rendering of <pre data-md> blocks.
+       KaTeX renders math expressions inside the markdown output.
+       Delimiters:
+         \(...\)   inline math
+         \[...\]   display math (block, centred)
+         $$...$$   display math (alternate)
+       Single `$...$` is intentionally NOT a delimiter — it would mis-render
+       prices like "$0.46 spent" in finance content. -->
   <script src="https://cdn.jsdelivr.net/npm/markdown-it@14/dist/markdown-it.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
   <script>
     function renderMarkdown(root) {
       if (!window.markdownit) return;
       const md = window.markdownit({ html: false, linkify: true, breaks: false });
       const targets = (root || document).querySelectorAll('pre[data-md]:not([data-md-rendered])');
+
       targets.forEach(el => {
-        const rendered = md.render(el.textContent);
+        // --- Step 1: extract math regions BEFORE markdown can mangle them.
+        // markdown-it's escape rule turns \( and \) into ( and ) , which
+        // breaks KaTeX's auto-render. Pulling math out first and replacing
+        // with placeholders lets markdown process prose normally without
+        // touching the math syntax.
+        let text = el.textContent;
+        const mathBlocks = [];
+        const PLACEHOLDER = (i) => `¤¤BRAN_MATH_${i}¤¤`;
+        // Order matters: display delimiters first (so \[...\] doesn't get
+        // partially captured by \(...\) inside).
+        const extract = (re, displayMode) => {
+          text = text.replace(re, (_, content) => {
+            mathBlocks.push({ content, displayMode });
+            return PLACEHOLDER(mathBlocks.length - 1);
+          });
+        };
+        extract(/\\\[([\s\S]+?)\\\]/g, true);   // \[ ... \]
+        extract(/\$\$([\s\S]+?)\$\$/g, true);   // $$ ... $$
+        extract(/\\\(([\s\S]+?)\\\)/g, false);  // \( ... \)
+
+        // --- Step 2: markdown the prose.
+        const rendered = md.render(text);
+
+        // --- Step 3: replace each placeholder with KaTeX-rendered HTML.
+        const finalHtml = rendered.replace(
+          /¤¤BRAN_MATH_(\d+)¤¤/g,
+          (_, idx) => {
+            const block = mathBlocks[+idx];
+            if (!block || !window.katex) return '';
+            try {
+              return window.katex.renderToString(block.content, {
+                displayMode: block.displayMode,
+                throwOnError: false,
+                errorColor: 'var(--red)',
+              });
+            } catch (e) {
+              console.warn('KaTeX render failed', e);
+              return block.content;
+            }
+          }
+        );
+
         const wrapper = document.createElement('div');
         wrapper.className = 'prose-md';
-        wrapper.innerHTML = rendered;
+        wrapper.innerHTML = finalHtml;
         el.replaceWith(wrapper);
       });
     }
