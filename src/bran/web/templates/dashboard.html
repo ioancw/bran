@@ -10,74 +10,99 @@
 {% block content %}
 <div class="grid grid-cols-3 gap-8 stagger-in" style="max-width: 1100px;">
 
-  <!-- Left column: today's hero stats -->
+  <!-- Left column: thin status strip + outputs grouped by time -->
   <section class="col-span-2 space-y-6">
 
-    <!-- Activity hero: big numeral + by-agent breakdown -->
-    <div class="card" style="padding: 32px 36px;">
-      <div class="eyebrow" style="text-align: center; margin-bottom: 8px;">today</div>
+    {% set total_today = stats.runs_completed + stats.runs_failed + stats.runs_running %}
 
-      <div style="text-align: center; padding: 12px 0 18px;">
-        <div class="numeral xl">{{ stats.runs_completed + stats.runs_failed + stats.runs_running }}</div>
-        <div class="eyebrow" style="margin-top: 8px;">
-          run{{ '' if (stats.runs_completed + stats.runs_failed + stats.runs_running) == 1 else 's' }}
-          {% if stats.total_cost_usd %}
-            &nbsp;·&nbsp; <span class="text-fg">${{ '%.2f'|format(stats.total_cost_usd) }}</span> spent
-          {% endif %}
-        </div>
+    <!-- Masthead strip — a single newspaper-thin line of today's state.
+         Replaces the old big-numeral hero. The big number was doing too much
+         work for a 5-runs-a-day system; the outputs below ARE the headline. -->
+    <div class="card" style="padding: 14px 22px;">
+      <div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+                  font-family: var(--font-mono); font-size: 11px;
+                  text-transform: uppercase; letter-spacing: 0.14em; color: var(--fg-dim);">
+        <span style="color: var(--fg-bright);">{{ today_label }}</span>
+        <span style="color: var(--border2);">·</span>
+        <span><span style="color: var(--fg-bright);">{{ total_today }}</span>
+          run{{ '' if total_today == 1 else 's' }} today</span>
+        {% if stats.total_cost_usd %}
+          <span style="color: var(--border2);">·</span>
+          <span><span style="color: var(--fg-bright);">${{ '%.2f'|format(stats.total_cost_usd) }}</span> spent</span>
+        {% endif %}
         {% if stats.runs_running %}
-          <div style="margin-top: 14px; font-family: var(--font-mono); font-size: 11px; color: var(--amber); letter-spacing: 0.14em; text-transform: uppercase;">
-            <span class="live-dot" style="vertical-align: middle; margin-right: 6px;"></span>
+          <span style="margin-left: auto; color: var(--amber); display: inline-flex; align-items: center; gap: 6px;">
+            <span class="live-dot sm"></span>
             {{ stats.runs_running }} in flight
-          </div>
+          </span>
         {% endif %}
       </div>
-
-      {% if stats.per_agent %}
-        <div class="ornament-rule"><span class="glyph" aria-hidden="true"></span></div>
-        <div style="padding: 0 24px;">
-          {% for ag in stats.per_agent %}
-            <div class="stat-row">
-              <span class="stat-name">{{ ag.name }}</span>
-              <span class="stat-count">{{ ag.count }}</span>
-            </div>
-          {% endfor %}
-        </div>
-      {% else %}
-        <div class="empty-state" style="padding: 28px 0 12px;">
-          <div class="brackets">[    ]</div>
-          <h3>no runs today</h3>
-          <p class="cta">try: <code>bran "summarise today's AI news"</code></p>
-        </div>
-      {% endif %}
     </div>
 
-    <!-- Latest briefing preview -->
-    {% if briefing %}
-      <a href="/briefings/{{ briefing.name }}" class="card block" style="text-decoration: none; padding: 28px 32px; transition: border-color 0.2s var(--transition);"
-         onmouseover="this.style.borderColor='var(--accent-soft)'"
-         onmouseout="this.style.borderColor='var(--border)'">
-        <div class="eyebrow" style="margin-bottom: 6px;">latest briefing</div>
-        <div style="font-family: var(--font-prose); font-size: 22px; color: var(--fg-bright); font-weight: 500; letter-spacing: -0.01em; margin-bottom: 12px;">
-          {{ briefing.name.replace('.md', '').replace('briefing_', '').replace('_', ' ') }}
+    <!-- Outputs wall — every briefing + answer the model produced, grouped by
+         time. Briefings get a rich card with snippet & file link; answers get
+         a quieter card that links back to the run detail. -->
+    {% if buckets %}
+      {% for bucket in buckets %}
+        <div>
+          <!-- Section header in newspaper-section-rule style: uppercase mono
+               label on the left, hairline rule extending to the right edge.
+               (The previous '── label ──' typed em-dashes collided visually
+               with the trailing CSS rule — pick one or the other.) -->
+          <div style="margin: 12px 0 14px; display: flex; align-items: center; gap: 14px;">
+            <span class="label-cap" style="flex: 0 0 auto; font-size: 11px;">{{ bucket.label }}</span>
+            <span style="flex: 1; border-top: 1px solid var(--border);"></span>
+          </div>
+          <div class="space-y-3">
+            {% for item in bucket.items %}
+              <a href="{{ item.href }}" class="card block"
+                 style="text-decoration: none; padding: 22px 28px;
+                        transition: border-color 0.2s var(--transition);"
+                 onmouseover="this.style.borderColor='var(--accent-soft)'"
+                 onmouseout="this.style.borderColor='var(--border)'">
+                <div class="eyebrow" style="margin-bottom: 6px; display: flex; align-items: baseline; gap: 8px;">
+                  <span>briefing</span>
+                  <span style="color: var(--border2);">·</span>
+                  <span class="text-dim" style="font-style: italic;">{{ item.agent }}</span>
+                  <span class="ml-auto text-muted" style="text-transform: none; letter-spacing: 0; font-size: 10px;">{{ item.time_label }}</span>
+                </div>
+                <div style="font-family: var(--font-prose); font-size: 20px;
+                            color: var(--fg-bright); font-weight: 500;
+                            letter-spacing: -0.01em; margin-bottom: 10px;">
+                  {{ item.title }}
+                </div>
+                {% if item.snippet %}
+                  <p style="font-family: var(--font-prose); font-size: 14px;
+                            color: var(--fg-dim); line-height: 1.6; margin: 0;">
+                    {{ item.snippet }}
+                  </p>
+                {% endif %}
+                <div style="margin-top: 12px; font-family: var(--font-mono);
+                            font-size: 10px; color: var(--muted);
+                            text-transform: uppercase; letter-spacing: 0.14em;">
+                  read full briefing →
+                </div>
+              </a>
+            {% endfor %}
+          </div>
         </div>
-        <p style="font-family: var(--font-prose); font-size: 15px; color: var(--fg-dim); line-height: 1.6;">
-          {{ briefing.snippet }}
-        </p>
-        <div style="margin-top: 14px; font-family: var(--font-mono); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.14em;">
-          read full briefing →
+      {% endfor %}
+    {% else %}
+      <div class="card" style="padding: 36px;">
+        <div class="empty-state">
+          <div class="brackets">[    ]</div>
+          <h3>nothing yet</h3>
+          <p class="cta">try: <code>bran "summarise today's AI news"</code></p>
         </div>
-      </a>
+      </div>
     {% endif %}
 
   </section>
 
-  <!-- Right column: upcoming + ad-hoc launcher -->
+  <!-- Right column: upcoming schedules + ad-hoc launcher. Untouched — these
+       are utilities that don't compete with the outputs wall. -->
   <aside class="col-span-1 space-y-6">
 
-    <!-- Next scheduled runs. Countdowns are rendered server-side but updated
-         client-side every 30s by the script below — so they tick down instead
-         of going stale at page load. -->
     <div class="card" style="padding: 22px 24px;">
       <div class="eyebrow" style="margin-bottom: 14px;">upcoming</div>
       {% if upcoming %}
@@ -133,9 +158,6 @@
       {% endif %}
     </div>
 
-    <!-- Ad-hoc launcher (quiet). Submits via HTMX, then redirects to the
-         new run's detail page so you can watch it land — no hard reload,
-         no scroll-position loss, no stale dashboard. -->
     <div class="card-quiet">
       <div class="eyebrow" style="margin-bottom: 10px;">fire a run</div>
       <form hx-post="/ui/new-run"

@@ -1,8 +1,10 @@
-"""`spawn_agent` MCP tool — lets the orchestrator fire background runs.
+"""bran's in-process MCP tools.
 
-Background runs are launched as detached asyncio Tasks. The tool returns
-immediately with a run ID the orchestrator can hand back to the user;
-status is queryable from the persistence layer or via `bran runs show <id>`.
+Exposed as the `bran` MCP server; tools become `mcp__bran__<name>` to agents.
+
+Tools:
+    - spawn_agent: fire a background run of another agent
+    - save_project_memory: pin a fact/rule to a project's persistent instructions
 """
 
 from __future__ import annotations
@@ -67,10 +69,57 @@ async def spawn_agent(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# save_project_memory: pin a fact / rule to a project's persistent instructions
+# ---------------------------------------------------------------------------
+
+@tool(
+    "save_project_memory",
+    (
+        "Pin a memory to a bran project so every future chat in that project "
+        "sees it in its system prompt. Use this when the user says 'remember "
+        "that…', invokes /remember, or when a fact is clearly worth preserving "
+        "across conversations (style preferences, project context, vocabulary, "
+        "ground rules). The project_id is given to you in the system prompt — "
+        "do NOT make one up. `text` should be one or two concise declarative "
+        "sentences; the tool appends it to the project's existing memory "
+        "verbatim, so phrase it well."
+    ),
+    {"project_id": str, "text": str},
+)
+async def save_project_memory(args: dict[str, Any]) -> dict[str, Any]:
+    from bran.persistence import get_project, update_project
+
+    project_id = args["project_id"]
+    text = (args.get("text") or "").strip()
+
+    if not text:
+        return {"content": [{"type": "text", "text": "Error: empty memory text — nothing to save."}]}
+
+    project = get_project(project_id)
+    if project is None:
+        return {"content": [{"type": "text",
+                             "text": f"Error: no project with id {project_id!r}."}]}
+
+    sep = "\n\n" if (project.instructions or "").strip() else ""
+    project.instructions = (project.instructions or "") + sep + text
+    update_project(project)
+
+    return {
+        "content": [{
+            "type": "text",
+            "text": (
+                f"Saved to project '{project.name}'. "
+                f"Memory is now {len(project.instructions)} chars."
+            ),
+        }]
+    }
+
+
 # The orchestrator references this server by attribute, so it must exist at
-# import time. Server name "bran" => tool exposed as `mcp__bran__spawn_agent`.
+# import time. Server name "bran" => tools exposed as `mcp__bran__<name>`.
 spawn_agent_server = create_sdk_mcp_server(
     name="bran",
     version="0.1.0",
-    tools=[spawn_agent],
+    tools=[spawn_agent, save_project_memory],
 )

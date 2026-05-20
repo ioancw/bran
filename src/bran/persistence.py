@@ -54,6 +54,8 @@ CREATE TABLE IF NOT EXISTS schedules (
 -- `id` mirrors the SDK session_id so we can resume via the SDK's `resume`
 -- option; `agent` locks each chat to one persona so we can route messages
 -- consistently regardless of which orchestrator was chatting last.
+-- `project_id` groups chats into a Project (Claude-Cowork style); migration
+-- below ensures every chat row has one (defaulting to the auto-Inbox).
 CREATE TABLE IF NOT EXISTS chats (
     id          TEXT PRIMARY KEY,
     title       TEXT NOT NULL,
@@ -63,7 +65,26 @@ CREATE TABLE IF NOT EXISTS chats (
 );
 
 CREATE INDEX IF NOT EXISTS idx_chats_updated ON chats(updated_at DESC);
+
+-- Projects: a named container for related chats. `instructions` is the
+-- always-on memory blob appended to every chat's system prompt in this
+-- project. Files attached to the project (PDFs, CSVs, etc.) live in a
+-- per-project folder under SETTINGS.bran_home / "projects" / id / files/
+-- and are referenced from the system prompt so the agent can read them
+-- on demand.
+CREATE TABLE IF NOT EXISTS projects (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    description   TEXT NOT NULL DEFAULT '',
+    instructions  TEXT NOT NULL DEFAULT '',
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_projects_updated ON projects(updated_at DESC);
 """
+
+INBOX_PROJECT_ID = "inbox"   # well-known id so callers can reference it
 
 _lock = threading.Lock()
 
@@ -302,19 +323,32 @@ class ChatRecord:
     id: str                 # SDK session_id — used as primary key
     title: str              # truncated first user prompt
     agent: str              # which agent this chat is locked to
+    project_id: str = INBOX_PROJECT_ID  # which project this chat belongs to
     created_at: str = field(default_factory=_utcnow_iso)
     updated_at: str = field(default_factory=_utcnow_iso)
+
+
+def _row_to_chat(r: sqlite3.Row) -> ChatRecord:
+    # project_id may be absent in legacy rows that pre-date the migration;
+    # `r["project_id"]` will raise IndexError on those, so we use dict-style.
+    pid = r["project_id"] if "project_id" in r.keys() else None
+    return ChatRecord(
+        id=r["id"], title=r["title"], agent=r["agent"],
+        project_id=pid or INBOX_PROJECT_ID,
+        created_at=r["created_at"], updated_at=r["updated_at"],
+    )
 
 
 def upsert_chat(record: ChatRecord) -> None:
     """Insert a new chat row or update the existing one (matching by id)."""
     with _lock, _conn() as conn:
         conn.execute(
-            """INSERT INTO chats (id, title, agent, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?)
+            """INSERT INTO chats (id, title, agent, project_id, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                  updated_at = excluded.updated_at""",
-            (record.id, record.title, record.agent, record.created_at, record.updated_at),
+            (record.id, record.title, record.agent, record.project_id,
+             record.created_at, record.updated_at),
         )
 
 
@@ -327,31 +361,27 @@ def touch_chat(chat_id: str) -> None:
         )
 
 
-def list_chats(limit: int = 100) -> list[ChatRecord]:
-    """Return chats sorted by most-recently updated."""
+def list_chats(limit: int = 100, project_id: str | None = None) -> list[ChatRecord]:
+    """Return chats sorted by most-recently updated.
+
+    If `project_id` is given, only chats in that project are returned.
+    """
+    sql = "SELECT * FROM chats"
+    params: list[Any] = []
+    if project_id is not None:
+        sql += " WHERE project_id = ?"
+        params.append(project_id)
+    sql += " ORDER BY updated_at DESC LIMIT ?"
+    params.append(limit)
     with _lock, _conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM chats ORDER BY updated_at DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    return [
-        ChatRecord(
-            id=r["id"], title=r["title"], agent=r["agent"],
-            created_at=r["created_at"], updated_at=r["updated_at"],
-        )
-        for r in rows
-    ]
+        rows = conn.execute(sql, params).fetchall()
+    return [_row_to_chat(r) for r in rows]
 
 
 def get_chat(chat_id: str) -> ChatRecord | None:
     with _lock, _conn() as conn:
         row = conn.execute("SELECT * FROM chats WHERE id = ?", (chat_id,)).fetchone()
-    if not row:
-        return None
-    return ChatRecord(
-        id=row["id"], title=row["title"], agent=row["agent"],
-        created_at=row["created_at"], updated_at=row["updated_at"],
-    )
+    return _row_to_chat(row) if row else None
 
 
 def delete_chat(chat_id: str) -> bool:
@@ -360,5 +390,144 @@ def delete_chat(chat_id: str) -> bool:
         return cur.rowcount > 0
 
 
-# Ensure schema exists on import — cheap, idempotent.
+def move_chat_to_project(chat_id: str, project_id: str) -> bool:
+    """Reassign a chat to a different project. Used by the UI's drag/drop."""
+    with _lock, _conn() as conn:
+        cur = conn.execute(
+            "UPDATE chats SET project_id = ?, updated_at = ? WHERE id = ?",
+            (project_id, _utcnow_iso(), chat_id),
+        )
+        return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Projects (Claude-Cowork-style containers for related chats + memory)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ProjectRecord:
+    id: str
+    name: str
+    description: str = ""
+    instructions: str = ""    # the inline memory blob — appended to chats' system prompt
+    created_at: str = field(default_factory=_utcnow_iso)
+    updated_at: str = field(default_factory=_utcnow_iso)
+
+    @staticmethod
+    def new(name: str, description: str = "", instructions: str = "") -> "ProjectRecord":
+        return ProjectRecord(
+            id=str(uuid.uuid4()),
+            name=name, description=description, instructions=instructions,
+        )
+
+
+def _row_to_project(r: sqlite3.Row) -> ProjectRecord:
+    return ProjectRecord(
+        id=r["id"], name=r["name"],
+        description=r["description"] or "", instructions=r["instructions"] or "",
+        created_at=r["created_at"], updated_at=r["updated_at"],
+    )
+
+
+def insert_project(record: ProjectRecord) -> None:
+    with _lock, _conn() as conn:
+        conn.execute(
+            """INSERT INTO projects (id, name, description, instructions, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (record.id, record.name, record.description, record.instructions,
+             record.created_at, record.updated_at),
+        )
+
+
+def update_project(record: ProjectRecord) -> None:
+    record.updated_at = _utcnow_iso()
+    with _lock, _conn() as conn:
+        conn.execute(
+            """UPDATE projects SET
+                 name = ?, description = ?, instructions = ?, updated_at = ?
+               WHERE id = ?""",
+            (record.name, record.description, record.instructions,
+             record.updated_at, record.id),
+        )
+
+
+def get_project(project_id: str) -> ProjectRecord | None:
+    with _lock, _conn() as conn:
+        row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+    return _row_to_project(row) if row else None
+
+
+def list_projects() -> list[ProjectRecord]:
+    """Return all projects, Inbox last (so user-created ones come first)."""
+    with _lock, _conn() as conn:
+        rows = conn.execute(
+            """SELECT * FROM projects
+               ORDER BY (id = ?) ASC, updated_at DESC""",
+            (INBOX_PROJECT_ID,),
+        ).fetchall()
+    return [_row_to_project(r) for r in rows]
+
+
+def delete_project(project_id: str) -> bool:
+    """Remove a project. Refuses to delete the Inbox. Chats inside the project
+    are reassigned to Inbox rather than deleted, so no conversation history is lost."""
+    if project_id == INBOX_PROJECT_ID:
+        return False
+    with _lock, _conn() as conn:
+        conn.execute(
+            "UPDATE chats SET project_id = ? WHERE project_id = ?",
+            (INBOX_PROJECT_ID, project_id),
+        )
+        cur = conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        return cur.rowcount > 0
+
+
+def count_chats_per_project() -> dict[str, int]:
+    """{project_id: n_chats} — used by the /projects grid for card stats."""
+    with _lock, _conn() as conn:
+        rows = conn.execute(
+            "SELECT project_id, COUNT(*) AS n FROM chats GROUP BY project_id"
+        ).fetchall()
+    return {r["project_id"]: r["n"] for r in rows}
+
+
+# ---------------------------------------------------------------------------
+# Migrations — run after init_db() creates the bare tables.
+# ---------------------------------------------------------------------------
+
+def _migrate_chats_add_project_id() -> None:
+    """Add project_id column to chats table if it doesn't already exist."""
+    with _lock, _conn() as conn:
+        cols = conn.execute("PRAGMA table_info(chats)").fetchall()
+        if not any(c["name"] == "project_id" for c in cols):
+            conn.execute("ALTER TABLE chats ADD COLUMN project_id TEXT")
+
+
+def _ensure_inbox_project() -> None:
+    """Auto-create the Inbox project + retro-assign any orphan chats."""
+    with _lock, _conn() as conn:
+        existing = conn.execute(
+            "SELECT id FROM projects WHERE id = ?", (INBOX_PROJECT_ID,)
+        ).fetchone()
+        if not existing:
+            now = _utcnow_iso()
+            conn.execute(
+                """INSERT INTO projects (id, name, description, instructions, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (INBOX_PROJECT_ID, "Inbox",
+                 "Casual one-off chats that don't belong to a specific project.",
+                 "", now, now),
+            )
+        # Backfill orphan chats. After the ALTER TABLE above they all have NULL
+        # project_id; this assigns Inbox so the rest of the app can assume a
+        # project_id is always set.
+        conn.execute(
+            "UPDATE chats SET project_id = ? WHERE project_id IS NULL",
+            (INBOX_PROJECT_ID,),
+        )
+
+
+# Ensure schema + migrations run on import — cheap, idempotent.
 init_db()
+_migrate_chats_add_project_id()
+_ensure_inbox_project()

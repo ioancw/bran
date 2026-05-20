@@ -263,6 +263,7 @@ ORCHESTRATOR = Agent(
         "Read", "Glob", "Grep", "WebSearch", "WebFetch",
         "Agent",  # required to invoke subagents
         "mcp__bran__spawn_agent",
+        "mcp__bran__save_project_memory",
         *_maybe_tavily_tools(),
     ],
     model=SETTINGS.default_model,
@@ -335,10 +336,19 @@ def build_options_for(
     *,
     resume: str | None = None,
     max_turns: int | None = None,
+    append_system: str | None = None,
 ) -> ClaudeAgentOptions:
-    """Translate an Agent into the SDK's ClaudeAgentOptions."""
+    """Translate an Agent into the SDK's ClaudeAgentOptions.
+
+    `append_system` (when set) is concatenated onto the agent's system prompt.
+    This is how project-scoped chats inject their always-on instructions —
+    see web/routes.py::chat_stream.
+    """
+    system_prompt = agent.system_prompt
+    if append_system:
+        system_prompt = f"{system_prompt}\n\n{append_system}"
     return ClaudeAgentOptions(
-        system_prompt=agent.system_prompt,
+        system_prompt=system_prompt,
         allowed_tools=list(agent.tools),
         model=agent.model,
         permission_mode=agent.permission_mode,

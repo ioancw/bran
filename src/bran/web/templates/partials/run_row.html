@@ -5,7 +5,9 @@
       hx-swap="outerHTML"
     {% endif %}>
   <td class="mono">
-    <a href="/runs/{{ run.id }}" class="text-fg-dim hover:text-accent-soft" style="text-decoration: none;">{{ run.id[:8] }}</a>
+    <a href="/runs/{{ run.id }}" style="color: var(--fg-dim); text-decoration: none;"
+       onmouseover="this.style.color='var(--accent-soft)'"
+       onmouseout="this.style.color='var(--fg-dim)'">{{ run.id[:8] }}</a>
   </td>
   <td>
     <span class="text-bright" style="font-weight: 500;">{{ run.agent }}</span>

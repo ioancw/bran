@@ -20,25 +20,34 @@ from fastapi.templating import Jinja2Templates
 from bran import __version__
 from bran.config import SETTINGS
 from bran.persistence import (
+    INBOX_PROJECT_ID,
     ChatRecord,
+    ProjectRecord,
     RunRecord,
     ScheduleRecord,
+    count_chats_per_project,
     delete_chat,
+    delete_project,
     delete_schedule,
     get_chat,
+    get_project,
     get_run,
+    insert_project,
     insert_run,
     insert_schedule,
     list_chats,
+    list_projects,
     list_runs,
     list_schedules,
+    move_chat_to_project,
     touch_chat,
+    update_project,
     upsert_chat,
 )
 from bran.agents import get_agent, list_agents
 from bran.dashboard_data import (
     format_countdown,
-    latest_briefing,
+    list_outputs,
     today_stats,
     upcoming_schedules,
 )
@@ -65,6 +74,7 @@ def _nav(active: str, *, runs_count: int | None = None) -> list[dict]:
     )
     return [
         {"href": "/",           "label": "Dashboard", "active": active == "dashboard", "count": None},
+        {"href": "/projects",   "label": "Projects",  "active": active == "projects",  "count": len(list_projects())},
         {"href": "/chat",       "label": "Chat",      "active": active == "chat",      "count": None},
         {"href": "/runs",       "label": "Runs",      "active": active == "runs",      "count": runs_count},
         {"href": "/agents",     "label": "Agents",    "active": active == "agents",    "count": len(list_agents())},
@@ -110,7 +120,7 @@ async def dashboard(
             request, user, "dashboard",
             agents=list_agents(),
             stats=today_stats(now=now),
-            briefing=latest_briefing(),
+            buckets=list_outputs(limit=60, now=now),
             upcoming=upcoming_with_countdown,
             today_label=now.strftime("%A, %d %B %Y"),
         ),
@@ -150,6 +160,34 @@ def _list_slash_commands() -> list[dict[str, str]]:
     return out
 
 
+def _build_project_context(project: ProjectRecord) -> str:
+    """Assemble the per-chat system-prompt suffix injected for a project chat.
+
+    Two things go in here:
+      1. The project's stored instructions (free-form markdown the user wrote).
+      2. A short machine-readable header that names the project and tells the
+         agent how to pin new memories via the save_project_memory MCP tool.
+         The tool needs a project_id, and the agent only has it because we
+         inject it here — otherwise it would have to guess.
+    """
+    body = (project.instructions or "").strip()
+    header_lines = [
+        "## Project context",
+        f'You are chatting in bran project "{project.name}" (id: `{project.id}`).',
+        (
+            "If the user says 'remember that…', invokes the /remember slash "
+            "command, or you decide something is worth persisting across "
+            "future chats in this project, call the "
+            "`mcp__bran__save_project_memory` tool with project_id=\"" +
+            project.id + '" and a concise `text`.'
+        ),
+    ]
+    parts = ["\n".join(header_lines)]
+    if body:
+        parts.append("## Project memory\n" + body)
+    return "\n\n".join(parts)
+
+
 def _parse_agent_prefix(prompt: str) -> tuple[str, str]:
     """Detect `@name <rest>` or `@agent-name <rest>` and route accordingly.
 
@@ -170,16 +208,29 @@ def _chat_page_response(
     request: Request,
     user: WebUser,
     active_session_id: str | None,
+    project_query: str | None = None,
 ):
-    """Shared rendering for `/chat` and `/chat/{session_id}`. Picks the active
-    chat (URL > most recent > none) and passes the full chat list + catalog
-    into the template."""
-    chats = list_chats(limit=100)
-    active = None
-    if active_session_id:
-        active = get_chat(active_session_id)
-    if active is None and chats:
+    """Shared rendering for `/chat` and `/chat/{session_id}`.
+
+    Project scoping rules:
+    - If an active chat is loaded, its project_id is authoritative — the
+      sidebar shows siblings in that project, new chats inherit the project.
+    - Otherwise, `?project=<id>` (or None for "all") decides the scope.
+    """
+    active = get_chat(active_session_id) if active_session_id else None
+
+    if active is not None:
+        project_id = active.project_id
+    else:
+        project_id = project_query  # may be None → global list
+
+    chats = list_chats(limit=100, project_id=project_id)
+    if active is None and chats and project_id is not None:
+        # Landing on a project page with chats — open the most recent one.
         active = chats[0]
+
+    project = get_project(project_id) if project_id else None
+
     catalog = {
         "agents": [
             {"name": a.name, "description": a.description}
@@ -189,6 +240,7 @@ def _chat_page_response(
     }
     chats_payload = [
         {"id": c.id, "title": c.title, "agent": c.agent,
+         "project_id": c.project_id,
          "updated_at": c.updated_at, "created_at": c.created_at}
         for c in chats
     ]
@@ -201,9 +253,13 @@ def _chat_page_response(
             chats_json=json.dumps(chats_payload),
             active_chat=active,
             active_chat_json=json.dumps(
-                {"id": active.id, "title": active.title, "agent": active.agent}
+                {"id": active.id, "title": active.title, "agent": active.agent,
+                 "project_id": active.project_id}
                 if active else None
             ),
+            project=project,
+            project_id=project_id,    # may be None for global scope
+            all_projects=list_projects(),
         ),
     )
 
@@ -212,9 +268,10 @@ def _chat_page_response(
 async def chat_page(
     request: Request,
     user: Annotated[WebUser, Depends(get_current_user)],
+    project: str | None = None,
 ):
-    """Chat landing — opens the most recent chat, or empty state if none."""
-    return _chat_page_response(request, user, None)
+    """Chat landing — global list, or project-scoped if ?project=<id> is given."""
+    return _chat_page_response(request, user, None, project_query=project)
 
 
 @router.get("/chat/{session_id}", response_class=HTMLResponse)
@@ -352,6 +409,7 @@ async def chat_stream(
     prompt: Annotated[str, Form()],
     session_id: Annotated[str | None, Form()] = None,
     chat_agent: Annotated[str | None, Form()] = None,
+    project_id: Annotated[str | None, Form()] = None,
 ):
     """Stream an agent's response to a user prompt as SSE.
 
@@ -359,6 +417,10 @@ async def chat_stream(
       1. `@<agent> <prompt>` in the prompt itself overrides everything else.
       2. The chat's locked `chat_agent` (passed by the UI) when set.
       3. Falls back to `orchestrator`.
+
+    Project scoping: when a chat lives inside a project (existing or new),
+    the project's `instructions` blob is appended to the agent's system
+    prompt for every message — that's how project memory layers on top.
 
     `/<command> [args]` is passed through verbatim — the SDK auto-loads
     .claude/commands/*.md so the slash command resolves itself.
@@ -373,6 +435,23 @@ async def chat_stream(
     else:
         target_agent = "orchestrator"
 
+    # Resolve the project this chat will be associated with. Existing chat?
+    # Trust its stored project_id. Otherwise honour the form param, else Inbox.
+    if sid:
+        existing_chat = get_chat(sid)
+        target_project_id = existing_chat.project_id if existing_chat else (project_id or INBOX_PROJECT_ID)
+    else:
+        target_project_id = project_id or INBOX_PROJECT_ID
+
+    project_record = get_project(target_project_id)
+    if project_record is None:
+        # Unknown project id from a stale URL or client bug — drop into Inbox
+        # rather than persisting an orphan chat with a dangling project_id.
+        target_project_id = INBOX_PROJECT_ID
+        project_record = get_project(INBOX_PROJECT_ID)
+
+    append_system = _build_project_context(project_record) if project_record else None
+
     # Capture for chat-record upsert below
     first_prompt = actual_prompt.strip()
     title_seed = (first_prompt[:80].rstrip() + ("…" if len(first_prompt) > 80 else "")) or "(new chat)"
@@ -383,7 +462,10 @@ async def chat_stream(
         if mentioned_agent != "orchestrator":
             yield f"data: {json.dumps({'type': 'routed', 'agent': target_agent})}\n\n"
         try:
-            async for msg in stream_agent(target_agent, actual_prompt, resume_session=sid):
+            async for msg in stream_agent(
+                target_agent, actual_prompt,
+                resume_session=sid, append_system=append_system,
+            ):
                 event = _serialize_message(msg)
                 if event is None:
                     continue
@@ -398,6 +480,7 @@ async def chat_stream(
                                 id=sid_now,
                                 title=title_seed,
                                 agent=target_agent,
+                                project_id=target_project_id,
                             ))
                         else:
                             touch_chat(sid_now)
@@ -461,6 +544,154 @@ async def chat_history(
                 "text": e.text,
             })
     return {"session_id": session_id, "entries": out}
+
+
+# ---------------------------------------------------------------------------
+# Projects — containers for related chats + memory (Claude-Cowork style)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/projects", response_class=HTMLResponse)
+async def projects_page(
+    request: Request,
+    user: Annotated[WebUser, Depends(get_current_user)],
+):
+    """Grid of project cards + create form."""
+    projects = list_projects()
+    counts = count_chats_per_project()
+    payload = [
+        {
+            "id": p.id, "name": p.name, "description": p.description,
+            "n_chats": counts.get(p.id, 0),
+            "updated_at": p.updated_at,
+            "is_inbox": p.id == INBOX_PROJECT_ID,
+        }
+        for p in projects
+    ]
+    return _templates.TemplateResponse(
+        request, "projects.html",
+        _ctx(request, user, "projects", projects=payload),
+    )
+
+
+@router.get("/projects/{project_id}", response_class=HTMLResponse)
+async def project_detail(
+    request: Request,
+    user: Annotated[WebUser, Depends(get_current_user)],
+    project_id: str,
+):
+    """Project page: header, memory editor, chats list, new-chat affordance."""
+    project = get_project(project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No project {project_id}")
+    chats = list_chats(limit=200, project_id=project_id)
+    return _templates.TemplateResponse(
+        request, "project_detail.html",
+        _ctx(
+            request, user, "projects",
+            project=project,
+            chats=chats,
+            is_inbox=project_id == INBOX_PROJECT_ID,
+        ),
+    )
+
+
+@router.post("/ui/new-project")
+async def ui_new_project(
+    user: Annotated[WebUser, Depends(get_current_user)],
+    name: Annotated[str, Form()],
+    description: Annotated[str, Form()] = "",
+):
+    """Create a new project. Redirects to its detail page so the user can
+    write instructions and start chatting immediately."""
+    name = name.strip()
+    if not name:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "name is required")
+    record = ProjectRecord.new(name=name, description=description.strip())
+    insert_project(record)
+    return RedirectResponse(f"/projects/{record.id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/ui/projects/{project_id}/save", response_class=HTMLResponse)
+async def ui_save_project(
+    request: Request,
+    user: Annotated[WebUser, Depends(get_current_user)],
+    project_id: str,
+    name: Annotated[str, Form()],
+    description: Annotated[str, Form()] = "",
+    instructions: Annotated[str, Form()] = "",
+):
+    """HTMX-savable form for project name/description/instructions.
+
+    Returns a small saved-flash partial so the editor confirms without a
+    full page reload — the textarea state is preserved."""
+    project = get_project(project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND)
+    project.name = name.strip() or project.name
+    project.description = description.strip()
+    project.instructions = instructions
+    update_project(project)
+    # Tiny ephemeral confirmation rendered into a target div by HTMX.
+    return HTMLResponse(
+        '<span class="text-accent-soft" '
+        'style="font-family: var(--font-mono); font-size: 10px; '
+        'text-transform: uppercase; letter-spacing: 0.14em;">saved ✓</span>'
+    )
+
+
+@router.post("/ui/projects/{project_id}/delete")
+async def ui_delete_project(
+    user: Annotated[WebUser, Depends(get_current_user)],
+    project_id: str,
+):
+    """Remove a project. Chats inside are reassigned to Inbox, not deleted."""
+    if project_id == INBOX_PROJECT_ID:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Inbox cannot be deleted")
+    if not delete_project(project_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND)
+    return RedirectResponse("/projects", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/api/projects/{project_id}/memory/append")
+async def api_append_project_memory(
+    user: Annotated[WebUser, Depends(get_current_user)],
+    project_id: str,
+    text: Annotated[str, Form()],
+):
+    """Append a chunk of text to a project's instructions/memory.
+
+    Used by the chat UI's 'save to memory' button (which lifts an assistant
+    reply verbatim) and by the save_project_memory MCP tool (whose path
+    goes via update_project directly, not through this endpoint)."""
+    project = get_project(project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No project {project_id}")
+    text = text.strip()
+    if not text:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "text required")
+    sep = "\n\n" if (project.instructions or "").strip() else ""
+    project.instructions = (project.instructions or "") + sep + text
+    update_project(project)
+    return {
+        "ok": True,
+        "project_id": project_id,
+        "memory_length": len(project.instructions),
+    }
+
+
+@router.post("/ui/chats/{chat_id}/move")
+async def ui_move_chat(
+    user: Annotated[WebUser, Depends(get_current_user)],
+    chat_id: str,
+    project_id: Annotated[str, Form()],
+):
+    """Move a chat to a different project."""
+    if get_project(project_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No project {project_id}")
+    if not move_chat_to_project(chat_id, project_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No chat {chat_id}")
+    return RedirectResponse(f"/projects/{project_id}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.get("/runs", response_class=HTMLResponse)

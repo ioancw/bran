@@ -1,7 +1,11 @@
 {% extends 'base.html' %}
-{% block title %}bran · chat{% endblock %}
-{% block heading %}Chat{% endblock %}
-{% block subheading %}{% if active_chat %}with {{ active_chat.agent }}{% else %}live conversation with the orchestrator{% endif %}{% endblock %}
+{% block title %}bran · chat{% if project %} · {{ project.name }}{% endif %}{% endblock %}
+{% block heading %}
+  {% if project %}{{ project.name }} · chat{% else %}Chat{% endif %}
+{% endblock %}
+{% block subheading %}
+  {% if active_chat %}with {{ active_chat.agent }}{% elif project %}new chat in {{ project.name }}{% else %}all conversations{% endif %}
+{% endblock %}
 
 {% block header_actions %}
   <span id="chat-status" class="text-muted" style="font-size: 11px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.1em;"></span>
@@ -101,7 +105,11 @@
   // Server-injected catalog (agents + slash commands) and chat list/active.
   const CATALOG    = {{ catalog_json|safe }};
   let CHATS        = {{ chats_json|safe }};
-  let ACTIVE_CHAT  = {{ active_chat_json|safe }};   // {id, title, agent} or null
+  let ACTIVE_CHAT  = {{ active_chat_json|safe }};   // {id, title, agent, project_id} or null
+  // Project scope: id of the project the user is currently viewing chats
+  // within (so new chats go into the right project). Null means global.
+  let PROJECT_ID   = {{ (project_id or '')|tojson }};
+  PROJECT_ID = PROJECT_ID || null;
 
   /* -------------------------------------------------------------------------
    * DOM refs
@@ -270,12 +278,61 @@
     const el = document.createElement('div');
     el.className = 'card';
     const agentLabel = ACTIVE_CHAT ? ACTIVE_CHAT.agent : (pendingAgent || 'orchestrator');
+    // The "save to memory" pin is shown when we know which project this chat
+    // belongs to — either because the chat is loaded (ACTIVE_CHAT) or because
+    // the user opened the page scoped to a project (PROJECT_ID).
+    const projectId = (ACTIVE_CHAT && ACTIVE_CHAT.project_id) || PROJECT_ID;
+    const pinBtnHtml = projectId
+      ? `<button type="button" class="pin-mem-btn btn-ghost" title="pin this reply to project memory"
+                 style="font-size: 10px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.1em;">
+           pin to memory
+         </button>`
+      : '';
     el.innerHTML = `
-      <div class="label-cap" style="margin-bottom: 6px;">${escapeHtml(agentLabel)}</div>
+      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+        <span class="label-cap">${escapeHtml(agentLabel)}</span>
+        <span style="margin-left: auto;">${pinBtnHtml}</span>
+      </div>
       <pre data-md class="hidden">${escapeHtml(text)}</pre>
     `;
     messagesEl.appendChild(el);
     renderMarkdown(el);
+
+    // Wire the pin button. Closure captures `text` and `projectId` so we can
+    // POST verbatim without round-tripping through the DOM.
+    const btn = el.querySelector('.pin-mem-btn');
+    if (btn) {
+      btn.addEventListener('click', async () => {
+        const original = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'saving…';
+        try {
+          const body = new URLSearchParams();
+          body.set('text', text);
+          const r = await fetch(`/api/projects/${encodeURIComponent(projectId)}/memory/append`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body,
+          });
+          if (r.ok) {
+            btn.textContent = 'pinned ✓';
+            btn.style.color = 'var(--accent-soft)';
+          } else {
+            btn.textContent = 'failed';
+            btn.style.color = 'var(--red)';
+          }
+        } catch (e) {
+          btn.textContent = 'failed';
+          btn.style.color = 'var(--red)';
+        } finally {
+          setTimeout(() => {
+            btn.textContent = original;
+            btn.style.color = '';
+            btn.disabled = false;
+          }, 2200);
+        }
+      });
+    }
     scrollToBottom();
   }
 
@@ -453,9 +510,15 @@
     if (ACTIVE_CHAT) {
       body.set('session_id', ACTIVE_CHAT.id);
       body.set('chat_agent', ACTIVE_CHAT.agent);
+      // Server is authoritative on the project (it reads the chat row), but
+      // we still forward it for symmetry / debugging.
+      if (ACTIVE_CHAT.project_id) body.set('project_id', ACTIVE_CHAT.project_id);
     } else if (pendingAgent) {
       body.set('chat_agent', pendingAgent);
     }
+    // For a brand-new chat in a project context, tell the server which project
+    // to attach the chat to. Server falls back to Inbox if absent.
+    if (!ACTIVE_CHAT && PROJECT_ID) body.set('project_id', PROJECT_ID);
 
     let response;
     try {

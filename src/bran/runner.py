@@ -36,6 +36,7 @@ async def run_agent(
     parent_run_id: str | None = None,
     max_turns: int | None = None,
     extra_options: dict[str, Any] | None = None,
+    append_system: str | None = None,
     on_message=None,
     record: RunRecord | None = None,
 ) -> RunRecord:
@@ -58,7 +59,10 @@ async def run_agent(
         record.status = "running"
         update_run(record)
 
-    options = build_options_for(agent_def, resume=resume_session, max_turns=max_turns)
+    options = build_options_for(
+        agent_def, resume=resume_session, max_turns=max_turns,
+        append_system=append_system,
+    )
     if extra_options:
         for k, v in extra_options.items():
             setattr(options, k, v)
@@ -120,18 +124,22 @@ async def stream_agent(
     *,
     resume_session: str | None = None,
     parent_run_id: str | None = None,
+    append_system: str | None = None,
 ) -> AsyncIterator[Any]:
     """Async generator that yields SDK messages while persisting the run.
 
     Use when you want to consume the message stream directly (e.g. in a REPL or
     websocket handler) rather than just receive the final RunRecord.
+
+    `append_system` is concatenated onto the agent's system prompt — chat
+    surface uses this to layer a project's instructions onto every message.
     """
     agent_def = get_agent(agent)
     record = RunRecord.new(agent=agent, task=task, parent_run_id=parent_run_id)
     record.status = "running"
     insert_run(record)
 
-    options = build_options_for(agent_def, resume=resume_session)
+    options = build_options_for(agent_def, resume=resume_session, append_system=append_system)
     started = time.perf_counter()
     try:
         async for message in query(prompt=task, options=options):

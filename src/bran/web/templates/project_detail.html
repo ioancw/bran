@@ -1,0 +1,128 @@
+{% extends 'base.html' %}
+{% block title %}bran · {{ project.name }}{% endblock %}
+{% block heading %}{{ project.name }}{% endblock %}
+{% block subheading %}
+  {% if is_inbox %}casual one-off chats{% else %}{{ project.description or 'project' }}{% endif %}
+{% endblock %}
+
+{% block header_actions %}
+  <a href="/chat?project={{ project.id }}" class="btn-primary" style="text-decoration: none;">+ new chat</a>
+  <a href="/projects" class="btn-outline" style="text-decoration: none;">← all projects</a>
+{% endblock %}
+
+{% block content %}
+<div class="grid grid-cols-3 gap-6 stagger-in" style="max-width: 1100px;">
+
+  <!-- Left column: memory editor (name, description, instructions) -->
+  <section class="col-span-2 space-y-5">
+
+    <!-- Memory editor. Single HTMX form so the user gets one Save button and
+         one place where everything about the project lives. The 'saved ✓'
+         confirmation gets swapped into the target span. -->
+    <div class="card" style="padding: 22px 26px;">
+      <div class="eyebrow" style="margin-bottom: 14px; display: flex; align-items: center; gap: 12px;">
+        <span style="flex: 0 0 auto;">project memory</span>
+        <span style="flex: 1; border-top: 1px solid var(--border);"></span>
+      </div>
+
+      <form hx-post="/ui/projects/{{ project.id }}/save"
+            hx-target="#save-status"
+            hx-swap="innerHTML"
+            class="space-y-4">
+
+        {% if not is_inbox %}
+          <label class="block">
+            <span class="label-cap" style="display: block; margin-bottom: 4px;">Name</span>
+            <input name="name" required value="{{ project.name }}" class="field" />
+          </label>
+          <label class="block">
+            <span class="label-cap" style="display: block; margin-bottom: 4px;">Description</span>
+            <input name="description" value="{{ project.description }}" placeholder="What's this project for?" class="field" />
+          </label>
+        {% else %}
+          <!-- Inbox is the system project — name and description are fixed,
+               so they go through as hidden inputs to keep the form valid. -->
+          <input type="hidden" name="name" value="{{ project.name }}" />
+          <input type="hidden" name="description" value="{{ project.description }}" />
+          <div class="text-dim" style="font-family: var(--font-prose); font-size: 13px; font-style: italic; padding-bottom: 4px;">
+            Inbox is the catch-all for chats that don't belong to a specific project. Any instructions you set here apply to those casual chats.
+          </div>
+        {% endif %}
+
+        <label class="block">
+          <span class="label-cap" style="display: block; margin-bottom: 4px;">Instructions (always-on memory)</span>
+          <textarea name="instructions" rows="14"
+                    placeholder="Anything you'd want every chat in this project to know upfront — context, style, ground rules, vocabulary…"
+                    class="field" style="resize: vertical; font-family: var(--font-mono); font-size: 13px; line-height: 1.5;">{{ project.instructions }}</textarea>
+          <span class="text-muted" style="font-size: 10px; display: block; margin-top: 4px;">
+            Appended to the agent's system prompt for every message in this project. Markdown is fine.
+          </span>
+        </label>
+
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <button type="submit" class="btn-primary">Save memory</button>
+          <span id="save-status"></span>
+        </div>
+      </form>
+    </div>
+
+    {% if not is_inbox %}
+      <!-- Danger zone — only shown for user-created projects. Inbox can't be
+           deleted, so we hide this rather than surface a disabled button. -->
+      <details class="card-quiet">
+        <summary class="label-cap" style="cursor: pointer; color: var(--muted);">danger zone</summary>
+        <div style="padding-top: 12px; display: flex; align-items: center; gap: 14px;">
+          <p class="text-dim" style="font-size: 12px; flex: 1; margin: 0; line-height: 1.5;">
+            Delete this project. Chats stay — they get moved back to Inbox.
+          </p>
+          <form method="post" action="/ui/projects/{{ project.id }}/delete"
+                onsubmit="return confirm('Delete project &quot;{{ project.name }}&quot;? Its chats will be moved to Inbox.');">
+            <button type="submit" class="btn-ghost danger" style="border: 1px solid var(--border2);">delete project</button>
+          </form>
+        </div>
+      </details>
+    {% endif %}
+
+  </section>
+
+  <!-- Right column: chats in this project -->
+  <aside class="col-span-1 space-y-5">
+
+    <div class="card" style="padding: 20px 22px;">
+      <div class="eyebrow" style="margin-bottom: 12px; display: flex; align-items: center; gap: 12px;">
+        <span style="flex: 0 0 auto;">conversations ({{ chats|length }})</span>
+        <span style="flex: 1; border-top: 1px solid var(--border);"></span>
+      </div>
+
+      {% if chats %}
+        <div class="space-y-2">
+          {% for c in chats %}
+            <a href="/chat/{{ c.id }}" style="display: block; text-decoration: none; padding: 10px 12px; border-radius: var(--radius); transition: background 0.12s var(--transition);"
+               onmouseover="this.style.background='var(--surface2)'"
+               onmouseout="this.style.background='transparent'">
+              <div style="font-family: var(--font-prose); font-size: 14px; color: var(--fg-bright); font-weight: 500; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                {{ c.title }}
+              </div>
+              <div style="display: flex; align-items: baseline; gap: 6px; margin-top: 3px;">
+                <span class="text-dim font-mono" style="font-size: 10px;">{{ c.agent }}</span>
+                <span class="ml-auto text-muted font-mono" style="font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em;">
+                  {{ c.updated_at[:10] }}
+                </span>
+              </div>
+            </a>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="empty-state" style="padding: 20px 0;">
+          <div class="brackets" style="font-size: 22px;">[  ]</div>
+          <h3 style="font-size: 16px;">no chats yet</h3>
+          <p class="cta" style="font-size: 10px;">
+            <a href="/chat?project={{ project.id }}" class="text-accent-soft">start one →</a>
+          </p>
+        </div>
+      {% endif %}
+    </div>
+
+  </aside>
+</div>
+{% endblock %}

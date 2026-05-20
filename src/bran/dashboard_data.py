@@ -7,13 +7,11 @@ persistence layer and the schedule registry.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Iterable
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta, timezone
 
 from bran.config import SETTINGS
-from bran.persistence import RunRecord, ScheduleRecord, list_runs, list_schedules
+from bran.persistence import list_runs, list_schedules
 
 
 @dataclass
@@ -41,14 +39,6 @@ class UpcomingSchedule:
     agent: str
     cron: str
     next_run: datetime | None  # tz-aware UTC
-
-
-@dataclass
-class LatestBriefing:
-    name: str           # filename
-    mtime: float        # unix timestamp
-    body: str           # full markdown body (small enough to inline)
-    snippet: str        # short plain-text preview for dashboard cards
 
 
 def today_stats(now: datetime | None = None) -> TodayStats:
@@ -114,41 +104,121 @@ def upcoming_schedules(now: datetime | None = None, limit: int = 5) -> list[Upco
     return out[:limit]
 
 
-def latest_briefing() -> LatestBriefing | None:
-    """Return the most recently modified briefing markdown, or None."""
-    if not SETTINGS.briefings_dir.exists():
-        return None
-    files = sorted(
-        SETTINGS.briefings_dir.glob("*.md"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    if not files:
-        return None
-    p = files[0]
-    try:
-        body = p.read_text(encoding="utf-8")
-    except OSError:
-        return None
+# ---------------------------------------------------------------------------
+# Outputs — agent results grouped by time, the editorial heart of the dashboard
+# ---------------------------------------------------------------------------
 
-    # Cheap snippet generator: skip blank lines, headers, list bullets, and
-    # markdown link/bold syntax to get the first real prose-y line. Stops at
-    # 220 chars. This is template-side ugliness moved to Python where it belongs.
-    snippet_parts: list[str] = []
-    for raw in body.splitlines():
+@dataclass
+class OutputItem:
+    """One thing an agent produced. Either a briefing (file on disk, rich card)
+    or an answer (a completed run's `result`, quieter card)."""
+    kind: str           # "briefing" | "answer"
+    title: str
+    snippet: str
+    agent: str
+    timestamp: datetime
+    time_label: str     # short relative label rendered next to the title
+    href: str
+
+
+@dataclass
+class OutputBucket:
+    """A time-bucket of outputs. `label` is the eyebrow header (e.g. 'today')."""
+    label: str
+    items: list[OutputItem] = field(default_factory=list)
+
+
+def _prose_snippet(text: str, limit: int = 220) -> str:
+    """First few lines of real prose, skipping markdown chrome — used to
+    generate the snippet shown on output cards."""
+    parts: list[str] = []
+    for raw in text.splitlines():
         line = raw.strip()
         if not line or line.startswith(("#", "-", "*", "|", "```", ">")):
             continue
-        snippet_parts.append(line)
-        if sum(len(p) for p in snippet_parts) > 240:
+        parts.append(line)
+        if sum(len(p) for p in parts) > limit + 20:
             break
-    snippet = " ".join(snippet_parts)
-    if len(snippet) > 220:
-        snippet = snippet[:217].rsplit(" ", 1)[0] + "…"
+    s = " ".join(parts)
+    if len(s) > limit:
+        s = s[: limit - 3].rsplit(" ", 1)[0] + "…"
+    return s
 
-    return LatestBriefing(
-        name=p.name, mtime=p.stat().st_mtime, body=body, snippet=snippet,
-    )
+
+def _time_label(ts: datetime, now: datetime) -> str:
+    """Short relative time for the card corner. 'today' items just show HH:MM."""
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    today = now.date()
+    d = ts.date()
+    if d == today:
+        return ts.strftime("%H:%M")
+    if d == today - timedelta(days=1):
+        return f"yesterday {ts.strftime('%H:%M')}"
+    if (now - ts).days < 7:
+        return ts.strftime("%a %H:%M").lower()
+    return ts.strftime("%b %d").lower()
+
+
+def _bucket_label(d: date, today: date) -> str:
+    """Map a date to its display bucket. Auto-grouping per user's pick."""
+    yesterday = today - timedelta(days=1)
+    week_start = today - timedelta(days=today.weekday())          # Monday
+    last_week_start = week_start - timedelta(days=7)
+    if d == today:
+        return "today"
+    if d == yesterday:
+        return "yesterday"
+    if week_start <= d < yesterday:
+        return "this week"
+    if last_week_start <= d < week_start:
+        return "last week"
+    return d.strftime("%B %Y").lower()
+
+
+def list_outputs(limit: int = 60, now: datetime | None = None) -> list[OutputBucket]:
+    """Return briefing files bucketed by time, newest first.
+
+    Only briefing files are surfaced here — chat-style answers from the
+    orchestrator are intentionally excluded, since they're already visible on
+    /runs and would dilute the editorial feel of the dashboard.
+    """
+    now = now or datetime.now(timezone.utc)
+
+    items: list[OutputItem] = []
+    if SETTINGS.briefings_dir.exists():
+        for p in SETTINGS.briefings_dir.glob("*.md"):
+            try:
+                mtime = p.stat().st_mtime
+                body = p.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            ts = datetime.fromtimestamp(mtime, tz=timezone.utc)
+            title = p.name.replace(".md", "").replace("briefing_", "").replace("_", " ")
+            items.append(OutputItem(
+                kind="briefing",
+                title=title,
+                snippet=_prose_snippet(body, 220),
+                agent="finance_news",
+                timestamp=ts,
+                time_label=_time_label(ts, now),
+                href=f"/briefings/{p.name}",
+            ))
+
+    items.sort(key=lambda i: i.timestamp, reverse=True)
+    items = items[:limit]
+
+    # Bucket — items already sorted, so bucket labels stay monotonic
+    buckets: list[OutputBucket] = []
+    today = now.date()
+    current_label: str | None = None
+    for item in items:
+        label = _bucket_label(item.timestamp.date(), today)
+        if label != current_label:
+            buckets.append(OutputBucket(label=label))
+            current_label = label
+        buckets[-1].items.append(item)
+    return buckets
 
 
 def format_countdown(target: datetime, now: datetime | None = None) -> str:
