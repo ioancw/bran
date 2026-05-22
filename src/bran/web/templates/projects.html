@@ -30,10 +30,10 @@
     </form>
   </div>
 
-  <!-- Project grid -->
-  {% if projects %}
-    <div class="grid grid-cols-2 gap-5">
-      {% for p in projects %}
+  <!-- Project grid. Inbox is auto-created on first run, so `projects` is
+       guaranteed non-empty — no empty-state branch needed. -->
+  <div class="grid grid-cols-2 gap-5">
+    {% for p in projects %}
         <a href="/projects/{{ p.id }}"
            class="card block project-card"
            style="text-decoration: none; padding: 24px 26px; transition: border-color 0.2s var(--transition); position: relative;
@@ -59,15 +59,8 @@
             </p>
           {% endif %}
         </a>
-      {% endfor %}
-    </div>
-  {% else %}
-    <div class="empty-state">
-      <div class="brackets">[       ]</div>
-      <h3>no projects yet</h3>
-      <p class="cta">click <code>+ new project</code> above to start</p>
-    </div>
-  {% endif %}
+    {% endfor %}
+  </div>
 
 </div>
 

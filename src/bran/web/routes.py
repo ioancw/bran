@@ -632,11 +632,21 @@ async def ui_save_project(
     project.description = description.strip()
     project.instructions = instructions
     update_project(project)
-    # Tiny ephemeral confirmation rendered into a target div by HTMX.
+    # Ephemeral confirmation: visible on swap, fades to nothing after ~2.5s
+    # so the editor doesn't look 'permanently saved' even after the user has
+    # gone on to make further edits.
     return HTMLResponse(
-        '<span class="text-accent-soft" '
+        '<span class="save-flash" '
         'style="font-family: var(--font-mono); font-size: 10px; '
-        'text-transform: uppercase; letter-spacing: 0.14em;">saved ✓</span>'
+        'text-transform: uppercase; letter-spacing: 0.14em; '
+        'color: var(--accent-soft); transition: opacity 0.6s ease-out;">saved ✓</span>'
+        '<script>'
+        'setTimeout(() => { '
+        ' const el = document.querySelector(\'.save-flash\'); '
+        ' if (el) { el.style.opacity = \'0\'; '
+        '   setTimeout(() => el.remove(), 700); } '
+        '}, 2200);'
+        '</script>'
     )
 
 
