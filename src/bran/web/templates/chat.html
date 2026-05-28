@@ -262,10 +262,375 @@
   }
 
   /* -------------------------------------------------------------------------
-   * Message rendering
+   * Tool blocks: paired call + result rendering.
+   *
+   * Each tool call is tracked by tool_id so the result event can find its
+   * block and update it in place (status: running → done/error, populate
+   * result section). This collapses the previous "two cards per call" view
+   * into one expandable block that mirrors lightcc's ToolCall pattern.
    * ----------------------------------------------------------------------- */
+  const toolBlocks = new Map();   // tool_id -> { el, name, input, startedAt }
+  // The DOM container for the *current* run of consecutive same-name calls,
+  // used to merge runs of 3+ into a single ToolGroup. Reset whenever a
+  // non-tool element (assistant text / thinking / user / footer) lands.
+  let toolRun = { name: null, count: 0, container: null };
+
+  // Category color/label keyed off tool name — mirrors lightcc's getToolBadge
+  // but without the SVG icons since we use a status dot instead.
+  function toolCategory(name) {
+    const n = (name || '').toLowerCase();
+    if (n === 'read' || n === 'glob' || n === 'grep' || n === 'ls') return 'search';
+    if (n === 'edit' || n === 'write' || n === 'multiedit' || n === 'notebookedit') return 'write';
+    if (n === 'bash' || n === 'powershell') return 'shell';
+    if (n.startsWith('web') || n.startsWith('mcp__tavily')) return 'web';
+    if (n === 'agent' || n === 'task' || n.startsWith('mcp__bran__spawn')) return 'agent';
+    return 'misc';
+  }
+
+  function shortenPath(p) {
+    if (!p) return '';
+    const parts = String(p).replace(/\\/g, '/').split('/').filter(Boolean);
+    if (parts.length <= 3) return parts.join('/');
+    return '…/' + parts.slice(-2).join('/');
+  }
+  function truncate(s, max) {
+    s = String(s || '');
+    return s.length > max ? s.slice(0, max - 1) + '…' : s;
+  }
+
+  // One-line summary shown in the collapsed tool header
+  function headerSummary(name, input) {
+    const n = (name || '').toLowerCase();
+    const inp = input || {};
+    if (n === 'read' || n === 'edit' || n === 'write')   return inp.file_path ? shortenPath(inp.file_path) : '';
+    if (n === 'bash' || n === 'powershell')              return inp.command ? truncate(inp.command, 60) : '';
+    if (n === 'grep')                                    return inp.pattern ? truncate(inp.pattern, 40) : '';
+    if (n === 'glob')                                    return inp.pattern ? truncate(inp.pattern, 40) : '';
+    if (n === 'agent' || n === 'task') {
+      const sub = inp.subagent_type || 'subagent';
+      const desc = inp.description ? ` — ${truncate(inp.description, 40)}` : '';
+      return `${sub}${desc}`;
+    }
+    if (n === 'websearch' || n === 'mcp__tavily__tavily_search') return inp.query ? truncate(inp.query, 60) : '';
+    if (n === 'webfetch' || n === 'mcp__tavily__tavily_extract') return inp.url ? truncate(inp.url, 60) : '';
+    return '';
+  }
+
+  // Quick preview of the result shown next to the summary in the header.
+  // Bran sees raw text rather than structured JSON (the SDK passes strings),
+  // so we extract a short, useful signal per tool family.
+  function resultPreview(name, text, isError) {
+    if (isError) return 'error';
+    if (!text) return '';
+    const n = (name || '').toLowerCase();
+    if (n === 'read') {
+      const lines = text.split('\n').length;
+      return `${lines} line${lines !== 1 ? 's' : ''}`;
+    }
+    if (n === 'grep') {
+      const lines = text.split('\n').filter(Boolean).length;
+      return `${lines} match${lines !== 1 ? 'es' : ''}`;
+    }
+    if (n === 'glob') {
+      const lines = text.split('\n').filter(Boolean).length;
+      return `${lines} file${lines !== 1 ? 's' : ''}`;
+    }
+    if (n === 'bash' || n === 'powershell') {
+      return text.toLowerCase().includes('error') ? 'with errors' : 'ok';
+    }
+    if (n === 'edit' || n === 'write')   return 'saved';
+    if (n === 'agent' || n === 'task')   return 'done';
+    return 'ok';
+  }
+
+  function paramRows(input) {
+    if (!input || typeof input !== 'object') return [];
+    return Object.entries(input).map(([k, v]) => {
+      let display;
+      if (v === null || v === undefined) display = '';
+      else if (typeof v === 'string')    display = v;
+      else { try { display = JSON.stringify(v); } catch { display = String(v); } }
+      return [k, display];
+    });
+  }
+
+  // Group threshold — runs of 3+ consecutive same-name calls collapse to one
+  // ToolGroup so the chat doesn't get drowned by e.g. 12 WebSearches.
+  const GROUP_THRESHOLD = 3;
+
+  // Tracks where to mount the next tool block. Switches between the messages
+  // container and a tool-group body when we're inside a run.
+  function endToolRun() { toolRun = { name: null, count: 0, container: null }; }
+
+  function mountForTool(name) {
+    if (toolRun.name === name) {
+      toolRun.count += 1;
+      // On the threshold-th call, retroactively gather prior siblings into a
+      // group container. The previous N-1 blocks are the last children of
+      // messagesEl in source order.
+      if (toolRun.count === GROUP_THRESHOLD) {
+        const cat = toolCategory(name);
+        const group = document.createElement('div');
+        group.className = `tool-group tool-cat-${cat}`;
+        group.innerHTML = `
+          <button type="button" class="tool-group-header">
+            <span class="tool-status-dot done"></span>
+            <span class="tool-name">${escapeHtml(name)}</span>
+            <span class="tool-group-count">×${toolRun.count} calls</span>
+            <svg class="tool-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+              <path d="M2 4l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+          <div class="tool-group-body"></div>
+        `;
+        const header = group.querySelector('.tool-group-header');
+        header.addEventListener('click', () => group.classList.toggle('expanded'));
+        const body = group.querySelector('.tool-group-body');
+        // Pull in the previous N-1 tool blocks. They've been appended directly
+        // to messagesEl. Walk backwards from the end of messagesEl.
+        const prior = [];
+        for (let i = messagesEl.children.length - 1, found = 0; i >= 0 && found < GROUP_THRESHOLD - 1; i--) {
+          const child = messagesEl.children[i];
+          if (child.classList?.contains('tool-block')) {
+            prior.unshift(child);
+            found += 1;
+          } else {
+            break;
+          }
+        }
+        for (const child of prior) body.appendChild(child);
+        messagesEl.appendChild(group);
+        toolRun.container = body;
+        return body;
+      }
+      if (toolRun.count > GROUP_THRESHOLD) return toolRun.container;
+      return messagesEl;
+    }
+    endToolRun();
+    toolRun = { name, count: 1, container: null };
+    return messagesEl;
+  }
+
+  // Notify the tool-run tracker that a non-tool element interrupted the run.
+  function breakToolRun() { endToolRun(); }
+
+  function buildToolBlock(name, input, toolId) {
+    const cat = toolCategory(name);
+    const el = document.createElement('div');
+    el.className = `tool-block tool-cat-${cat} running`;
+    el.dataset.toolId = toolId || '';
+    const summary = headerSummary(name, input);
+    el.innerHTML = `
+      <button type="button" class="tool-header">
+        <span class="tool-status-dot running"></span>
+        <span class="tool-name">${escapeHtml(name)}</span>
+        <span class="tool-summary">${escapeHtml(summary)}</span>
+        <span class="tool-result-preview"></span>
+        <span class="tool-duration"></span>
+        <svg class="tool-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+          <path d="M2 4l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <div class="tool-body"></div>
+    `;
+
+    // Body (always built, even if collapsed). Params first, then result slot.
+    const body = el.querySelector('.tool-body');
+    const rows = paramRows(input);
+    if (rows.length) {
+      const sec = document.createElement('div');
+      sec.className = 'tool-section';
+      sec.innerHTML = `
+        <div class="tool-section-label"><span>Params</span></div>
+        <div class="tool-params">${rows.map(([k, v]) =>
+          `<span class="tool-param-key">${escapeHtml(k)}</span><span class="tool-param-value">${escapeHtml(v)}</span>`
+        ).join('')}</div>
+      `;
+      body.appendChild(sec);
+    }
+    // Result placeholder — populated when the result event arrives.
+    const resultSlot = document.createElement('div');
+    resultSlot.className = 'tool-result-slot';
+    body.appendChild(resultSlot);
+
+    el.querySelector('.tool-header').addEventListener('click', () => el.classList.toggle('expanded'));
+    return el;
+  }
+
+  function appendToolCall(name, input, toolId) {
+    showEmpty(false);
+    finalizeStreamingAssistant();
+    const mount = mountForTool(name);
+    const el = buildToolBlock(name, input, toolId);
+    mount.appendChild(el);
+    if (toolId) {
+      toolBlocks.set(toolId, { el, name, input, startedAt: performance.now() });
+    }
+    scrollToBottom();
+  }
+
+  function appendDelegation(subagent, promptText, toolId) {
+    // Delegation = an Agent tool call we've special-cased on the server.
+    // Render as a regular tool block named "Agent" so it shares the same
+    // status/grouping behaviour as everything else.
+    appendToolCall('Agent', { subagent_type: subagent, prompt: promptText || '' }, toolId);
+  }
+
+  function renderToolResultBody(name, input, text, isError) {
+    const n = (name || '').toLowerCase();
+    const safe = (s) => escapeHtml(String(s || ''));
+
+    if (isError) {
+      return `<div class="tool-section">
+        <div class="tool-section-label"><span>Error</span></div>
+        <div class="tool-code" style="color: var(--red); border-color: color-mix(in srgb, var(--red) 30%, transparent); background: color-mix(in srgb, var(--red) 6%, transparent);">${safe(text)}</div>
+      </div>`;
+    }
+
+    // Bash: command echo + output block
+    if (n === 'bash' || n === 'powershell') {
+      const cmd = input && input.command ? `<div class="tool-section">
+        <div class="tool-section-label"><span>Command</span></div>
+        <div class="tool-bash-cmd">$ ${safe(input.command)}</div>
+      </div>` : '';
+      return cmd + `<div class="tool-section">
+        <div class="tool-section-label"><span>Output</span><button class="tool-copy-btn" data-copy>copy</button></div>
+        <div class="tool-code" data-copy-src>${safe(text)}</div>
+      </div>`;
+    }
+
+    // Edit: render old_string / new_string as a diff, plus the SDK's status text.
+    if (n === 'edit' && input && input.old_string !== undefined && input.new_string !== undefined) {
+      return `<div class="tool-section">
+        <div class="tool-section-label"><span>${safe(shortenPath(input.file_path || ''))}</span></div>
+        <div class="tool-diff">
+          <div class="tool-diff-del">${safe(input.old_string)}</div>
+          <div class="tool-diff-add">${safe(input.new_string)}</div>
+        </div>
+        ${text ? `<div class="tool-meta">${safe(truncate(text, 200))}</div>` : ''}
+      </div>`;
+    }
+
+    // Read: file content block (the SDK returns numbered lines already)
+    if (n === 'read') {
+      return `<div class="tool-section">
+        <div class="tool-section-label">
+          <span>${safe(input && input.file_path ? shortenPath(input.file_path) : 'File')}</span>
+          <button class="tool-copy-btn" data-copy>copy</button>
+        </div>
+        <div class="tool-code" data-copy-src style="white-space: pre; overflow-x: auto;">${safe(text)}</div>
+      </div>`;
+    }
+
+    // Grep / Glob: each line is a hit
+    if (n === 'grep' || n === 'glob') {
+      return `<div class="tool-section">
+        <div class="tool-section-label">
+          <span>${n === 'grep' ? 'Matches' : 'Files'}</span>
+          <button class="tool-copy-btn" data-copy>copy</button>
+        </div>
+        <div class="tool-code" data-copy-src>${safe(text)}</div>
+      </div>`;
+    }
+
+    // Agent / Task: delegation prompt + subagent's response
+    if (n === 'agent' || n === 'task') {
+      const promptHtml = (input && input.prompt) ? `<div class="tool-section">
+        <div class="tool-section-label"><span>Prompt to ${safe(input.subagent_type || 'subagent')}</span></div>
+        <div class="tool-task-prompt">${safe(input.prompt)}</div>
+      </div>` : '';
+      return promptHtml + `<div class="tool-section">
+        <div class="tool-section-label"><span>Response</span><button class="tool-copy-btn" data-copy>copy</button></div>
+        <div class="tool-task-result" data-copy-src>${safe(text)}</div>
+      </div>`;
+    }
+
+    // Default: raw output
+    return `<div class="tool-section">
+      <div class="tool-section-label"><span>Output</span><button class="tool-copy-btn" data-copy>copy</button></div>
+      <div class="tool-code" data-copy-src>${safe(text)}</div>
+    </div>`;
+  }
+
+  function updateToolWithResult(toolId, text, isError) {
+    const entry = toolId ? toolBlocks.get(toolId) : null;
+    if (!entry) {
+      // Result arrived without a matching call (shouldn't normally happen).
+      // Fall back to a standalone block so the user still sees it.
+      showEmpty(false);
+      const orphan = document.createElement('div');
+      orphan.className = 'tool-block tool-cat-misc' + (isError ? ' errored' : '');
+      orphan.innerHTML = `
+        <button type="button" class="tool-header">
+          <span class="tool-status-dot ${isError ? 'error' : 'done'}"></span>
+          <span class="tool-name">result</span>
+          <span class="tool-summary">${escapeHtml(truncate(text, 80))}</span>
+          <svg class="tool-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+            <path d="M2 4l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div class="tool-body"><div class="tool-section"><div class="tool-code">${escapeHtml(text || '')}</div></div></div>
+      `;
+      orphan.querySelector('.tool-header').addEventListener('click', () => orphan.classList.toggle('expanded'));
+      messagesEl.appendChild(orphan);
+      scrollToBottom();
+      return;
+    }
+    const { el, name, input, startedAt } = entry;
+    el.classList.remove('running');
+    if (isError) el.classList.add('errored');
+
+    const dot = el.querySelector('.tool-status-dot');
+    dot.classList.remove('running');
+    dot.classList.add(isError ? 'error' : 'done');
+
+    const preview = el.querySelector('.tool-result-preview');
+    const previewText = resultPreview(name, text, isError);
+    preview.textContent = previewText;
+    if (isError) preview.classList.add('error');
+
+    if (startedAt) {
+      const secs = Math.max(0.1, (performance.now() - startedAt) / 1000);
+      el.querySelector('.tool-duration').textContent = secs < 10 ? `${secs.toFixed(1)}s` : `${Math.round(secs)}s`;
+    }
+
+    // Inject the result body into the slot we set up at call time.
+    const slot = el.querySelector('.tool-result-slot');
+    if (slot) slot.innerHTML = renderToolResultBody(name, input, text, isError);
+
+    // Wire up tool-internal copy buttons (per-section copies).
+    el.querySelectorAll('.tool-copy-btn[data-copy]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const src = btn.closest('.tool-section')?.querySelector('[data-copy-src]');
+        const txt = src ? (src.innerText || src.textContent || '') : '';
+        navigator.clipboard.writeText(txt).then(() => {
+          const orig = btn.textContent;
+          btn.textContent = 'copied!';
+          setTimeout(() => { btn.textContent = orig; }, 1500);
+        });
+      });
+    });
+    scrollToBottom();
+  }
+
+  // appendToolResult kept as a fallback for orphan results (no tool_id).
+  function appendToolResult(text, isError, toolId) {
+    updateToolWithResult(toolId, text, isError);
+  }
+
+  /* -------------------------------------------------------------------------
+   * Assistant + user message rendering
+   * ----------------------------------------------------------------------- */
+
+  // Currently-streaming assistant message element. We append text chunks to
+  // it while the assistant is mid-stream; a blinking caret marks the tail.
+  let streamingAssistantEl = null;
+  let streamingAssistantText = '';
+
   function appendUser(text) {
     showEmpty(false);
+    breakToolRun();
     const el = document.createElement('div');
     el.className = 'card';
     el.style.background = 'var(--accent-glow)';
@@ -278,142 +643,142 @@
     scrollToBottom();
   }
 
-  function appendAssistantText(text) {
-    showEmpty(false);
+  function _buildAssistantShell(agentLabel, projectId, text) {
     const el = document.createElement('div');
     el.className = 'card';
-    const agentLabel = ACTIVE_CHAT ? ACTIVE_CHAT.agent : (pendingAgent || 'orchestrator');
-    // The "save to memory" pin is shown when we know which project this chat
-    // belongs to — either because the chat is loaded (ACTIVE_CHAT) or because
-    // the user opened the page scoped to a project (PROJECT_ID).
-    const projectId = (ACTIVE_CHAT && ACTIVE_CHAT.project_id) || PROJECT_ID;
     const pinBtnHtml = projectId
-      ? `<button type="button" class="pin-mem-btn btn-ghost" title="pin this reply to project memory"
-                 style="font-size: 10px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.1em;">
-           pin to memory
-         </button>`
+      ? `<button type="button" class="msg-action-btn pin-mem-btn" title="pin this reply to project memory">pin to memory</button>`
       : '';
     el.innerHTML = `
       <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
         <span class="label-cap">${escapeHtml(agentLabel)}</span>
-        <span style="margin-left: auto;">${pinBtnHtml}</span>
+        <div class="msg-actions">
+          <button type="button" class="msg-action-btn copy-msg-btn" title="copy reply">copy</button>
+          ${pinBtnHtml}
+        </div>
       </div>
-      <pre data-md class="hidden">${escapeHtml(text)}</pre>
+      <div class="msg-prose"></div>
     `;
-    messagesEl.appendChild(el);
-    renderMarkdown(el);
+    el._sourceText = text || '';
+    // Initial body: a pre[data-md] that renderMarkdown will convert into
+    // a .prose-md div in place. We re-attach the helper buttons against the
+    // outer card so they survive that replacement.
+    const proseSlot = el.querySelector('.msg-prose');
+    const pre = document.createElement('pre');
+    pre.setAttribute('data-md', '');
+    pre.className = 'hidden';
+    pre.textContent = text || '';
+    proseSlot.appendChild(pre);
+    return el;
+  }
 
-    // Wire the pin button. Closure captures `text` and `projectId` so we can
-    // POST verbatim without round-tripping through the DOM.
-    const btn = el.querySelector('.pin-mem-btn');
-    if (btn) {
-      btn.addEventListener('click', async () => {
-        const original = btn.textContent;
-        btn.disabled = true;
-        btn.textContent = 'saving…';
+  function _wireAssistantButtons(el, projectId) {
+    const copyBtn = el.querySelector('.copy-msg-btn');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', () => {
+        const txt = el._sourceText || '';
+        if (!txt) return;
+        navigator.clipboard.writeText(txt).then(() => {
+          const orig = copyBtn.textContent;
+          copyBtn.textContent = 'copied!';
+          copyBtn.classList.add('done');
+          setTimeout(() => { copyBtn.textContent = orig; copyBtn.classList.remove('done'); }, 1500);
+        });
+      });
+    }
+    const pinBtn = el.querySelector('.pin-mem-btn');
+    if (pinBtn) {
+      pinBtn.addEventListener('click', async () => {
+        const original = pinBtn.textContent;
+        pinBtn.disabled = true;
+        pinBtn.textContent = 'saving…';
         try {
           const body = new URLSearchParams();
-          body.set('text', text);
+          body.set('text', el._sourceText || '');
           const r = await fetch(`/api/projects/${encodeURIComponent(projectId)}/memory/append`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body,
           });
-          if (r.ok) {
-            btn.textContent = 'pinned ✓';
-            btn.style.color = 'var(--accent-soft)';
-          } else {
-            btn.textContent = 'failed';
-            btn.style.color = 'var(--red)';
-          }
+          if (r.ok) { pinBtn.textContent = 'pinned ✓'; pinBtn.classList.add('done'); }
+          else      { pinBtn.textContent = 'failed';   pinBtn.style.color = 'var(--red)'; }
         } catch (e) {
-          btn.textContent = 'failed';
-          btn.style.color = 'var(--red)';
+          pinBtn.textContent = 'failed'; pinBtn.style.color = 'var(--red)';
         } finally {
           setTimeout(() => {
-            btn.textContent = original;
-            btn.style.color = '';
-            btn.disabled = false;
+            pinBtn.textContent = original; pinBtn.style.color = '';
+            pinBtn.classList.remove('done'); pinBtn.disabled = false;
           }, 2200);
         }
       });
     }
+  }
+
+  // Render the current streaming buffer (re-runs markdown so partial code
+  // fences/lists still look right). Adds a blinking cursor at the tail.
+  function _refreshStreamingProse() {
+    if (!streamingAssistantEl) return;
+    const proseSlot = streamingAssistantEl.querySelector('.msg-prose');
+    if (!proseSlot) return;
+    proseSlot.innerHTML = `<pre data-md class="hidden">${escapeHtml(streamingAssistantText)}</pre>`;
+    renderMarkdown(proseSlot);
+    // Cursor goes after the prose; insert at the end of the prose container.
+    const cursor = document.createElement('span');
+    cursor.className = 'stream-cursor';
+    const inner = proseSlot.querySelector('.prose-md');
+    if (inner) inner.appendChild(cursor);
+    else proseSlot.appendChild(cursor);
+  }
+
+  function startStreamingAssistant() {
+    showEmpty(false);
+    breakToolRun();
+    const agentLabel = ACTIVE_CHAT ? ACTIVE_CHAT.agent : (pendingAgent || 'orchestrator');
+    const projectId  = (ACTIVE_CHAT && ACTIVE_CHAT.project_id) || PROJECT_ID;
+    streamingAssistantText = '';
+    streamingAssistantEl = _buildAssistantShell(agentLabel, projectId, '');
+    messagesEl.appendChild(streamingAssistantEl);
+    _wireAssistantButtons(streamingAssistantEl, projectId);
+    // Initial cursor (before any text arrives).
+    _refreshStreamingProse();
     scrollToBottom();
   }
 
-  function appendToolCall(name, input) {
-    showEmpty(false);
-    const previewJson = JSON.stringify(input || {});
-    const preview = previewJson.length > 120 ? previewJson.slice(0, 119) + '…' : previewJson;
-    const el = document.createElement('details');
-    el.className = 'card';
-    el.style.padding = '0';
-    el.innerHTML = `
-      <summary style="padding: 8px 14px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 12px;">
-        <span class="text-muted">→</span>
-        <code class="text-accent-soft font-mono" style="font-size: 12px; font-weight: 500;">${escapeHtml(name)}</code>
-        <span class="text-dim font-mono" style="font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(preview)}</span>
-      </summary>
-      <div style="padding: 4px 14px 12px;">
-        <pre class="font-mono" style="background: var(--bg); color: var(--fg); padding: 12px; border-radius: 4px; font-size: 11px; overflow-x: auto; border: 1px solid var(--border2);">${escapeHtml(JSON.stringify(input || {}, null, 2))}</pre>
-      </div>
-    `;
-    messagesEl.appendChild(el);
+  function appendAssistantChunk(text) {
+    if (!text) return;
+    if (!streamingAssistantEl) startStreamingAssistant();
+    streamingAssistantText += text;
+    streamingAssistantEl._sourceText = streamingAssistantText;
+    _refreshStreamingProse();
     scrollToBottom();
   }
 
-  function appendDelegation(subagent, promptText) {
-    showEmpty(false);
-    const el = document.createElement('div');
-    el.className = 'card';
-    el.style.background = 'var(--amber-soft)';
-    el.style.borderColor = 'var(--amber)';
-    let html = `
-      <div style="display: flex; align-items: center; gap: 8px; font-size: 12px;">
-        <span style="color: var(--amber);">⇢</span>
-        <span style="color: var(--amber);">Delegated to sub-agent</span>
-        <code class="font-mono" style="color: var(--amber); font-weight: 600;">${escapeHtml(subagent || '(unknown)')}</code>
-        <span class="ml-auto label-cap" style="color: var(--amber);">working…</span>
-      </div>
-    `;
-    if (promptText) {
-      html += `
-        <details style="margin-top: 8px;">
-          <summary class="label-cap" style="color: var(--amber); cursor: pointer;">prompt sent to sub-agent</summary>
-          <pre class="text-fg" style="font-size: 11px; white-space: pre-wrap; margin-top: 6px; background: var(--surface); padding: 10px; border-radius: 4px; border: 1px solid var(--border);">${escapeHtml(promptText)}</pre>
-        </details>
-      `;
-    }
-    el.innerHTML = html;
-    messagesEl.appendChild(el);
-    scrollToBottom();
+  function finalizeStreamingAssistant() {
+    if (!streamingAssistantEl) return;
+    // Strip the cursor; the message is final.
+    streamingAssistantEl.querySelectorAll('.stream-cursor').forEach(c => c.remove());
+    streamingAssistantEl = null;
+    streamingAssistantText = '';
   }
 
-  function appendToolResult(text, isError) {
+  // For history replay we get complete text in one shot — render it as a
+  // finalized message (no cursor, no chunking).
+  function appendAssistantText(text) {
     showEmpty(false);
-    const preview = (text || '').slice(0, 120);
-    const trunc = (text || '').length > 120 ? '…' : '';
-    const el = document.createElement('details');
-    el.className = 'card';
-    el.style.padding = '0';
-    el.style.marginLeft = '24px';
-    if (isError) el.style.borderColor = 'var(--red)';
-    el.innerHTML = `
-      <summary style="padding: 8px 14px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 12px;">
-        <span class="text-muted">←</span>
-        <span style="${isError ? 'color: var(--red);' : 'color: var(--fg-dim);'}">${isError ? 'error' : 'result'}</span>
-        <span class="text-dim font-mono" style="font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(preview)}${trunc}</span>
-      </summary>
-      <div style="padding: 4px 14px 12px;">
-        <pre class="font-mono" style="background: ${isError ? 'var(--red-soft)' : 'var(--bg)'}; color: ${isError ? 'var(--red)' : 'var(--fg)'}; padding: 12px; border-radius: 4px; font-size: 11px; white-space: pre-wrap; overflow-x: auto; max-height: 400px; border: 1px solid var(--border2);">${escapeHtml(text || '')}</pre>
-      </div>
-    `;
+    breakToolRun();
+    const agentLabel = ACTIVE_CHAT ? ACTIVE_CHAT.agent : (pendingAgent || 'orchestrator');
+    const projectId  = (ACTIVE_CHAT && ACTIVE_CHAT.project_id) || PROJECT_ID;
+    const el = _buildAssistantShell(agentLabel, projectId, text);
     messagesEl.appendChild(el);
+    _wireAssistantButtons(el, projectId);
+    renderMarkdown(el.querySelector('.msg-prose'));
     scrollToBottom();
   }
 
   function appendThinking(text) {
     showEmpty(false);
+    breakToolRun();
+    finalizeStreamingAssistant();
     const el = document.createElement('details');
     el.className = 'card';
     el.style.padding = '0';
@@ -428,6 +793,8 @@
   }
 
   function appendResultFooter(numTurns, cost) {
+    breakToolRun();
+    finalizeStreamingAssistant();
     const el = document.createElement('div');
     el.style.padding = '4px 12px';
     el.className = 'text-muted font-mono';
@@ -441,6 +808,7 @@
 
   function appendRoutedNotice(agentName) {
     showEmpty(false);
+    breakToolRun();
     const el = document.createElement('div');
     el.className = 'text-muted font-mono';
     el.style.padding = '4px 12px';
@@ -453,7 +821,12 @@
   }
 
   /* -------------------------------------------------------------------------
-   * Event rendering — handles both live stream (.type) and history (.kind)
+   * Event rendering — handles both live stream (.type) and history (.kind).
+   *
+   * Live: text blocks feed appendAssistantChunk (a blinking cursor follows
+   * the latest one until something else lands). Tool blocks are paired
+   * with their results by tool_id.
+   * History: same routing but text comes whole, so we use appendAssistantText.
    * ----------------------------------------------------------------------- */
   function renderEvent(ev) {
     switch (ev.type || ev.kind) {
@@ -470,24 +843,24 @@
       case 'routed':       appendRoutedNotice(ev.agent); return;
       case 'assistant':
         for (const b of (ev.blocks || [])) {
-          if (b.type === 'text') appendAssistantText(b.text);
+          if (b.type === 'text') appendAssistantChunk(b.text);
           else if (b.type === 'thinking') appendThinking(b.text);
-          else if (b.type === 'tool_use') appendToolCall(b.name, b.input);
-          else if (b.type === 'delegation') appendDelegation(b.subagent, b.prompt);
+          else if (b.type === 'tool_use') appendToolCall(b.name, b.input, b.tool_id);
+          else if (b.type === 'delegation') appendDelegation(b.subagent, b.prompt, b.tool_id);
         }
         return;
       case 'user_tool_results':
-        for (const b of (ev.blocks || [])) appendToolResult(b.text, b.is_error);
+        for (const b of (ev.blocks || [])) appendToolResult(b.text, b.is_error, b.tool_id);
         return;
       case 'result':       appendResultFooter(ev.num_turns, ev.total_cost_usd); return;
-      case 'error':        appendToolResult(ev.message, true); return;
+      case 'error':        appendToolResult(ev.message, true, null); return;
       // History shape
       case 'user_text':      appendUser(ev.text); return;
       case 'assistant_text': appendAssistantText(ev.text); return;
       case 'thinking':       appendThinking(ev.text); return;
-      case 'tool_call':      appendToolCall(ev.name, ev.input); return;
-      case 'delegation':     appendDelegation(ev.subagent, ev.prompt); return;
-      case 'tool_result':    appendToolResult(ev.text, ev.is_error); return;
+      case 'tool_call':      appendToolCall(ev.name, ev.input, ev.tool_id); return;
+      case 'delegation':     appendDelegation(ev.subagent, ev.prompt, ev.tool_id); return;
+      case 'tool_result':    appendToolResult(ev.text, ev.is_error, ev.tool_id); return;
     }
   }
 
@@ -533,11 +906,13 @@
         body,
       });
     } catch (err) {
-      appendToolResult(`network error: ${err.message}`, true);
+      appendToolResult(`network error: ${err.message}`, true, null);
+      finalizeStreamingAssistant();
       setStatus('', false); return;
     }
     if (!response.ok) {
-      appendToolResult(`HTTP ${response.status}: ${await response.text()}`, true);
+      appendToolResult(`HTTP ${response.status}: ${await response.text()}`, true, null);
+      finalizeStreamingAssistant();
       setStatus('', false); return;
     }
 
@@ -558,12 +933,16 @@
           if (!payload) continue;
           try {
             const ev = JSON.parse(payload);
-            if (ev.type === 'done') { setStatus('', false); refreshChatList(); return; }
+            if (ev.type === 'done') {
+              finalizeStreamingAssistant();
+              setStatus('', false); refreshChatList(); return;
+            }
             renderEvent(ev);
           } catch (e) { console.warn('bad event', payload, e); }
         }
       }
     }
+    finalizeStreamingAssistant();
     setStatus('', false);
     refreshChatList();
   }

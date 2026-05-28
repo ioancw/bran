@@ -16,22 +16,18 @@
     {% set total_today = stats.runs_completed + stats.runs_failed + stats.runs_running %}
 
     <!-- Masthead strip — a single newspaper-thin line of today's state.
-         Replaces the old big-numeral hero. The big number was doing too much
-         work for a 5-runs-a-day system; the outputs below ARE the headline. -->
+         The outputs wall below carries the headline weight. -->
     <div class="card" style="padding: 14px 22px;">
-      <div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
-                  font-family: var(--font-mono); font-size: 11px;
-                  text-transform: uppercase; letter-spacing: 0.14em; color: var(--fg-dim);">
-        <span style="color: var(--fg-bright);">{{ today_label }}</span>
-        <span style="color: var(--border2);">·</span>
-        <span><span style="color: var(--fg-bright);">{{ total_today }}</span>
-          run{{ '' if total_today == 1 else 's' }} today</span>
+      <div class="masthead-strip">
+        <span class="em">{{ today_label }}</span>
+        <span class="sep">·</span>
+        <span><span class="em">{{ total_today }}</span> run{{ '' if total_today == 1 else 's' }} today</span>
         {% if stats.total_cost_usd %}
-          <span style="color: var(--border2);">·</span>
-          <span><span style="color: var(--fg-bright);">${{ '%.2f'|format(stats.total_cost_usd) }}</span> spent</span>
+          <span class="sep">·</span>
+          <span><span class="em">${{ '%.2f'|format(stats.total_cost_usd) }}</span> spent</span>
         {% endif %}
         {% if stats.runs_running %}
-          <span style="margin-left: auto; color: var(--amber); display: inline-flex; align-items: center; gap: 6px;">
+          <span class="ml-auto warning">
             <span class="live-dot sm"></span>
             {{ stats.runs_running }} in flight
           </span>
@@ -55,33 +51,19 @@
           </div>
           <div class="space-y-3">
             {% for item in bucket.items %}
-              <a href="{{ item.href }}" class="card block"
-                 style="text-decoration: none; padding: 22px 28px;
-                        transition: border-color 0.2s var(--transition);"
-                 onmouseover="this.style.borderColor='var(--accent-soft)'"
-                 onmouseout="this.style.borderColor='var(--border)'">
-                <div class="eyebrow" style="margin-bottom: 6px; display: flex; align-items: baseline; gap: 8px;">
+              <a href="{{ item.href }}" class="card block output-card"
+                 style="text-decoration: none; padding: 22px 28px;">
+                <div class="editorial-eyebrow" style="margin-bottom: 8px;">
                   <span>briefing</span>
-                  <span style="color: var(--border2);">·</span>
-                  <span class="text-dim" style="font-style: italic;">{{ item.agent }}</span>
-                  <span class="ml-auto text-muted" style="text-transform: none; letter-spacing: 0; font-size: 10px;">{{ item.time_label }}</span>
+                  <span class="sep">·</span>
+                  <span class="quiet">{{ item.agent }}</span>
+                  <span class="ml-auto quiet">{{ item.time_label }}</span>
                 </div>
-                <div style="font-family: var(--font-prose); font-size: 20px;
-                            color: var(--fg-bright); font-weight: 500;
-                            letter-spacing: -0.01em; margin-bottom: 10px;">
-                  {{ item.title }}
-                </div>
+                <h3 class="editorial-title editorial-title--md" style="margin-bottom: 10px;">{{ item.title }}</h3>
                 {% if item.snippet %}
-                  <p style="font-family: var(--font-prose); font-size: 14px;
-                            color: var(--fg-dim); line-height: 1.6; margin: 0;">
-                    {{ item.snippet }}
-                  </p>
+                  <p class="editorial-deck">{{ item.snippet }}</p>
                 {% endif %}
-                <div style="margin-top: 12px; font-family: var(--font-mono);
-                            font-size: 10px; color: var(--muted);
-                            text-transform: uppercase; letter-spacing: 0.14em;">
-                  read full briefing →
-                </div>
+                <div class="editorial-arrow" style="margin-top: 12px;">read full briefing →</div>
               </a>
             {% endfor %}
           </div>

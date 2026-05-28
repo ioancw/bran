@@ -2,7 +2,7 @@
 {% block title %}bran · {{ project.name }}{% endblock %}
 {% block heading %}{{ project.name }}{% endblock %}
 {% block subheading %}
-  {% if is_inbox %}casual one-off chats{% else %}{{ project.description or 'project' }}{% endif %}
+  {% if is_inbox %}system project{% else %}project · {{ chats|length }} chat{{ '' if chats|length == 1 else 's' }}{% endif %}
 {% endblock %}
 
 {% block header_actions %}

@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}bran · projects{% endblock %}
 {% block heading %}Projects{% endblock %}
-{% block subheading %}{{ projects|length }} project{{ '' if projects|length == 1 else 's' }} · each with its own memory + chats{% endblock %}
+{% block subheading %}{{ projects|length }} workspace{{ '' if projects|length == 1 else 's' }}{% endblock %}
 
 {% block header_actions %}
   <button type="button" id="new-project-btn" class="btn-primary">+ new project</button>
@@ -36,27 +36,15 @@
     {% for p in projects %}
         <a href="/projects/{{ p.id }}"
            class="card block project-card"
-           style="text-decoration: none; padding: 24px 26px; transition: border-color 0.2s var(--transition); position: relative;
-                  {% if p.is_inbox %}border-style: dashed;{% endif %}"
-           onmouseover="this.style.borderColor='var(--accent-soft)'"
-           onmouseout="this.style.borderColor='var(--border)'">
-          <div class="eyebrow" style="margin-bottom: 8px; display: flex; align-items: baseline; gap: 8px;">
-            {% if p.is_inbox %}
-              <span style="font-style: normal; font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.14em; color: var(--muted);">system</span>
-            {% else %}
-              <span>project</span>
-            {% endif %}
-            <span class="ml-auto text-muted" style="text-transform: none; letter-spacing: 0; font-size: 10px;">
-              {{ p.n_chats }} chat{{ '' if p.n_chats == 1 else 's' }}
-            </span>
+           style="text-decoration: none; padding: 24px 26px; position: relative;
+                  {% if p.is_inbox %}border-style: dashed;{% endif %}">
+          <div class="editorial-eyebrow" style="margin-bottom: 10px;">
+            <span>{{ 'system' if p.is_inbox else 'project' }}</span>
+            <span class="ml-auto quiet">{{ p.n_chats }} chat{{ '' if p.n_chats == 1 else 's' }}</span>
           </div>
-          <div style="font-family: var(--font-prose); font-size: 22px; color: var(--fg-bright); font-weight: 500; letter-spacing: -0.01em; margin-bottom: 8px;">
-            {{ p.name }}
-          </div>
+          <h3 class="editorial-title editorial-title--md" style="margin-bottom: 8px;">{{ p.name }}</h3>
           {% if p.description %}
-            <p style="font-family: var(--font-prose); font-size: 14px; color: var(--fg-dim); line-height: 1.55; font-style: italic; margin: 0;">
-              {{ p.description }}
-            </p>
+            <p class="editorial-deck">{{ p.description }}</p>
           {% endif %}
         </a>
     {% endfor %}

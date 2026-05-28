@@ -31,9 +31,38 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
   <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
   <script>
-    function renderMarkdown(root) {
-      if (!window.markdownit) return;
+    // Build a markdown-it instance once and reuse it. Customizing the `fence`
+    // and `code_block` renderers wraps every code block with a header bar
+    // showing the language + a copy button — matching the chat-area pattern
+    // lightcc uses in its message bubbles.
+    function _branMakeMd() {
+      if (!window.markdownit) return null;
       const md = window.markdownit({ html: false, linkify: true, breaks: false });
+      const escapeAttr = (s) => String(s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+      const renderBlock = (code, lang) => {
+        const langLabel = lang || 'code';
+        const langClass = lang ? ` class="language-${escapeAttr(lang)}"` : '';
+        const escapedCode = md.utils.escapeHtml(code);
+        return (
+          '<pre class="md-code"><div class="md-code-header">' +
+            '<span class="md-code-lang">' + escapeAttr(langLabel) + '</span>' +
+            '<button type="button" class="md-copy-btn" data-code="' + escapeAttr(code) + '">copy</button>' +
+          '</div><code' + langClass + '>' + escapedCode + '</code></pre>'
+        );
+      };
+      md.renderer.rules.fence = (tokens, idx) => {
+        const t = tokens[idx];
+        return renderBlock(t.content, t.info.trim().split(/\s+/)[0] || '');
+      };
+      md.renderer.rules.code_block = (tokens, idx) => renderBlock(tokens[idx].content, '');
+      return md;
+    }
+
+    function renderMarkdown(root) {
+      const md = _branMakeMd();
+      if (!md) return;
       const targets = (root || document).querySelectorAll('pre[data-md]:not([data-md-rendered])');
 
       targets.forEach(el => {
@@ -85,6 +114,24 @@
         el.replaceWith(wrapper);
       });
     }
+
+    // Delegated click handler for code-block copy buttons. Survives all
+    // dynamic inserts (chat stream, HTMX swaps, etc.) without per-element wiring.
+    document.addEventListener('click', (e) => {
+      const btn = e.target.closest('.md-copy-btn[data-code]');
+      if (!btn) return;
+      e.preventDefault();
+      const code = btn.dataset.code;
+      navigator.clipboard.writeText(code).then(() => {
+        const original = btn.textContent;
+        btn.textContent = 'copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = original || 'copy';
+          btn.classList.remove('copied');
+        }, 1500);
+      });
+    });
     document.addEventListener('DOMContentLoaded', () => renderMarkdown());
     document.addEventListener('htmx:afterSwap', e => renderMarkdown(e.target));
   </script>
@@ -167,7 +214,7 @@
       <header class="page-header">
         <h1>{% block heading %}{% endblock %}</h1>
         <span class="subheading">{% block subheading %}{% endblock %}</span>
-        <div class="ml-auto flex items-center gap-2">
+        <div class="page-actions">
           {% block header_actions %}{% endblock %}
         </div>
       </header>
