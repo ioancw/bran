@@ -1,0 +1,27 @@
+{
+  "name": "bran-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "svelte-check --tsconfig ./tsconfig.json && vite build",
+    "build:fast": "vite build",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "preview": "vite preview",
+    "gen:types": "openapi-typescript http://127.0.0.1:8765/openapi.json -o src/lib/api-types.ts"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "@types/markdown-it": "^14.1.2",
+    "openapi-typescript": "^7.6.1",
+    "svelte": "^5.30.1",
+    "svelte-check": "^4.1.7",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  },
+  "dependencies": {
+    "katex": "^0.16.22",
+    "markdown-it": "^14.1.0"
+  }
+}

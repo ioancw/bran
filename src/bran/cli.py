@@ -198,6 +198,7 @@ def runs_list(
             "failed": "red",
             "running": "yellow",
             "pending": "dim",
+            "cancelled": "magenta",
         }.get(r.status, "white")
         table.add_row(
             r.id[:8],

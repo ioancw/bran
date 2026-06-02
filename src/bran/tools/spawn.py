@@ -9,10 +9,11 @@ Tools:
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
+
+from bran.background import spawn_background
 
 
 @tool(
@@ -53,7 +54,8 @@ async def spawn_agent(args: dict[str, Any]) -> dict[str, Any]:
             pass
 
     # Detach: the task lives on the running event loop until completion.
-    asyncio.create_task(_go(), name=f"spawn:{record.id}")
+    # spawn_background keeps a strong reference so it can't be GC'd mid-run.
+    spawn_background(_go(), name=f"spawn:{record.id}")
 
     return {
         "content": [

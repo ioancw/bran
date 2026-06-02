@@ -33,12 +33,15 @@ CREATE TABLE IF NOT EXISTS runs (
     duration_ms     INTEGER,
     started_at      TEXT NOT NULL,
     ended_at        TEXT,
-    metadata        TEXT
+    metadata        TEXT,
+    project_id      TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_agent      ON runs(agent);
 CREATE INDEX IF NOT EXISTS idx_runs_status     ON runs(status);
 CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at);
+-- NB: idx_runs_project is created in the migration, AFTER project_id is added,
+-- so init_db() doesn't reference a column that legacy tables lack yet.
 
 CREATE TABLE IF NOT EXISTS schedules (
     id          TEXT PRIMARY KEY,
@@ -47,12 +50,13 @@ CREATE TABLE IF NOT EXISTS schedules (
     task        TEXT NOT NULL,
     cron        TEXT NOT NULL,
     enabled     INTEGER NOT NULL DEFAULT 1,
-    created_at  TEXT NOT NULL
+    created_at  TEXT NOT NULL,
+    project_id  TEXT
 );
 
 -- Chat metadata. Each row corresponds to a single conversation in the web UI.
 -- `id` mirrors the SDK session_id so we can resume via the SDK's `resume`
--- option; `agent` locks each chat to one persona so we can route messages
+-- option; `agent` locks each chat to one agent so we can route messages
 -- consistently regardless of which orchestrator was chatting last.
 -- `project_id` groups chats into a Project (Claude-Cowork style); migration
 -- below ensures every chat row has one (defaulting to the auto-Inbox).
@@ -86,10 +90,13 @@ CREATE INDEX IF NOT EXISTS idx_projects_updated ON projects(updated_at DESC);
 
 INBOX_PROJECT_ID = "inbox"   # well-known id so callers can reference it
 
-_lock = threading.Lock()
+# Reentrant so the lazy bootstrap (_ensure_ready -> init_db -> _conn) can take
+# the lock again on the same thread without deadlocking.
+_lock = threading.RLock()
 
 
-def _utcnow_iso() -> str:
+def utcnow_iso() -> str:
+    """UTC now as an ISO-8601 string. Shared timestamp source across modules."""
     return datetime.now(timezone.utc).isoformat()
 
 
@@ -106,18 +113,28 @@ class RunRecord:
     total_cost_usd: float | None = None
     num_turns: int | None = None
     duration_ms: int | None = None
-    started_at: str = field(default_factory=_utcnow_iso)
+    started_at: str = field(default_factory=utcnow_iso)
     ended_at: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # The project this run belongs to, or None for a standalone run (e.g. a
+    # Runner not attached to any project). Chat-originated runs carry the chat's
+    # project; autonomous Runners are standalone unless explicitly attached.
+    project_id: str | None = None
 
     @staticmethod
-    def new(agent: str, task: str, parent_run_id: str | None = None) -> "RunRecord":
+    def new(
+        agent: str,
+        task: str,
+        parent_run_id: str | None = None,
+        project_id: str | None = None,
+    ) -> "RunRecord":
         return RunRecord(
             id=str(uuid.uuid4()),
             agent=agent,
             task=task,
             status="pending",
             parent_run_id=parent_run_id,
+            project_id=project_id,
         )
 
     def to_row(self) -> tuple:
@@ -136,10 +153,12 @@ class RunRecord:
             self.started_at,
             self.ended_at,
             json.dumps(self.metadata),
+            self.project_id,
         )
 
     @staticmethod
     def from_row(row: sqlite3.Row) -> "RunRecord":
+        keys = row.keys()
         return RunRecord(
             id=row["id"],
             agent=row["agent"],
@@ -155,6 +174,8 @@ class RunRecord:
             started_at=row["started_at"],
             ended_at=row["ended_at"],
             metadata=json.loads(row["metadata"] or "{}"),
+            # None = standalone; absent only on legacy rows read mid-migration.
+            project_id=(row["project_id"] if "project_id" in keys else None),
         )
 
 
@@ -166,20 +187,62 @@ class ScheduleRecord:
     task: str
     cron: str  # 5-field cron expression
     enabled: bool = True
-    created_at: str = field(default_factory=_utcnow_iso)
+    created_at: str = field(default_factory=utcnow_iso)
+    # Optional project this Runner is attached to (for context/visibility).
+    # None = standalone automation, the default — Runners don't belong to projects.
+    project_id: str | None = None
 
     @staticmethod
-    def new(name: str, agent: str, task: str, cron: str) -> "ScheduleRecord":
+    def new(
+        name: str, agent: str, task: str, cron: str,
+        project_id: str | None = None,
+    ) -> "ScheduleRecord":
         return ScheduleRecord(
-            id=str(uuid.uuid4()), name=name, agent=agent, task=task, cron=cron
+            id=str(uuid.uuid4()), name=name, agent=agent, task=task, cron=cron,
+            project_id=project_id,
         )
+
+
+_initialized = False
+
+
+def _ensure_ready() -> None:
+    """Create dirs + schema + run migrations once, lazily on first DB access.
+
+    Keeps `import bran` free of filesystem side effects (the schema used to be
+    built at import time). The flag is set before the nested init/_conn calls so
+    they don't recurse; on failure it's reset so a later call can retry.
+    """
+    global _initialized
+    if _initialized:
+        return
+    _initialized = True
+    try:
+        SETTINGS.ensure_dirs()
+        init_db()
+        _migrate_chats_add_project_id()
+        _migrate_runs_schedules_add_project_id()
+        _ensure_inbox_project()
+    except Exception:
+        _initialized = False
+        raise
 
 
 @contextmanager
 def _conn() -> Iterator[sqlite3.Connection]:
+    _ensure_ready()
     SETTINGS.db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(SETTINGS.db_path, isolation_level=None)
     conn.row_factory = sqlite3.Row
+    # WAL lets readers and a writer coexist without blocking each other, and
+    # busy_timeout makes a contended write wait-and-retry rather than fail
+    # immediately with "database is locked" — both matter once concurrent
+    # background runs (scheduler + spawned + HTTP) hammer the same row.
+    # journal_mode is persistent (set once on the file); the rest are
+    # per-connection, so we apply them on every connect.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA synchronous=NORMAL")
     try:
         yield conn
     finally:
@@ -196,8 +259,9 @@ def insert_run(record: RunRecord) -> None:
         conn.execute(
             """INSERT INTO runs
             (id, agent, task, status, session_id, parent_run_id, result, error,
-             total_cost_usd, num_turns, duration_ms, started_at, ended_at, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+             total_cost_usd, num_turns, duration_ms, started_at, ended_at, metadata,
+             project_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             record.to_row(),
         )
 
@@ -232,7 +296,8 @@ def get_run(run_id: str) -> RunRecord | None:
 
 
 def list_runs(
-    agent: str | None = None, limit: int = 50, status: str | None = None
+    agent: str | None = None, limit: int = 50, status: str | None = None,
+    project_id: str | None = None,
 ) -> list[RunRecord]:
     sql = "SELECT * FROM runs"
     clauses: list[str] = []
@@ -243,6 +308,9 @@ def list_runs(
     if status:
         clauses.append("status = ?")
         params.append(status)
+    if project_id:
+        clauses.append("project_id = ?")
+        params.append(project_id)
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
     sql += " ORDER BY started_at DESC LIMIT ?"
@@ -252,11 +320,26 @@ def list_runs(
     return [RunRecord.from_row(r) for r in rows]
 
 
+def _row_to_schedule(r: sqlite3.Row) -> ScheduleRecord:
+    keys = r.keys()
+    return ScheduleRecord(
+        id=r["id"],
+        name=r["name"],
+        agent=r["agent"],
+        task=r["task"],
+        cron=r["cron"],
+        enabled=bool(r["enabled"]),
+        created_at=r["created_at"],
+        project_id=(r["project_id"] if "project_id" in keys else None),
+    )
+
+
 def insert_schedule(record: ScheduleRecord) -> None:
     with _lock, _conn() as conn:
         conn.execute(
-            """INSERT INTO schedules (id, name, agent, task, cron, enabled, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO schedules
+               (id, name, agent, task, cron, enabled, created_at, project_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 record.id,
                 record.name,
@@ -265,25 +348,21 @@ def insert_schedule(record: ScheduleRecord) -> None:
                 record.cron,
                 1 if record.enabled else 0,
                 record.created_at,
+                record.project_id,
             ),
         )
 
 
-def list_schedules() -> list[ScheduleRecord]:
+def list_schedules(project_id: str | None = None) -> list[ScheduleRecord]:
+    sql = "SELECT * FROM schedules"
+    params: list[Any] = []
+    if project_id:
+        sql += " WHERE project_id = ?"
+        params.append(project_id)
+    sql += " ORDER BY name"
     with _lock, _conn() as conn:
-        rows = conn.execute("SELECT * FROM schedules ORDER BY name").fetchall()
-    return [
-        ScheduleRecord(
-            id=r["id"],
-            name=r["name"],
-            agent=r["agent"],
-            task=r["task"],
-            cron=r["cron"],
-            enabled=bool(r["enabled"]),
-            created_at=r["created_at"],
-        )
-        for r in rows
-    ]
+        rows = conn.execute(sql, params).fetchall()
+    return [_row_to_schedule(r) for r in rows]
 
 
 def delete_schedule(name: str) -> bool:
@@ -297,17 +376,7 @@ def get_schedule(name: str) -> ScheduleRecord | None:
         row = conn.execute(
             "SELECT * FROM schedules WHERE name = ?", (name,)
         ).fetchone()
-    if not row:
-        return None
-    return ScheduleRecord(
-        id=row["id"],
-        name=row["name"],
-        agent=row["agent"],
-        task=row["task"],
-        cron=row["cron"],
-        enabled=bool(row["enabled"]),
-        created_at=row["created_at"],
-    )
+    return _row_to_schedule(row) if row else None
 
 
 def run_to_dict(r: RunRecord) -> dict[str, Any]:
@@ -324,8 +393,8 @@ class ChatRecord:
     title: str              # truncated first user prompt
     agent: str              # which agent this chat is locked to
     project_id: str = INBOX_PROJECT_ID  # which project this chat belongs to
-    created_at: str = field(default_factory=_utcnow_iso)
-    updated_at: str = field(default_factory=_utcnow_iso)
+    created_at: str = field(default_factory=utcnow_iso)
+    updated_at: str = field(default_factory=utcnow_iso)
 
 
 def _row_to_chat(r: sqlite3.Row) -> ChatRecord:
@@ -357,7 +426,7 @@ def touch_chat(chat_id: str) -> None:
     with _lock, _conn() as conn:
         conn.execute(
             "UPDATE chats SET updated_at = ? WHERE id = ?",
-            (_utcnow_iso(), chat_id),
+            (utcnow_iso(), chat_id),
         )
 
 
@@ -395,7 +464,7 @@ def move_chat_to_project(chat_id: str, project_id: str) -> bool:
     with _lock, _conn() as conn:
         cur = conn.execute(
             "UPDATE chats SET project_id = ?, updated_at = ? WHERE id = ?",
-            (project_id, _utcnow_iso(), chat_id),
+            (project_id, utcnow_iso(), chat_id),
         )
         return cur.rowcount > 0
 
@@ -410,8 +479,8 @@ class ProjectRecord:
     name: str
     description: str = ""
     instructions: str = ""    # the inline memory blob — appended to chats' system prompt
-    created_at: str = field(default_factory=_utcnow_iso)
-    updated_at: str = field(default_factory=_utcnow_iso)
+    created_at: str = field(default_factory=utcnow_iso)
+    updated_at: str = field(default_factory=utcnow_iso)
 
     @staticmethod
     def new(name: str, description: str = "", instructions: str = "") -> "ProjectRecord":
@@ -440,7 +509,7 @@ def insert_project(record: ProjectRecord) -> None:
 
 
 def update_project(record: ProjectRecord) -> None:
-    record.updated_at = _utcnow_iso()
+    record.updated_at = utcnow_iso()
     with _lock, _conn() as conn:
         conn.execute(
             """UPDATE projects SET
@@ -495,12 +564,40 @@ def count_chats_per_project() -> dict[str, int]:
 # Migrations — run after init_db() creates the bare tables.
 # ---------------------------------------------------------------------------
 
+def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:
+    cols = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    if not any(c["name"] == column for c in cols):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
 def _migrate_chats_add_project_id() -> None:
     """Add project_id column to chats table if it doesn't already exist."""
     with _lock, _conn() as conn:
-        cols = conn.execute("PRAGMA table_info(chats)").fetchall()
-        if not any(c["name"] == "project_id" for c in cols):
-            conn.execute("ALTER TABLE chats ADD COLUMN project_id TEXT")
+        _add_column_if_missing(conn, "chats", "project_id", "TEXT")
+
+
+def _migrate_runs_schedules_add_project_id() -> None:
+    """Add project_id to runs + schedules.
+
+    Runs and schedules can be *attached* to a project (for context/visibility),
+    but attachment is optional — `project_id IS NULL` means standalone. We
+    attribute legacy *runs* to Inbox (they came from chats), but leave
+    *schedules* standalone: a Runner is an automation, not a project member.
+    """
+    with _lock, _conn() as conn:
+        _add_column_if_missing(conn, "runs", "project_id", "TEXT")
+        _add_column_if_missing(conn, "schedules", "project_id", "TEXT")
+        # Legacy chat-origin runs → Inbox (they belong to that conversation space).
+        conn.execute(
+            "UPDATE runs SET project_id = ? WHERE project_id IS NULL", (INBOX_PROJECT_ID,)
+        )
+        # Schedules are standalone by default; undo any earlier auto-Inbox backfill
+        # so existing Runners aren't mis-filed inside the Inbox project.
+        conn.execute(
+            "UPDATE schedules SET project_id = NULL WHERE project_id = ?", (INBOX_PROJECT_ID,)
+        )
+        # Safe to index now that the column exists on both fresh and legacy DBs.
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id)")
 
 
 def _ensure_inbox_project() -> None:
@@ -510,7 +607,7 @@ def _ensure_inbox_project() -> None:
             "SELECT id FROM projects WHERE id = ?", (INBOX_PROJECT_ID,)
         ).fetchone()
         if not existing:
-            now = _utcnow_iso()
+            now = utcnow_iso()
             conn.execute(
                 """INSERT INTO projects (id, name, description, instructions, created_at, updated_at)
                    VALUES (?, ?, ?, ?, ?, ?)""",
@@ -527,7 +624,5 @@ def _ensure_inbox_project() -> None:
         )
 
 
-# Ensure schema + migrations run on import — cheap, idempotent.
-init_db()
-_migrate_chats_add_project_id()
-_ensure_inbox_project()
+# Schema + migrations run lazily on first DB access via _ensure_ready(), so
+# importing this module has no filesystem side effects.

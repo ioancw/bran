@@ -22,10 +22,20 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
-from claude_agent_sdk import AgentDefinition, ClaudeAgentOptions
+from claude_agent_sdk import AgentDefinition, ClaudeAgentOptions, HookMatcher
 
 from bran.config import SETTINGS
+from bran.permissions import WRITE_TOOL_MATCHER, confine_writes_hook
 from bran.tools.spawn import spawn_agent_server
+
+
+# PreToolUse hook set that confines file writes to bran's home dir. Attached to
+# every agent that can write (directly or via a delegated sub-agent) so a
+# prompt-injection in fetched web content can't write outside the sandbox.
+# See bran.permissions for the rationale.
+_WRITE_CONFINEMENT_HOOKS: dict[str, Any] = {
+    "PreToolUse": [HookMatcher(matcher=WRITE_TOOL_MATCHER, hooks=[confine_writes_hook])],
+}
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +115,8 @@ class Agent:
     # Skills to preload at startup (subset of .claude/skills/*).
     skills: list[str] = field(default_factory=list)
     max_turns: int | None = None
+    # SDK hooks (e.g. PreToolUse write confinement). Maps HookEvent -> matchers.
+    hooks: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +285,9 @@ ORCHESTRATOR = Agent(
         "finance-news": FINANCE_NEWS_AGENT,
     },
     mcp_servers={"bran": spawn_agent_server, **_maybe_tavily_servers()},
+    # Gate writes by delegated research/finance-news sub-agents (they fetch
+    # untrusted web content). The orchestrator itself holds no Write tool.
+    hooks=_WRITE_CONFINEMENT_HOOKS,
 )
 
 
@@ -283,6 +298,7 @@ RESEARCH = Agent(
     tools=["WebSearch", "WebFetch", "Read", "Write", "Glob", "Grep", *_maybe_tavily_tools()],
     mcp_servers=_maybe_tavily_servers(),
     model="sonnet",
+    hooks=_WRITE_CONFINEMENT_HOOKS,
 )
 
 
@@ -307,6 +323,7 @@ FINANCE_NEWS = Agent(
     tools=["WebFetch", "Write", "Read", *_maybe_tavily_tools()],
     mcp_servers=_maybe_tavily_servers(),
     model="sonnet",
+    hooks=_WRITE_CONFINEMENT_HOOKS,
 )
 
 
@@ -358,6 +375,14 @@ def build_options_for(
         resume=resume,
         max_turns=max_turns if max_turns is not None else agent.max_turns,
         cwd=str(SETTINGS.project_root),
+        hooks=dict(agent.hooks) if agent.hooks else None,
+        # Load filesystem settings explicitly rather than relying on the SDK's
+        # default (which has changed across versions). bran depends on these for
+        # .claude/agents (filesystem subagents), .claude/commands (slash
+        # commands in chat), and .claude/skills discovery under cwd.
+        setting_sources=["user", "project", "local"],
+        # Raise the 1MB default so a single large tool result can't abort a run.
+        max_buffer_size=SETTINGS.max_buffer_size,
     )
 
 

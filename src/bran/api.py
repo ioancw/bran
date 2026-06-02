@@ -18,7 +18,6 @@ disabled at startup.
 
 from __future__ import annotations
 
-import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from typing import Annotated, Any
@@ -36,6 +35,7 @@ from fastapi import (
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from bran import __version__
 from bran.config import SETTINGS
 from bran.persistence import (
     ScheduleRecord,
@@ -46,8 +46,8 @@ from bran.persistence import (
     list_schedules,
 )
 from bran.agents import list_agents
+from bran.background import spawn_background
 from bran.runner import run_agent
-from bran.web.routes import router as ui_router
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +133,7 @@ def _build_api_router(enable_scheduler: bool) -> APIRouter:
                 except Exception:
                     pass
 
-            asyncio.create_task(_go(), name=f"http-spawn:{record.id}")
+            spawn_background(_go(), name=f"http-spawn:{record.id}")
             return {"run_id": record.id, "status": "running", "background": True}
 
         try:
@@ -161,6 +161,16 @@ def _build_api_router(enable_scheduler: bool) -> APIRouter:
         if rec is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"No run {run_id}")
         return asdict(rec)
+
+    @api.post("/runs/{run_id}/cancel")
+    async def cancel_run(run_id: str) -> dict[str, Any]:
+        """Cancel an in-flight background run. Returns how many tasks were
+        cancelled (0 if the run isn't a live background task on this process)."""
+        from bran.background import cancel_background
+
+        if get_run(run_id) is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"No run {run_id}")
+        return {"run_id": run_id, "cancelled": cancel_background(run_id)}
 
     @api.get("/schedules")
     async def schedules() -> list[dict[str, Any]]:
@@ -211,7 +221,7 @@ def build_app(enable_scheduler: bool = True) -> FastAPI:
 
     app = FastAPI(
         title="bran",
-        version="0.1.0",
+        version=__version__,
         description="Fleet-orchestration API + web UI for Claude Agent SDK agents.",
         lifespan=lifespan,
     )
@@ -226,8 +236,48 @@ def build_app(enable_scheduler: bool = True) -> FastAPI:
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
     app.include_router(_build_api_router(enable_scheduler))
-    app.include_router(ui_router)
+    from bran.web.spa_api import router as spa_router
+    app.include_router(spa_router)
+    # The Svelte SPA is now the primary UI, served at / (cutover from the legacy
+    # HTMX/Jinja UI, which has been removed). Mounted last so its catch-all
+    # doesn't shadow /api, /spa, /static, /healthz (all registered above).
+    _mount_spa(app)
     return app
+
+
+def _mount_spa(app: FastAPI) -> None:
+    """Serve the built Svelte SPA at the site root (no-op until it's built).
+
+    Vite builds to web/spa/ with base '/'. Hashed JS/CSS live under
+    web/spa/assets/ (served by a StaticFiles mount); every other non-API path
+    returns index.html so client-side (history) routing survives a refresh.
+    """
+    from pathlib import Path as _Path
+
+    from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+
+    spa_dir = _Path(__file__).parent / "web" / "spa"
+    index = spa_dir / "index.html"
+
+    assets = spa_dir / "assets"
+    if assets.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets)), name="spa-assets")
+
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    @app.get("/{path:path}", response_class=HTMLResponse, include_in_schema=False)
+    async def spa_index(path: str = ""):
+        if not index.exists():
+            return JSONResponse(
+                {"detail": "Frontend not built. Run: cd frontend && npm run build"},
+                status_code=503,
+            )
+        return FileResponse(index)
+
+
+def _spa_built() -> bool:
+    from pathlib import Path as _Path
+
+    return (_Path(__file__).parent / "web" / "spa" / "index.html").exists()
 
 
 # Module-level app instance for `uvicorn bran.api:app`.

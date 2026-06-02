@@ -27,18 +27,29 @@ class Settings:
     port: int
     default_model: str
     anthropic_api_key: str | None
+    # Max bytes for a single SDK stdout JSON message. The SDK's own default is
+    # 1MB (claude_agent_sdk subprocess transport), which a single large tool
+    # result — a fetched web page, a big file read — can blow past, aborting
+    # the run mid-stream. The cookbooks bump this for web-research agents; we
+    # default to 10MB. Override with BRAN_MAX_BUFFER_SIZE (bytes).
+    max_buffer_size: int
 
     @property
     def claude_dir(self) -> Path:
         return self.project_root / ".claude"
 
+    def ensure_dirs(self) -> None:
+        """Create bran's data directories. Called lazily on first DB use (see
+        persistence._ensure_ready) rather than at import, so merely importing
+        bran has no filesystem side effects."""
+        self.bran_home.mkdir(parents=True, exist_ok=True)
+        self.briefings_dir.mkdir(parents=True, exist_ok=True)
+
 
 def load_settings() -> Settings:
     root = _project_root()
     bran_home = Path(os.getenv("BRAN_HOME", str(root / ".bran"))).resolve()
-    bran_home.mkdir(parents=True, exist_ok=True)
     briefings_dir = bran_home / "briefings"
-    briefings_dir.mkdir(parents=True, exist_ok=True)
     return Settings(
         project_root=root,
         bran_home=bran_home,
@@ -49,6 +60,7 @@ def load_settings() -> Settings:
         port=int(os.getenv("BRAN_PORT", "8765")),
         default_model=os.getenv("BRAN_DEFAULT_MODEL", "sonnet"),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY") or None,
+        max_buffer_size=int(os.getenv("BRAN_MAX_BUFFER_SIZE", str(10 * 1024 * 1024))),
     )
 
 

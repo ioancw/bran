@@ -34,10 +34,10 @@ def _trigger_from_cron(expr: str) -> CronTrigger:
     )
 
 
-async def _fire(agent: str, task: str, schedule_name: str) -> None:
+async def _fire(agent: str, task: str, schedule_name: str, project_id: str) -> None:
     log.info("scheduler firing: %s (%s)", schedule_name, agent)
     try:
-        await run_agent(agent, task)
+        await run_agent(agent, task, project_id=project_id)
     except Exception:
         log.exception("schedule %s failed", schedule_name)
 
@@ -88,7 +88,7 @@ def _add_job(scheduler: AsyncIOScheduler, rec: ScheduleRecord) -> None:
     scheduler.add_job(
         _fire,
         trigger=trigger,
-        args=(rec.agent, rec.task, rec.name),
+        args=(rec.agent, rec.task, rec.name, rec.project_id),
         id=_job_id(rec.name),
         name=rec.name,
         replace_existing=True,

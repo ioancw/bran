@@ -1,0 +1,128 @@
+<script lang="ts">
+  // Runners = standalone managed agents (scheduled, headless). Not owned by a
+  // project; optionally *attached* to one to borrow its context/visibility.
+  import { api } from '../lib/api'
+  import { router } from '../lib/router.svelte'
+  import type { AgentInfo, ProjectSummary, ScheduleRecord } from '../lib/types'
+
+  let runners = $state<ScheduleRecord[]>([])
+  let agents = $state<AgentInfo[]>([])
+  let projects = $state<ProjectSummary[]>([])
+  let error = $state<string | null>(null)
+
+  let showForm = $state(false)
+  let fName = $state('')
+  let fAgent = $state('orchestrator')
+  let fCron = $state('0 8 * * *')
+  let fTask = $state('')
+  let fProject = $state('') // '' = standalone
+
+  async function load() {
+    try {
+      ;[runners, agents, projects] = await Promise.all([api.schedules(), api.agents(), api.projects()])
+    } catch (e) {
+      error = String(e)
+    }
+  }
+  $effect(() => {
+    void load()
+  })
+
+  // Prefill the agent when arriving from the Agents page (/runners?agent=research).
+  $effect(() => {
+    const a = router.route.query.get('agent')
+    if (a) {
+      fAgent = a
+      showForm = true
+    }
+  })
+
+  const projName = (id: string | null) =>
+    id ? (projects.find((p) => p.id === id)?.name ?? id) : null
+
+  async function create() {
+    if (!fName.trim() || !fCron.trim()) return
+    try {
+      await api.newSchedule({
+        name: fName.trim(), agent: fAgent, cron: fCron.trim(), task: fTask,
+        project_id: fProject || undefined,
+      })
+    } catch (e) {
+      error = String(e)
+      return
+    }
+    fName = ''
+    fTask = ''
+    fProject = ''
+    showForm = false
+    await load()
+  }
+  async function remove(name: string) {
+    if (!confirm(`Delete runner "${name}"?`)) return
+    await api.deleteSchedule(name)
+    await load()
+  }
+</script>
+
+<header class="page-header">
+  <h1>Runners</h1>
+  <span class="subheading">scheduled agents · {runners.length}</span>
+  <div class="page-actions">
+    <button class="btn-primary" onclick={() => (showForm = !showForm)}>+ new runner</button>
+  </div>
+</header>
+
+<div class="px-8 py-6 space-y-4">
+  {#if error}<div class="card" style="color: var(--red);">{error}</div>{/if}
+
+  {#if showForm}
+    <div class="card-quiet">
+      <span class="label-cap" style="display: block; margin-bottom: 8px;">New runner — an agent on a cron schedule</span>
+      <div class="grid grid-cols-2 gap-4">
+        <input class="field" bind:value={fName} placeholder="name (unique)" />
+        <select class="field" bind:value={fAgent}>
+          {#each agents as a}<option value={a.name}>{a.name}</option>{/each}
+        </select>
+        <input class="field" bind:value={fCron} placeholder="cron — e.g. 0 8 * * * (08:00 daily)" />
+        <select class="field" bind:value={fProject}>
+          <option value="">standalone (no project)</option>
+          {#each projects.filter((p) => !p.is_inbox) as p}<option value={p.id}>attach to: {p.name}</option>{/each}
+        </select>
+        <input class="field" bind:value={fTask} placeholder="task / prompt to run each tick" style="grid-column: span 2;" />
+      </div>
+      <div style="display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px;">
+        <button class="btn-ghost" onclick={() => (showForm = false)}>cancel</button>
+        <button class="btn-primary" onclick={create}>create runner</button>
+      </div>
+      <p class="text-muted" style="font-size: 11px; margin-top: 8px;">
+        Runners fire inside <code>bran serve</code>. Attaching to a project runs the agent with that project's memory.
+      </p>
+    </div>
+  {/if}
+
+  {#if !runners.length}
+    <div class="empty-state"><h3>no runners</h3><p class="cta">create one to run an agent on a schedule</p></div>
+  {:else}
+    <div class="card flush">
+      <table style="width: 100%; border-collapse: collapse;">
+        <thead>
+          <tr class="label-cap" style="text-align: left;">
+            <th style="padding: 10px 14px;">Name</th><th>Agent</th><th>Cron</th><th>Attached</th><th>Task</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each runners as r}
+            <tr style="border-top: 1px solid var(--border);">
+              <td style="padding: 10px 14px;" class="text-bright">{r.name}</td>
+              <td class="mono text-accent-soft">{r.agent}</td>
+              <td class="mono text-dim">{r.cron}</td>
+              <td class="text-dim">{projName(r.project_id) ?? '—'}</td>
+              <td class="text-dim" style="max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{r.task}</td>
+              <td><button class="btn-ghost" onclick={() => remove(r.name)}>×</button></td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
+  {/if}
+</div>
