@@ -8,11 +8,14 @@
 
   let { sessionId }: { sessionId: string | null } = $props()
 
-  const projectId = $derived(router.route.query.get('project'))
-
   let catalog = $state<Catalog>({ agents: [], commands: [] })
   let chats = $state<ChatSummary[]>([])
   let activeChat = $state<ChatSummary | null>(null)
+  // The project whose chats the sidebar shows. A chat is always viewed inside
+  // its project — the active chat's project is authoritative; otherwise the
+  // ?project= query, else Inbox.
+  let scopeProjectId = $state('inbox')
+  let projectsById = $state<Record<string, string>>({})
   let items = $state<ChatItem[]>([])
   let streaming = $state(false)
   let streamingIndex = $state(-1)
@@ -23,38 +26,34 @@
 
   let rstate: ReducerState = freshState()
   let loadedId: string | null = null
+  let autoSent = false
   let messagesEl: HTMLDivElement | undefined = $state()
 
   const currentAgent = $derived(activeChat?.agent ?? pendingAgent ?? 'orchestrator')
+  const scopeProjectName = $derived(projectsById[scopeProjectId] ?? scopeProjectId)
 
   function scrollSoon() {
     requestAnimationFrame(() => messagesEl?.scrollTo(0, messagesEl.scrollHeight))
   }
 
-  // Load catalog once.
   $effect(() => {
     void api.catalog().then((c) => (catalog = c)).catch(() => {})
+    void api.projects().then((ps) => {
+      projectsById = Object.fromEntries(ps.map((p) => [p.id, p.name]))
+    }).catch(() => {})
   })
 
-  // Load the chat list (scoped to project when present).
   async function refreshChats() {
     try {
-      chats = await api.chats(projectId)
+      chats = await api.chats(scopeProjectId)
     } catch {
       /* ignore */
     }
   }
+  // Reload the sidebar whenever the scope project changes.
   $effect(() => {
-    void projectId // re-run when scope changes
+    void scopeProjectId
     void refreshChats()
-  })
-
-  // When chats arrive and we have a session but no active row yet, adopt it.
-  $effect(() => {
-    if (sessionId && !activeChat) {
-      const found = chats.find((c) => c.id === sessionId)
-      if (found) activeChat = found
-    }
   })
 
   // React to the active session id (route change). Skip our own URL pivot
@@ -67,10 +66,29 @@
     rstate = freshState()
     pendingAgent = null
     if (sid) {
-      activeChat = chats.find((c) => c.id === sid) ?? null
-      void loadHistory(sid)
+      void (async () => {
+        try {
+          const c = await api.chat(sid)
+          activeChat = c
+          scopeProjectId = c.project_id || 'inbox' // a chat is scoped to its project
+        } catch {
+          activeChat = null
+        }
+        await loadHistory(sid)
+      })()
     } else {
       activeChat = null
+      scopeProjectId = router.route.query.get('project') || 'inbox'
+    }
+  })
+
+  // Project launcher: arriving with ?prompt=… auto-sends the first message.
+  $effect(() => {
+    const p = router.route.query.get('prompt')
+    if (p && !sessionId && !autoSent && !streaming) {
+      autoSent = true
+      input = p
+      void send()
     }
   })
 
@@ -100,10 +118,10 @@
       fields.session_id = activeChat.id
       fields.chat_agent = activeChat.agent
       if (activeChat.project_id) fields.project_id = activeChat.project_id
-    } else if (pendingAgent) {
-      fields.chat_agent = pendingAgent
+    } else {
+      if (pendingAgent) fields.chat_agent = pendingAgent
+      fields.project_id = router.route.query.get('project') || 'inbox'
     }
-    if (!activeChat && projectId) fields.project_id = projectId
 
     try {
       for await (const ev of streamChat(fields)) {
@@ -111,11 +129,13 @@
         const r = applyEvent(items, rstate, ev)
         if (r.session && !activeChat) {
           const id = r.session
+          const proj = router.route.query.get('project') || 'inbox'
           activeChat = {
             id, title: '(new)', agent: pendingAgent ?? 'orchestrator',
-            project_id: projectId ?? 'inbox', updated_at: new Date().toISOString(),
+            project_id: proj, updated_at: new Date().toISOString(),
             created_at: new Date().toISOString(),
           }
+          scopeProjectId = proj
           loadedId = id // pre-set so the route effect won't reload + wipe
           navigate('/chat/' + id)
         }
@@ -138,7 +158,7 @@
     rstate = freshState()
     loadedId = null
     showNewForm = false
-    if (router.route.path !== '/chat') navigate('/chat')
+    navigate('/chat?project=' + encodeURIComponent(scopeProjectId))
   }
 
   async function deleteChat(id: string, ev: Event) {
@@ -198,7 +218,12 @@
 
 <header class="page-header">
   <h1>Chat</h1>
-  <span class="subheading">{activeChat ? `with ${activeChat.agent}` : 'new conversation'}</span>
+  <span class="subheading">
+    {#if scopeProjectId !== 'inbox'}
+      in <a href={href('/projects/' + scopeProjectId)} use:link class="text-accent-soft" style="text-decoration: none;">{scopeProjectName}</a>
+    {:else}Inbox{/if}
+    {#if activeChat} · {activeChat.agent}{/if}
+  </span>
   <div class="page-actions">
     <span class="text-muted" style="font-size: 11px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.1em;">
       {streaming ? 'thinking…' : ''}
@@ -208,7 +233,7 @@
 
 <div class="px-8 py-6">
   <div style="display: flex; gap: 16px; height: calc(100vh - 180px);">
-    <!-- Chat list -->
+    <!-- Chat list (scoped to the current project) -->
     <aside class="card flush" style="width: 260px; flex-shrink: 0; display: flex; flex-direction: column; padding: 0;">
       <div style="padding: 14px;">
         <button class="btn-primary" style="width: 100%;" onclick={() => (showNewForm = !showNewForm)}>+ new chat</button>
@@ -225,7 +250,9 @@
           </div>
         {/if}
       </div>
-      <div style="padding: 0 14px 6px;"><div class="label-cap">Conversations</div></div>
+      <div style="padding: 0 14px 6px;">
+        <div class="label-cap">{scopeProjectName} · conversations</div>
+      </div>
       <div style="flex: 1; overflow-y: auto; padding: 0 8px 14px;">
         {#each chats as c}
           <a href={href('/chat/' + encodeURIComponent(c.id))} use:link
@@ -241,7 +268,7 @@
             </div>
           </a>
         {:else}
-          <div class="text-muted" style="padding: 20px 14px; font-size: 12px; text-align: center; font-style: italic;">No conversations yet.</div>
+          <div class="text-muted" style="padding: 20px 14px; font-size: 12px; text-align: center; font-style: italic;">No conversations in this project yet.</div>
         {/each}
       </div>
     </aside>

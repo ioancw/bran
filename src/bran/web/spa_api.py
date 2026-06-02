@@ -19,7 +19,6 @@ from fastapi.responses import StreamingResponse
 from bran.agents import get_agent, list_agents
 from bran.background import spawn_background
 from bran.config import SETTINGS
-from bran.dashboard_data import format_countdown, list_outputs, today_stats, upcoming_schedules
 from bran.persistence import (
     INBOX_PROJECT_ID,
     ChatRecord,
@@ -140,33 +139,6 @@ async def agents() -> list[dict[str, Any]]:
 # Dashboard
 # ---------------------------------------------------------------------------
 
-@router.get("/dashboard")
-async def dashboard() -> dict[str, Any]:
-    from datetime import datetime, timezone
-
-    now = datetime.now(timezone.utc)
-    upcoming = [
-        {"name": u.name, "agent": u.agent, "cron": u.cron,
-         "next_run": u.next_run.isoformat() if u.next_run else None,
-         "countdown": format_countdown(u.next_run, now) if u.next_run else "—"}
-        for u in upcoming_schedules(now=now, limit=3)
-    ]
-    buckets = [
-        {"label": b.label, "items": [
-            {"kind": i.kind, "title": i.title, "snippet": i.snippet, "agent": i.agent,
-             "time_label": i.time_label, "href": i.href}
-            for i in b.items
-        ]}
-        for b in list_outputs(limit=60, now=now)
-    ]
-    return {
-        "stats": asdict(today_stats(now=now)),
-        "upcoming": upcoming,
-        "buckets": buckets,
-        "today_label": now.strftime("%A, %d %B %Y"),
-    }
-
-
 # ---------------------------------------------------------------------------
 # Runs
 # ---------------------------------------------------------------------------
@@ -238,7 +210,7 @@ async def run_transcript(run_id: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Schedules / briefings
+# Schedules (Runners)
 # ---------------------------------------------------------------------------
 
 @router.get("/schedules")
@@ -292,22 +264,6 @@ async def move_chat(chat_id: str, project_id: Annotated[str, Form()]) -> dict[st
     if not move_chat_to_project(chat_id, project_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"No chat {chat_id}")
     return {"chat_id": chat_id, "project_id": project_id}
-
-
-@router.get("/briefings")
-async def briefings() -> list[dict[str, Any]]:
-    files = sorted(SETTINGS.briefings_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
-    return [{"name": p.name, "size_kb": round(p.stat().st_size / 1024, 1), "mtime": p.stat().st_mtime} for p in files]
-
-
-@router.get("/briefings/{filename}")
-async def briefing_detail(filename: str) -> dict[str, Any]:
-    if "/" in filename or "\\" in filename or filename.startswith(".."):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid filename")
-    path = SETTINGS.briefings_dir / filename
-    if not path.exists() or not path.is_file():
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No briefing {filename}")
-    return {"name": filename, "content": path.read_text(encoding="utf-8")}
 
 
 # ---------------------------------------------------------------------------
@@ -415,6 +371,17 @@ async def chats(project_id: str | None = None) -> list[dict[str, Any]]:
          "updated_at": c.updated_at, "created_at": c.created_at}
         for c in list_chats(limit=100, project_id=project_id)
     ]
+
+
+@router.get("/chats/{chat_id}")
+async def chat_detail(chat_id: str) -> dict[str, Any]:
+    """A single chat's metadata — lets the chat view learn its project before
+    loading the (project-scoped) sidebar."""
+    c = get_chat(chat_id)
+    if c is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No chat {chat_id}")
+    return {"id": c.id, "title": c.title, "agent": c.agent, "project_id": c.project_id,
+            "updated_at": c.updated_at, "created_at": c.created_at}
 
 
 @router.delete("/chats/{chat_id}")

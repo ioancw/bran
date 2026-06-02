@@ -10,16 +10,18 @@
     setTheme(theme)
   }
 
+  // Two domains: Projects (where you work) + running agents (define / schedule /
+  // observe). Dashboard and Briefings were dropped — Runs is the output surface.
   const items = $derived([
-    { key: '', label: 'Dashboard', to: '/' },
-    { key: 'projects', label: 'Projects', to: '/projects' },
+    { key: 'projects', label: 'Projects', to: '/' },
     { key: 'chat', label: 'Chat', to: '/chat' },
-    { key: 'runs', label: 'Runs', to: '/runs' },
     { key: 'agents', label: 'Agents', to: '/agents' },
     { key: 'runners', label: 'Runners', to: '/runners' },
-    { key: 'briefings', label: 'Briefings', to: '/briefings' },
+    { key: 'runs', label: 'Runs', to: '/runs' },
   ])
-  const active = $derived(router.route.segments[0] ?? '')
+  // Root and /projects/* both belong to Projects.
+  const seg0 = $derived(router.route.segments[0] ?? '')
+  const active = $derived(seg0 === '' || seg0 === 'projects' ? 'projects' : seg0)
 </script>
 
 <aside class="sidebar shrink-0 flex flex-col">

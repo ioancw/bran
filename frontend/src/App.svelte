@@ -3,13 +3,11 @@
   import { installCodeCopyHandler } from './lib/markdown'
   import { api } from './lib/api'
   import Sidebar from './components/Sidebar.svelte'
-  import Dashboard from './pages/Dashboard.svelte'
   import Chat from './pages/Chat.svelte'
   import Runs from './pages/Runs.svelte'
   import RunDetail from './pages/RunDetail.svelte'
   import Agents from './pages/Agents.svelte'
   import Runners from './pages/Runners.svelte'
-  import Briefings from './pages/Briefings.svelte'
   import Projects from './pages/Projects.svelte'
   import ProjectDetail from './pages/ProjectDetail.svelte'
 
@@ -17,18 +15,17 @@
 
   // Nav counts (best-effort; nav still renders if these fail).
   let counts = $state<Record<string, number | null>>({
-    '': null, projects: null, chat: null, runs: null, agents: null, runners: null, briefings: null,
+    projects: null, chat: null, runs: null, agents: null, runners: null,
   })
   $effect(() => {
     void (async () => {
       try {
-        const [agents, projects, runners, briefings] = await Promise.all([
-          api.agents(), api.projects(), api.schedules(), api.briefings(),
+        const [agents, projects, runners] = await Promise.all([
+          api.agents(), api.projects(), api.schedules(),
         ])
         counts.agents = agents.length
         counts.projects = projects.length
         counts.runners = runners.length
-        counts.briefings = briefings.length || null
       } catch {
         /* leave counts null */
       }
@@ -42,7 +39,7 @@
   <Sidebar {counts} version="v0.1.0" />
   <main class="flex-1 min-w-0">
     {#if seg[0] === undefined}
-      <Dashboard />
+      <Projects />
     {:else if seg[0] === 'chat'}
       <Chat sessionId={seg[1] ?? null} />
     {:else if seg[0] === 'runs' && seg[1]}
@@ -53,8 +50,6 @@
       <Agents />
     {:else if seg[0] === 'runners'}
       <Runners />
-    {:else if seg[0] === 'briefings'}
-      <Briefings name={seg[1] ?? null} />
     {:else if seg[0] === 'projects' && seg[1]}
       <ProjectDetail projectId={seg[1]} />
     {:else if seg[0] === 'projects'}

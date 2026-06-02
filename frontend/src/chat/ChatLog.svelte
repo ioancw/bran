@@ -5,6 +5,7 @@
   import type { ChatItem } from './events'
   import Prose from '../components/Prose.svelte'
   import ToolBlock from './ToolBlock.svelte'
+  import SpawnCard from './SpawnCard.svelte'
 
   let { items, streamingIndex = -1 }: { items: ChatItem[]; streamingIndex?: number } = $props()
 </script>
@@ -26,7 +27,11 @@
       <div class="text-dim" style="padding: 4px 16px 12px; font-size: 12px; font-style: italic; white-space: pre-wrap;">{item.text}</div>
     </details>
   {:else if item.kind === 'tool'}
-    <ToolBlock tool={item} />
+    {#if item.name === 'mcp__bran__spawn_agent'}
+      <SpawnCard tool={item} />
+    {:else}
+      <ToolBlock tool={item} />
+    {/if}
   {:else if item.kind === 'routed'}
     <div class="text-muted font-mono" style="padding: 4px 12px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em;">
       → routed to <span class="text-accent-soft">{item.agent}</span>

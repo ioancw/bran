@@ -13,7 +13,7 @@ from typing import Any
 
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
-from bran.background import spawn_background
+from bran.background import current_project_id, current_run_id, spawn_background
 
 
 @tool(
@@ -42,7 +42,13 @@ async def spawn_agent(args: dict[str, Any]) -> dict[str, Any]:
     # Pre-create the run row so we can hand its ID back to the caller before
     # the actual run starts. The runner will pick up this same record (not
     # insert a new one) so status transitions are visible to anyone polling.
-    record = RunRecord.new(agent=agent, task=task)
+    # Inherit the originating chat's project + link to its run (ambient context
+    # set by runner._drive); both are None when spawned outside a run.
+    record = RunRecord.new(
+        agent=agent, task=task,
+        parent_run_id=current_run_id.get(),
+        project_id=current_project_id.get(),
+    )
     insert_run(record)
 
     async def _go() -> None:

@@ -13,11 +13,23 @@ https://docs.python.org/3/library/asyncio-task.html#asyncio.create_task
 from __future__ import annotations
 
 import asyncio
+import contextvars
 from typing import Any, Coroutine
 
 # Strong references to in-flight background tasks. The done-callback removes
 # each task once it finishes, so this set only ever holds live work.
 _background_tasks: set[asyncio.Task[Any]] = set()
+
+# Ambient context for the currently-executing run, set by runner._drive. Tools
+# like spawn_agent read these so a background run fired mid-conversation inherits
+# the originating chat's project and links back to its parent run. Defaults mean
+# "standalone / no parent" when nothing is running.
+current_project_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "bran_current_project_id", default=None
+)
+current_run_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "bran_current_run_id", default=None
+)
 
 
 def spawn_background(

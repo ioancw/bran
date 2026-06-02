@@ -1,19 +1,15 @@
-"""FastAPI server exposing the agent fleet over HTTP + a web UI.
+"""FastAPI server: the Svelte SPA + JSON APIs.
 
 Layout:
-    /                 web UI (no auth — gated by the get_current_user stub)
-    /runs, /agents, /schedules, /ui/*    UI pages and HTMX partials
-    /api/agents             — list agents                    (bearer auth)
-    /api/agents/{name}/run  — fire an agent run              (bearer auth)
-    /api/runs               — list recent runs               (bearer auth)
-    /api/runs/{id}          — inspect a single run           (bearer auth)
-    /api/schedules          — list/create schedules          (bearer auth)
-    /api/schedules/{name}   — delete a schedule              (bearer auth)
-    /healthz                — health probe                   (no auth)
+    /                       the Svelte SPA (served from web/spa/), no auth
+    /spa/*                  JSON API the SPA consumes                (no auth)
+    /api/*                  external JSON API                       (bearer auth)
+    /static/*               static assets (favicon)
+    /healthz                health probe                            (no auth)
 
-The JSON API moved under /api/* in v0.2 to free up the root paths for the UI.
-The scheduler runs in-process and starts/stops with the app's lifespan unless
-disabled at startup.
+The bearer-auth /api/* surface is for external/programmatic callers; the SPA
+uses the unauthenticated /spa/* surface (localhost-first). The scheduler runs
+in-process and starts/stops with the app's lifespan unless disabled at startup.
 """
 
 from __future__ import annotations

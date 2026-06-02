@@ -23,6 +23,7 @@ from claude_agent_sdk import (
 )
 
 from bran.agents import build_options_for, get_agent
+from bran.background import current_project_id, current_run_id
 from bran.config import SETTINGS
 from bran.notify import notify_completion
 from bran.persistence import RunRecord, get_run, insert_run, update_run, utcnow_iso
@@ -68,6 +69,10 @@ async def _drive(
     regardless of how the run ends — so every surface (one-shot or streaming)
     gets identical lifecycle handling. Re-raises on error after recording it.
     """
+    # Publish this run as the ambient context so in-process tools (spawn_agent)
+    # can inherit its project + parent. Reset in finally so it doesn't leak.
+    proj_token = current_project_id.set(record.project_id)
+    run_token = current_run_id.set(record.id)
     started = time.perf_counter()
     try:
         async for message in query(prompt=task, options=options):
@@ -103,6 +108,8 @@ async def _drive(
         update_run(record)
         raise
     finally:
+        current_project_id.reset(proj_token)
+        current_run_id.reset(run_token)
         # Fire notifications regardless of how the run ended. notify_completion
         # never raises, so this can't break an otherwise-fine exception path.
         await notify_completion(record)

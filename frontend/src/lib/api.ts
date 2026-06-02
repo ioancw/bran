@@ -2,11 +2,9 @@
 
 import type {
   AgentInfo,
-  BriefingSummary,
   Catalog,
   ChatEvent,
   ChatSummary,
-  DashboardData,
   ProjectDetail,
   ProjectSummary,
   RunRecord,
@@ -33,7 +31,6 @@ async function form<T>(url: string, fields: Record<string, string>, method = 'PO
 export const api = {
   catalog: () => getJSON<Catalog>('/spa/catalog'),
   agents: () => getJSON<AgentInfo[]>('/spa/agents'),
-  dashboard: () => getJSON<DashboardData>('/spa/dashboard'),
 
   runs: (q: { agent?: string; status?: string; project_id?: string; limit?: number } = {}) => {
     const p = new URLSearchParams()
@@ -52,10 +49,6 @@ export const api = {
     form<{ run_id: string; cancelled: number }>(`/spa/runs/${encodeURIComponent(id)}/cancel`, {}),
 
   schedules: () => getJSON<ScheduleRecord[]>('/spa/schedules'),
-
-  briefings: () => getJSON<BriefingSummary[]>('/spa/briefings'),
-  briefing: (name: string) =>
-    getJSON<{ name: string; content: string }>(`/spa/briefings/${encodeURIComponent(name)}`),
 
   projects: () => getJSON<ProjectSummary[]>('/spa/projects'),
   projectDetail: (id: string) => getJSON<ProjectDetail>(`/spa/projects/${encodeURIComponent(id)}`),
@@ -92,6 +85,7 @@ export const api = {
     const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''
     return getJSON<ChatSummary[]>(`/spa/chats${qs}`)
   },
+  chat: (id: string) => getJSON<ChatSummary>(`/spa/chats/${encodeURIComponent(id)}`),
   deleteChat: async (id: string): Promise<void> => {
     const r = await fetch(`/spa/chats/${encodeURIComponent(id)}`, { method: 'DELETE' })
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)

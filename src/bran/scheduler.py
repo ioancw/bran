@@ -34,10 +34,29 @@ def _trigger_from_cron(expr: str) -> CronTrigger:
     )
 
 
-async def _fire(agent: str, task: str, schedule_name: str, project_id: str) -> None:
+def _project_append_system(project_id: str | None) -> str | None:
+    """If a Runner is attached to a project, return its memory as a system-prompt
+    suffix so the scheduled run executes *with* the project's context (not just
+    tagged to it). None for standalone Runners or projects with no instructions.
+    """
+    if not project_id:
+        return None
+    from bran.persistence import get_project
+
+    project = get_project(project_id)
+    if project is None:
+        return None
+    body = (project.instructions or "").strip()
+    return f"## Project memory\n{body}" if body else None
+
+
+async def _fire(agent: str, task: str, schedule_name: str, project_id: str | None) -> None:
     log.info("scheduler firing: %s (%s)", schedule_name, agent)
     try:
-        await run_agent(agent, task, project_id=project_id)
+        await run_agent(
+            agent, task, project_id=project_id,
+            append_system=_project_append_system(project_id),
+        )
     except Exception:
         log.exception("schedule %s failed", schedule_name)
 
