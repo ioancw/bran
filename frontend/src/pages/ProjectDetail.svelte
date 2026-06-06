@@ -60,9 +60,9 @@
     <div class="text-muted" style="padding: 24px; font-size: 13px; font-style: italic;">loading…</div>
   {/if}
   {#if data}
-    <div class="grid grid-cols-3 gap-6">
-      <!-- Center: launcher + conversations -->
-      <div class="col-span-2 space-y-6">
+    <div class="ph-grid">
+      <!-- Center: launcher + conversations (takes the remaining width) -->
+      <div class="space-y-6">
         <div class="card">
           <textarea class="field" bind:value={prompt} rows="4"
                     placeholder={`What would you like to work on in ${name}?`}
@@ -96,15 +96,25 @@
         </section>
       </div>
 
-      <!-- Right: settings/context rail -->
-      <aside class="col-span-1">
-        <ProjectRail {projectId} onrenamed={(n) => (name = n)} />
+      <!-- Right: settings/context rail (fixed width) -->
+      <aside>
+        <ProjectRail {projectId} mode="home" onrenamed={(n) => (name = n)} />
       </aside>
     </div>
   {/if}
 </Page>
 
 <style>
+  /* Chats fill the remaining width; settings sit in a fixed rail on the right. */
+  .ph-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 380px;
+    gap: 24px;
+    align-items: start;
+  }
+  @media (max-width: 900px) {
+    .ph-grid { grid-template-columns: 1fr; }
+  }
   .conv-card {
     display: flex;
     align-items: center;
