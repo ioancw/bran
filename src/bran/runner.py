@@ -35,6 +35,7 @@ def _begin_run(
     parent_run_id: str | None,
     record: RunRecord | None,
     project_id: str | None = None,
+    source: str = "manual",
 ) -> RunRecord:
     """Return a freshly-`running` record, persisted.
 
@@ -49,6 +50,7 @@ def _begin_run(
         record = RunRecord.new(
             agent=agent, task=task, parent_run_id=parent_run_id,
             project_id=project_id,  # None = standalone run
+            source=source,
         )
         record.status = "running"
         insert_run(record)
@@ -127,6 +129,7 @@ async def run_agent(
     on_message=None,
     record: RunRecord | None = None,
     project_id: str | None = None,
+    source: str = "manual",
 ) -> RunRecord:
     """Execute an agent run end-to-end, returning the persisted record.
 
@@ -142,7 +145,7 @@ async def run_agent(
     `record` is supplied — the caller already set the record's project).
     """
     agent_def = get_agent(agent)  # raises KeyError if unknown
-    record = _begin_run(agent, task, parent_run_id, record, project_id)
+    record = _begin_run(agent, task, parent_run_id, record, project_id, source)
 
     options = build_options_for(
         agent_def, resume=resume_session, max_turns=max_turns,
@@ -194,6 +197,7 @@ async def stream_agent(
     max_turns: int | None = None,
     on_message=None,
     project_id: str | None = None,
+    source: str = "chat",
 ) -> AsyncIterator[Any]:
     """Async generator that yields SDK messages while persisting the run.
 
@@ -207,7 +211,7 @@ async def stream_agent(
     `project_id` attributes the run to the chat's workspace.
     """
     agent_def = get_agent(agent)
-    record = _begin_run(agent, task, parent_run_id, None, project_id)
+    record = _begin_run(agent, task, parent_run_id, None, project_id, source)
     options = build_options_for(
         agent_def, resume=resume_session, max_turns=max_turns,
         append_system=append_system,

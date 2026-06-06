@@ -20,15 +20,17 @@ from bran.agents import get_agent, list_agents
 from bran.background import spawn_background
 from bran.config import SETTINGS
 from bran.persistence import (
-    INBOX_PROJECT_ID,
     ChatRecord,
     ProjectRecord,
     RunRecord,
     ScheduleRecord,
+    add_project_memory,
     count_chats_per_project,
     delete_chat,
     delete_project,
+    delete_project_memory,
     delete_schedule,
+    list_project_memories,
     get_chat,
     get_project,
     get_run,
@@ -40,6 +42,7 @@ from bran.persistence import (
     list_runs,
     list_schedules,
     move_chat_to_project,
+    set_schedule_enabled,
     touch_chat,
     update_project,
     upsert_chat,
@@ -82,9 +85,8 @@ def _list_slash_commands() -> list[dict[str, str]]:
 
 
 def _build_project_context(project: ProjectRecord) -> str:
-    """The per-chat system-prompt suffix injected for a project chat: the
-    project's instructions plus a header telling the agent how to pin memory."""
-    body = (project.instructions or "").strip()
+    """The per-chat system-prompt suffix for a project: the brief (instructions),
+    the discrete memory entries, and a header on how to pin new memory."""
     header_lines = [
         "## Project context",
         f'You are chatting in bran project "{project.name}" (id: `{project.id}`).',
@@ -97,8 +99,12 @@ def _build_project_context(project: ProjectRecord) -> str:
         ),
     ]
     parts = ["\n".join(header_lines)]
-    if body:
-        parts.append("## Project memory\n" + body)
+    brief = (project.instructions or "").strip()
+    if brief:
+        parts.append("## Instructions\n" + brief)
+    memories = list_project_memories(project.id)
+    if memories:
+        parts.append("## Memory\n" + "\n".join(f"- {m.text}" for m in memories))
     return "\n\n".join(parts)
 
 
@@ -213,9 +219,24 @@ async def run_transcript(run_id: str) -> dict[str, Any]:
 # Schedules (Runners)
 # ---------------------------------------------------------------------------
 
+def _schedule_dict(s: ScheduleRecord) -> dict[str, Any]:
+    """A schedule plus its computed next fire time (None when paused/invalid)."""
+    d = asdict(s)
+    next_run: str | None = None
+    if s.enabled:
+        try:
+            from bran.scheduler import next_run_for
+
+            next_run = next_run_for(s.cron)
+        except Exception:
+            next_run = None
+    d["next_run"] = next_run
+    return d
+
+
 @router.get("/schedules")
 async def schedules(project_id: str | None = None) -> list[dict[str, Any]]:
-    return [asdict(s) for s in list_schedules(project_id=project_id or None)]
+    return [_schedule_dict(s) for s in list_schedules(project_id=project_id or None)]
 
 
 @router.post("/schedules")
@@ -242,6 +263,27 @@ async def new_schedule(
     except Exception:
         pass
     return asdict(rec)
+
+
+@router.post("/schedules/{name}/enabled")
+async def set_enabled(
+    name: str, enabled: Annotated[str, Form()],
+) -> dict[str, Any]:
+    """Pause/resume a runner and keep the live scheduler in sync."""
+    on = enabled.strip().lower() in ("1", "true", "yes", "on")
+    rec = set_schedule_enabled(name, on)
+    if rec is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No schedule {name}")
+    try:
+        from bran.scheduler import register_schedule, unregister_schedule
+
+        if on:
+            register_schedule(rec)
+        else:
+            unregister_schedule(name)
+    except Exception:
+        pass
+    return _schedule_dict(rec)
 
 
 @router.delete("/schedules/{name}")
@@ -274,7 +316,7 @@ def _project_dict(p: ProjectRecord, n_chats: int) -> dict[str, Any]:
     return {
         "id": p.id, "name": p.name, "description": p.description,
         "instructions": p.instructions, "n_chats": n_chats,
-        "updated_at": p.updated_at, "is_inbox": p.id == INBOX_PROJECT_ID,
+        "updated_at": p.updated_at,
     }
 
 
@@ -299,8 +341,11 @@ async def project_detail(project_id: str) -> dict[str, Any]:
              "updated_at": c.updated_at, "created_at": c.created_at}
             for c in chats
         ],
+        "memories": [asdict(m) for m in list_project_memories(project_id)],
         "schedules": [asdict(s) for s in list_schedules(project_id=project_id)],
-        "runs": [asdict(r) for r in list_runs(project_id=project_id, limit=50)],
+        # Activity = the project's autonomous/background runs (runner fires,
+        # spawns) — NOT interactive chat turns, which live in Recents above.
+        "runs": [asdict(r) for r in list_runs(project_id=project_id, limit=50, exclude_chats=True)],
     }
 
 
@@ -336,28 +381,33 @@ async def save_project(
 
 @router.delete("/projects/{project_id}")
 async def remove_project(project_id: str) -> dict[str, Any]:
-    if project_id == INBOX_PROJECT_ID:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Inbox cannot be deleted")
     if not delete_project(project_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"No project {project_id}")
     return {"deleted": project_id}
 
 
-@router.post("/projects/{project_id}/memory/append")
-async def append_project_memory(
-    project_id: str, text: Annotated[str, Form()],
-) -> dict[str, Any]:
-    """Append a chunk to a project's memory (the chat 'pin to memory' button)."""
-    project = get_project(project_id)
-    if project is None:
+@router.get("/projects/{project_id}/memory")
+async def project_memory(project_id: str) -> list[dict[str, Any]]:
+    return [asdict(m) for m in list_project_memories(project_id)]
+
+
+@router.post("/projects/{project_id}/memory")
+async def add_memory(project_id: str, text: Annotated[str, Form()]) -> dict[str, Any]:
+    """Pin a discrete memory entry to a project (chat 'pin to memory' button +
+    the save_project_memory tool's UI equivalent)."""
+    if get_project(project_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"No project {project_id}")
     text = text.strip()
     if not text:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "text required")
-    sep = "\n\n" if (project.instructions or "").strip() else ""
-    project.instructions = (project.instructions or "") + sep + text
-    update_project(project)
-    return {"ok": True, "project_id": project_id, "memory_length": len(project.instructions)}
+    return asdict(add_project_memory(project_id, text))
+
+
+@router.delete("/projects/{project_id}/memory/{entry_id}")
+async def remove_memory(project_id: str, entry_id: str) -> dict[str, Any]:
+    if not delete_project_memory(entry_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No memory {entry_id}")
+    return {"deleted": entry_id}
 
 
 # ---------------------------------------------------------------------------
@@ -426,16 +476,17 @@ async def chat_stream(
     else:
         target_agent = "orchestrator"
 
+    # The chat's project (None = loose). An existing chat's project is
+    # authoritative; otherwise the form param, else loose.
     if sid:
         existing = get_chat(sid)
-        target_project_id = existing.project_id if existing else (project_id or INBOX_PROJECT_ID)
+        target_project_id = existing.project_id if existing else (project_id or None)
     else:
-        target_project_id = project_id or INBOX_PROJECT_ID
+        target_project_id = project_id or None
 
-    project_record = get_project(target_project_id)
-    if project_record is None:
-        target_project_id = INBOX_PROJECT_ID
-        project_record = get_project(INBOX_PROJECT_ID)
+    project_record = get_project(target_project_id) if target_project_id else None
+    if target_project_id and project_record is None:
+        target_project_id = None  # stale/unknown id → loose
     append_system = _build_project_context(project_record) if project_record else None
 
     first_prompt = actual_prompt.strip()

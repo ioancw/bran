@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS runs (
     started_at      TEXT NOT NULL,
     ended_at        TEXT,
     metadata        TEXT,
-    project_id      TEXT
+    project_id      TEXT,
+    source          TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_agent      ON runs(agent);
@@ -86,9 +87,19 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 
 CREATE INDEX IF NOT EXISTS idx_projects_updated ON projects(updated_at DESC);
-"""
 
-INBOX_PROJECT_ID = "inbox"   # well-known id so callers can reference it
+-- Discrete project memory entries (Cowork-style): a list of pinned facts/rules,
+-- distinct from `projects.instructions` (the free-form brief). Each is one
+-- declarative note; the system prompt assembles brief + entries.
+CREATE TABLE IF NOT EXISTS project_memories (
+    id          TEXT PRIMARY KEY,
+    project_id  TEXT NOT NULL,
+    text        TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_memories ON project_memories(project_id);
+"""
 
 # Reentrant so the lazy bootstrap (_ensure_ready -> init_db -> _conn) can take
 # the lock again on the same thread without deadlocking.
@@ -120,6 +131,10 @@ class RunRecord:
     # Runner not attached to any project). Chat-originated runs carry the chat's
     # project; autonomous Runners are standalone unless explicitly attached.
     project_id: str | None = None
+    # How this run was triggered: "chat" (interactive turn) | "runner"
+    # (scheduled) | "spawn" (background spawn_agent) | "manual" (one-shot/API).
+    # Lets the project Activity feed show autonomous work and hide chat turns.
+    source: str = "manual"
 
     @staticmethod
     def new(
@@ -127,6 +142,7 @@ class RunRecord:
         task: str,
         parent_run_id: str | None = None,
         project_id: str | None = None,
+        source: str = "manual",
     ) -> "RunRecord":
         return RunRecord(
             id=str(uuid.uuid4()),
@@ -135,6 +151,7 @@ class RunRecord:
             status="pending",
             parent_run_id=parent_run_id,
             project_id=project_id,
+            source=source,
         )
 
     def to_row(self) -> tuple:
@@ -154,6 +171,7 @@ class RunRecord:
             self.ended_at,
             json.dumps(self.metadata),
             self.project_id,
+            self.source,
         )
 
     @staticmethod
@@ -176,6 +194,7 @@ class RunRecord:
             metadata=json.loads(row["metadata"] or "{}"),
             # None = standalone; absent only on legacy rows read mid-migration.
             project_id=(row["project_id"] if "project_id" in keys else None),
+            source=(row["source"] if "source" in keys and row["source"] else "manual"),
         )
 
 
@@ -222,7 +241,7 @@ def _ensure_ready() -> None:
         init_db()
         _migrate_chats_add_project_id()
         _migrate_runs_schedules_add_project_id()
-        _ensure_inbox_project()
+        _drop_inbox()
     except Exception:
         _initialized = False
         raise
@@ -260,8 +279,8 @@ def insert_run(record: RunRecord) -> None:
             """INSERT INTO runs
             (id, agent, task, status, session_id, parent_run_id, result, error,
              total_cost_usd, num_turns, duration_ms, started_at, ended_at, metadata,
-             project_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+             project_id, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             record.to_row(),
         )
 
@@ -297,7 +316,7 @@ def get_run(run_id: str) -> RunRecord | None:
 
 def list_runs(
     agent: str | None = None, limit: int = 50, status: str | None = None,
-    project_id: str | None = None,
+    project_id: str | None = None, exclude_chats: bool = False,
 ) -> list[RunRecord]:
     sql = "SELECT * FROM runs"
     clauses: list[str] = []
@@ -311,6 +330,12 @@ def list_runs(
     if project_id:
         clauses.append("project_id = ?")
         params.append(project_id)
+    if exclude_chats:
+        # Activity = autonomous/background runs (runner fires, spawns, manual) —
+        # never interactive chat turns. Keyed on the explicit `source`, so it's
+        # reliable even for failed/orphaned chat runs the old session_id
+        # heuristic leaked.
+        clauses.append("(source IS NULL OR source != 'chat')")
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
     sql += " ORDER BY started_at DESC LIMIT ?"
@@ -379,6 +404,20 @@ def get_schedule(name: str) -> ScheduleRecord | None:
     return _row_to_schedule(row) if row else None
 
 
+def set_schedule_enabled(name: str, enabled: bool) -> ScheduleRecord | None:
+    """Pause/resume a runner. Updates the row and returns the fresh record (or
+    None if no such schedule). Callers in `bran serve` should also (un)register
+    the live APScheduler job — see scheduler.register_schedule/unregister_schedule."""
+    with _lock, _conn() as conn:
+        cur = conn.execute(
+            "UPDATE schedules SET enabled = ? WHERE name = ?",
+            (1 if enabled else 0, name),
+        )
+        if cur.rowcount == 0:
+            return None
+    return get_schedule(name)
+
+
 def run_to_dict(r: RunRecord) -> dict[str, Any]:
     return asdict(r)
 
@@ -392,18 +431,17 @@ class ChatRecord:
     id: str                 # SDK session_id — used as primary key
     title: str              # truncated first user prompt
     agent: str              # which agent this chat is locked to
-    project_id: str = INBOX_PROJECT_ID  # which project this chat belongs to
+    # Optional project. None = a loose chat (shown in the global Chat/Recents
+    # view); set = belongs to that project. No "Inbox" — loose is the default.
+    project_id: str | None = None
     created_at: str = field(default_factory=utcnow_iso)
     updated_at: str = field(default_factory=utcnow_iso)
 
 
 def _row_to_chat(r: sqlite3.Row) -> ChatRecord:
-    # project_id may be absent in legacy rows that pre-date the migration;
-    # `r["project_id"]` will raise IndexError on those, so we use dict-style.
-    pid = r["project_id"] if "project_id" in r.keys() else None
     return ChatRecord(
         id=r["id"], title=r["title"], agent=r["agent"],
-        project_id=pid or INBOX_PROJECT_ID,
+        project_id=(r["project_id"] if "project_id" in r.keys() else None),
         created_at=r["created_at"], updated_at=r["updated_at"],
     )
 
@@ -433,13 +471,17 @@ def touch_chat(chat_id: str) -> None:
 def list_chats(limit: int = 100, project_id: str | None = None) -> list[ChatRecord]:
     """Return chats sorted by most-recently updated.
 
-    If `project_id` is given, only chats in that project are returned.
+    `project_id` given → chats in that project. `project_id` None → **loose**
+    chats (no project) — the global Chat/Recents view. (There's no "all chats"
+    view: a chat is either loose or in exactly one project.)
     """
     sql = "SELECT * FROM chats"
     params: list[Any] = []
-    if project_id is not None:
+    if project_id:
         sql += " WHERE project_id = ?"
         params.append(project_id)
+    else:
+        sql += " WHERE project_id IS NULL"
     sql += " ORDER BY updated_at DESC LIMIT ?"
     params.append(limit)
     with _lock, _conn() as conn:
@@ -527,27 +569,65 @@ def get_project(project_id: str) -> ProjectRecord | None:
 
 
 def list_projects() -> list[ProjectRecord]:
-    """Return all projects, Inbox last (so user-created ones come first)."""
+    """Return all projects, most-recently-updated first."""
     with _lock, _conn() as conn:
-        rows = conn.execute(
-            """SELECT * FROM projects
-               ORDER BY (id = ?) ASC, updated_at DESC""",
-            (INBOX_PROJECT_ID,),
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM projects ORDER BY updated_at DESC").fetchall()
     return [_row_to_project(r) for r in rows]
 
 
 def delete_project(project_id: str) -> bool:
-    """Remove a project. Refuses to delete the Inbox. Chats inside the project
-    are reassigned to Inbox rather than deleted, so no conversation history is lost."""
-    if project_id == INBOX_PROJECT_ID:
-        return False
+    """Remove a project + its memory entries. Its chats become loose (project_id
+    NULL) rather than being deleted, so no conversation history is lost."""
     with _lock, _conn() as conn:
         conn.execute(
-            "UPDATE chats SET project_id = ? WHERE project_id = ?",
-            (INBOX_PROJECT_ID, project_id),
+            "UPDATE chats SET project_id = NULL WHERE project_id = ?", (project_id,)
         )
+        conn.execute("DELETE FROM project_memories WHERE project_id = ?", (project_id,))
         cur = conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Project memory entries — discrete pinned facts (distinct from the brief)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ProjectMemory:
+    id: str
+    project_id: str
+    text: str
+    created_at: str = field(default_factory=utcnow_iso)
+
+    @staticmethod
+    def new(project_id: str, text: str) -> "ProjectMemory":
+        return ProjectMemory(id=str(uuid.uuid4()), project_id=project_id, text=text)
+
+
+def add_project_memory(project_id: str, text: str) -> ProjectMemory:
+    rec = ProjectMemory.new(project_id=project_id, text=text.strip())
+    with _lock, _conn() as conn:
+        conn.execute(
+            "INSERT INTO project_memories (id, project_id, text, created_at) VALUES (?, ?, ?, ?)",
+            (rec.id, rec.project_id, rec.text, rec.created_at),
+        )
+    return rec
+
+
+def list_project_memories(project_id: str) -> list[ProjectMemory]:
+    with _lock, _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM project_memories WHERE project_id = ? ORDER BY created_at",
+            (project_id,),
+        ).fetchall()
+    return [
+        ProjectMemory(id=r["id"], project_id=r["project_id"], text=r["text"], created_at=r["created_at"])
+        for r in rows
+    ]
+
+
+def delete_project_memory(entry_id: str) -> bool:
+    with _lock, _conn() as conn:
+        cur = conn.execute("DELETE FROM project_memories WHERE id = ?", (entry_id,))
         return cur.rowcount > 0
 
 
@@ -577,51 +657,35 @@ def _migrate_chats_add_project_id() -> None:
 
 
 def _migrate_runs_schedules_add_project_id() -> None:
-    """Add project_id to runs + schedules.
+    """Add the (optional) project_id column to runs + schedules.
 
-    Runs and schedules can be *attached* to a project (for context/visibility),
-    but attachment is optional — `project_id IS NULL` means standalone. We
-    attribute legacy *runs* to Inbox (they came from chats), but leave
-    *schedules* standalone: a Runner is an automation, not a project member.
+    Attachment is optional — `project_id IS NULL` means loose/standalone.
     """
     with _lock, _conn() as conn:
         _add_column_if_missing(conn, "runs", "project_id", "TEXT")
         _add_column_if_missing(conn, "schedules", "project_id", "TEXT")
-        # Legacy chat-origin runs → Inbox (they belong to that conversation space).
+        # `source` classifies how a run was triggered (chat/runner/spawn/manual).
+        # Backfill legacy rows: a run whose session_id is a chat is a chat turn;
+        # everything else we can only call "manual" in hindsight.
+        _add_column_if_missing(conn, "runs", "source", "TEXT")
         conn.execute(
-            "UPDATE runs SET project_id = ? WHERE project_id IS NULL", (INBOX_PROJECT_ID,)
+            "UPDATE runs SET source = 'chat' "
+            "WHERE source IS NULL AND session_id IN (SELECT id FROM chats)"
         )
-        # Schedules are standalone by default; undo any earlier auto-Inbox backfill
-        # so existing Runners aren't mis-filed inside the Inbox project.
-        conn.execute(
-            "UPDATE schedules SET project_id = NULL WHERE project_id = ?", (INBOX_PROJECT_ID,)
-        )
+        conn.execute("UPDATE runs SET source = 'manual' WHERE source IS NULL")
         # Safe to index now that the column exists on both fresh and legacy DBs.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id)")
 
 
-def _ensure_inbox_project() -> None:
-    """Auto-create the Inbox project + retro-assign any orphan chats."""
+def _drop_inbox() -> None:
+    """Inbox was a fudge — a catch-all 'project' for unfiled chats. We dropped
+    it: a chat/run/schedule with project_id NULL is simply *loose* (not in any
+    project). Convert any legacy 'inbox' rows back to NULL and remove the
+    well-known Inbox project. Idempotent — a no-op once nothing references it."""
     with _lock, _conn() as conn:
-        existing = conn.execute(
-            "SELECT id FROM projects WHERE id = ?", (INBOX_PROJECT_ID,)
-        ).fetchone()
-        if not existing:
-            now = utcnow_iso()
-            conn.execute(
-                """INSERT INTO projects (id, name, description, instructions, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (INBOX_PROJECT_ID, "Inbox",
-                 "Casual one-off chats that don't belong to a specific project.",
-                 "", now, now),
-            )
-        # Backfill orphan chats. After the ALTER TABLE above they all have NULL
-        # project_id; this assigns Inbox so the rest of the app can assume a
-        # project_id is always set.
-        conn.execute(
-            "UPDATE chats SET project_id = ? WHERE project_id IS NULL",
-            (INBOX_PROJECT_ID,),
-        )
+        for table in ("chats", "runs", "schedules"):
+            conn.execute(f"UPDATE {table} SET project_id = NULL WHERE project_id = 'inbox'")
+        conn.execute("DELETE FROM projects WHERE id = 'inbox'")
 
 
 # Schema + migrations run lazily on first DB access via _ensure_ready(), so

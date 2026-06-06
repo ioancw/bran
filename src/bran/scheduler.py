@@ -41,20 +41,26 @@ def _project_append_system(project_id: str | None) -> str | None:
     """
     if not project_id:
         return None
-    from bran.persistence import get_project
+    from bran.persistence import get_project, list_project_memories
 
     project = get_project(project_id)
     if project is None:
         return None
-    body = (project.instructions or "").strip()
-    return f"## Project memory\n{body}" if body else None
+    parts: list[str] = []
+    brief = (project.instructions or "").strip()
+    if brief:
+        parts.append("## Instructions\n" + brief)
+    mems = list_project_memories(project_id)
+    if mems:
+        parts.append("## Memory\n" + "\n".join(f"- {m.text}" for m in mems))
+    return "\n\n".join(parts) if parts else None
 
 
 async def _fire(agent: str, task: str, schedule_name: str, project_id: str | None) -> None:
     log.info("scheduler firing: %s (%s)", schedule_name, agent)
     try:
         await run_agent(
-            agent, task, project_id=project_id,
+            agent, task, project_id=project_id, source="runner",
             append_system=_project_append_system(project_id),
         )
     except Exception:
@@ -119,3 +125,16 @@ def _add_job(scheduler: AsyncIOScheduler, rec: ScheduleRecord) -> None:
 
 def _job_id(name: str) -> str:
     return f"bran-schedule:{name}"
+
+
+def next_run_for(cron: str) -> str | None:
+    """Next fire time (UTC ISO-8601) for a cron expression, or None if the
+    expression is invalid. Read-only — does not touch the running scheduler."""
+    from datetime import datetime, timezone
+
+    try:
+        trigger = _trigger_from_cron(cron)
+    except ValueError:
+        return None
+    nxt = trigger.get_next_fire_time(None, datetime.now(timezone.utc))
+    return nxt.isoformat() if nxt else None
