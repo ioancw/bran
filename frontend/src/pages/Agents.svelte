@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api } from '../lib/api'
-  import { navigate } from '../lib/router.svelte'
+  import { navigate, href, link } from '../lib/router.svelte'
   import { errorText } from '../lib/errors'
   import Page from '../components/Page.svelte'
   import type { AgentInfo } from '../lib/types'
@@ -32,7 +32,9 @@
         <tbody>
           {#each agents as a}
             <tr style="border-top: 1px solid var(--border);">
-              <td style="padding: 10px 14px;" class="text-bright">{a.name}</td>
+              <td style="padding: 10px 14px;">
+                <a href={href('/agents/' + encodeURIComponent(a.name))} use:link class="text-bright" style="text-decoration: none; font-weight: 500;">{a.name}</a>
+              </td>
               <td class="mono text-dim">{a.model ?? 'default'}</td>
               <td class="text-dim" style="max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{a.description}</td>
               <td class="num text-dim">{a.tools.length}</td>

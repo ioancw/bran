@@ -2,7 +2,7 @@
   // Runners = standalone managed agents (scheduled, headless). Not owned by a
   // project; optionally *attached* to one to borrow its context/visibility.
   import { api } from '../lib/api'
-  import { router } from '../lib/router.svelte'
+  import { router, href, link } from '../lib/router.svelte'
   import { confirmDialog } from '../lib/confirm.svelte'
   import { errorText } from '../lib/errors'
   import Page from '../components/Page.svelte'
@@ -119,7 +119,9 @@
           <tbody>
             {#each runners as r}
               <tr style="border-top: 1px solid var(--border);">
-                <td style="padding: 10px 14px;" class="text-bright">{r.name}</td>
+                <td style="padding: 10px 14px;">
+                  <a href={href('/runners/' + encodeURIComponent(r.name))} use:link class="text-bright" style="text-decoration: none; font-weight: 500;">{r.name}</a>
+                </td>
                 <td class="mono text-accent-soft">{r.agent}</td>
                 <td class="mono text-dim">{r.cron}</td>
                 <td class="text-dim">{projName(r.project_id) ?? '—'}</td>

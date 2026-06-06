@@ -35,6 +35,7 @@ export interface RunRecord {
   ended_at: string | null
   metadata: Record<string, unknown>
   project_id: string | null // null = standalone (not attached to a project)
+  source: 'chat' | 'runner' | 'spawn' | 'manual' // how the run was triggered
 }
 
 export interface ScheduleRecord {
