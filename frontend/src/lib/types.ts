@@ -36,6 +36,7 @@ export interface RunRecord {
   metadata: Record<string, unknown>
   project_id: string | null // null = standalone (not attached to a project)
   source: 'chat' | 'runner' | 'spawn' | 'manual' // how the run was triggered
+  schedule_id: string | null // the runner this run belongs to, if any
 }
 
 export interface ScheduleRecord {
@@ -47,6 +48,7 @@ export interface ScheduleRecord {
   enabled: boolean
   created_at: string
   project_id: string | null // null = standalone Runner
+  run_at?: string | null // one-shot fire time; null/absent = recurring (cron)
   next_run?: string | null // computed next fire time (null when paused/invalid)
 }
 

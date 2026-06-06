@@ -33,11 +33,12 @@ export const api = {
   catalog: () => getJSON<Catalog>('/spa/catalog'),
   agents: () => getJSON<AgentInfo[]>('/spa/agents'),
 
-  runs: (q: { agent?: string; status?: string; project_id?: string; limit?: number } = {}) => {
+  runs: (q: { agent?: string; status?: string; project_id?: string; schedule_id?: string; limit?: number } = {}) => {
     const p = new URLSearchParams()
     if (q.agent) p.set('agent', q.agent)
     if (q.status) p.set('status', q.status)
     if (q.project_id) p.set('project_id', q.project_id)
+    if (q.schedule_id) p.set('schedule_id', q.schedule_id)
     if (q.limit) p.set('limit', String(q.limit))
     const qs = p.toString()
     return getJSON<RunRecord[]>(`/spa/runs${qs ? `?${qs}` : ''}`)
@@ -45,7 +46,12 @@ export const api = {
   run: (id: string) => getJSON<RunRecord>(`/spa/runs/${encodeURIComponent(id)}`),
   runTranscript: (id: string) =>
     getJSON<{ run: RunRecord; events: ChatEvent[] }>(`/spa/runs/${encodeURIComponent(id)}/transcript`),
-  newRun: (agent: string, task: string) => form<RunRecord>('/spa/runs', { agent, task }),
+  newRun: (agent: string, task: string, opts: { project_id?: string; schedule_id?: string } = {}) => {
+    const body: Record<string, string> = { agent, task }
+    if (opts.project_id) body.project_id = opts.project_id
+    if (opts.schedule_id) body.schedule_id = opts.schedule_id
+    return form<RunRecord>('/spa/runs', body)
+  },
   cancelRun: (id: string) =>
     form<{ run_id: string; cancelled: number }>(`/spa/runs/${encodeURIComponent(id)}/cancel`, {}),
 
@@ -75,11 +81,12 @@ export const api = {
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
   },
 
-  newSchedule: (fields: { name: string; agent: string; cron: string; task?: string; project_id?: string }) => {
+  newSchedule: (fields: { name: string; agent: string; cron?: string; task?: string; project_id?: string; run_at?: string }) => {
     const body: Record<string, string> = {
-      name: fields.name, agent: fields.agent, cron: fields.cron, task: fields.task ?? '',
+      name: fields.name, agent: fields.agent, cron: fields.cron ?? '', task: fields.task ?? '',
     }
     if (fields.project_id) body.project_id = fields.project_id // omit → standalone
+    if (fields.run_at) body.run_at = fields.run_at // present → one-shot
     return form<ScheduleRecord>('/spa/schedules', body)
   },
   deleteSchedule: async (name: string): Promise<void> => {

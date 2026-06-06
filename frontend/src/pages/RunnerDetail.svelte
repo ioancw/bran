@@ -28,7 +28,7 @@
       const [schedules, ps] = await Promise.all([api.schedules(), api.projects()])
       runner = schedules.find((s) => s.name === runnerName) ?? null
       projects = ps
-      if (runner) runs = await api.runs({ agent: runner.agent, limit: 50 })
+      if (runner) runs = await api.runs({ schedule_id: runner.id, limit: 50 })
     } catch (e) {
       error = String(e)
     } finally {
@@ -44,7 +44,7 @@
     if (!runner || firing) return
     firing = true
     try {
-      const r = await api.newRun(runner.agent, runner.task || `Run ${runner.agent}`)
+      const r = await api.newRun(runner.agent, runner.task || `Run ${runner.agent}`, { schedule_id: runner.id })
       navigate('/runs/' + r.id)
     } catch (e) {
       error = String(e)
@@ -94,7 +94,7 @@
         </div>
 
         <section>
-          <div class="label-cap" style="margin-bottom: 8px;">Runs · {runner.agent} ({runs.length})</div>
+          <div class="label-cap" style="margin-bottom: 8px;">Runs ({runs.length})</div>
           {#if runs.length}
             <div class="space-y-2">
               {#each runs.slice(0, 20) as r}
@@ -117,7 +117,11 @@
         <div class="card">
           <div class="label-cap" style="margin-bottom: 8px;">Trigger</div>
           <div style="font-size: 13px;" class="space-y-2">
-            <div><span class="label-cap">schedule</span><br /><span class="mono text-bright">{runner.cron}</span></div>
+            {#if runner.run_at}
+              <div><span class="label-cap">once</span><br /><span class="mono text-bright">{localDateTime(runner.run_at)}</span></div>
+            {:else}
+              <div><span class="label-cap">schedule</span><br /><span class="mono text-bright">{runner.cron}</span></div>
+            {/if}
             <div><span class="label-cap">next</span> <span class="text-dim">{runner.enabled && runner.next_run ? localDateTime(runner.next_run) : '—'}</span></div>
             <div style="display: flex; align-items: center; gap: 10px;">
               <span class="src" style="color: {runner.enabled ? 'var(--accent-soft)' : 'var(--muted)'};">{runner.enabled ? 'enabled' : 'paused'}</span>

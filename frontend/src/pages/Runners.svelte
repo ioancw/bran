@@ -18,7 +18,9 @@
   let showForm = $state(false)
   let fName = $state('')
   let fAgent = $state('orchestrator')
+  let fKind = $state<'cron' | 'once'>('cron')
   let fCron = $state('0 8 * * *')
+  let fRunAt = $state('') // datetime-local value for one-shot runners
   let fTask = $state('')
   let fProject = $state('') // '' = standalone
 
@@ -48,12 +50,19 @@
     id ? (projects.find((p) => p.id === id)?.name ?? id) : null
 
   async function create() {
-    if (!fName.trim() || !fCron.trim()) return
+    if (!fName.trim()) return
+    const fields: { name: string; agent: string; task: string; project_id?: string; cron?: string; run_at?: string } = {
+      name: fName.trim(), agent: fAgent, task: fTask, project_id: fProject || undefined,
+    }
+    if (fKind === 'once') {
+      if (!fRunAt) return
+      fields.run_at = new Date(fRunAt).toISOString() // local picker → UTC
+    } else {
+      if (!fCron.trim()) return
+      fields.cron = fCron.trim()
+    }
     try {
-      await api.newSchedule({
-        name: fName.trim(), agent: fAgent, cron: fCron.trim(), task: fTask,
-        project_id: fProject || undefined,
-      })
+      await api.newSchedule(fields)
     } catch (e) {
       error = String(e)
       return
@@ -61,6 +70,7 @@
     fName = ''
     fTask = ''
     fProject = ''
+    fRunAt = ''
     showForm = false
     await load()
   }
@@ -96,12 +106,20 @@
           <select class="field" bind:value={fAgent}>
             {#each agents as a}<option value={a.name}>{a.name}</option>{/each}
           </select>
-          <input class="field" bind:value={fCron} placeholder="cron — e.g. 0 8 * * * (08:00 daily)" />
+          <select class="field" bind:value={fKind}>
+            <option value="cron">Recurring (cron)</option>
+            <option value="once">Once (one-shot)</option>
+          </select>
+          {#if fKind === 'once'}
+            <input class="field" type="datetime-local" bind:value={fRunAt} />
+          {:else}
+            <input class="field" bind:value={fCron} placeholder="cron — e.g. 0 8 * * * (08:00 daily)" />
+          {/if}
           <select class="field" bind:value={fProject}>
             <option value="">standalone (no project)</option>
             {#each projects as p}<option value={p.id}>attach to: {p.name}</option>{/each}
           </select>
-          <input class="field" bind:value={fTask} placeholder="task / prompt to run each tick" style="grid-column: span 2;" />
+          <input class="field" bind:value={fTask} placeholder={fKind === 'once' ? 'task / prompt to run once' : 'task / prompt to run each tick'} style="grid-column: span 2;" />
         </div>
         <div style="display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px;">
           <button class="btn-ghost" onclick={() => (showForm = false)}>cancel</button>
@@ -122,7 +140,7 @@
         <table style="width: 100%; border-collapse: collapse; min-width: 780px;">
           <thead>
             <tr class="label-cap" style="text-align: left;">
-              <th style="padding: 10px 14px;">Name</th><th>Agent</th><th>Cron</th><th>Next</th><th>Attached</th><th>State</th><th>Task</th><th></th>
+              <th style="padding: 10px 14px;">Name</th><th>Agent</th><th>Trigger</th><th>Next</th><th>Attached</th><th>State</th><th>Task</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -132,7 +150,7 @@
                   <a href={href('/runners/' + encodeURIComponent(r.name))} use:link class="text-bright" style="text-decoration: none; font-weight: 500;">{r.name}</a>
                 </td>
                 <td class="mono text-accent-soft">{r.agent}</td>
-                <td class="mono text-dim">{r.cron}</td>
+                <td class="mono text-dim">{r.run_at ? 'once' : r.cron}</td>
                 <td class="text-dim" style="font-size: 12px; white-space: nowrap;">{r.enabled && r.next_run ? localDateTime(r.next_run) : '—'}</td>
                 <td class="text-dim">{projName(r.project_id) ?? '—'}</td>
                 <td><button class="state-btn" class:on={r.enabled} onclick={() => toggle(r)} title={r.enabled ? 'pause' : 'resume'}>{r.enabled ? 'on' : 'paused'}</button></td>

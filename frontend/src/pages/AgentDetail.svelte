@@ -122,7 +122,7 @@
               {#each runners as s}
                 <a href={href('/runners/' + encodeURIComponent(s.name))} use:link class="row-link" style="display: flex; gap: 8px; align-items: baseline; font-size: 12px; text-decoration: none;">
                   <span class="text-bright">{s.name}</span>
-                  <span class="mono text-dim ml-auto">{s.cron}</span>
+                  <span class="mono text-dim ml-auto">{s.run_at ? 'once' : s.cron}</span>
                 </a>
               {/each}
             </div>
