@@ -26,11 +26,15 @@ def test_standalone_runner_has_no_project_memory():
     assert _project_append_system(None) is None
 
 
-def test_attached_runner_injects_project_memory():
+def test_attached_runner_injects_brief_and_memory():
+    from bran.persistence import add_project_memory
+
     p = ProjectRecord.new(name=f"proj-{uuid.uuid4().hex[:6]}", instructions="Cite sources. EU focus.")
     insert_project(p)
+    add_project_memory(p.id, "Prefer Bloomberg over Reuters.")
     out = _project_append_system(p.id)
-    assert out == "## Project memory\nCite sources. EU focus."
+    assert "## Instructions\nCite sources. EU focus." in out
+    assert "## Memory\n- Prefer Bloomberg over Reuters." in out
 
 
 def test_attached_runner_with_empty_memory_is_none():

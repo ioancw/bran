@@ -35,6 +35,8 @@ export interface RunRecord {
   ended_at: string | null
   metadata: Record<string, unknown>
   project_id: string | null // null = standalone (not attached to a project)
+  source: 'chat' | 'runner' | 'spawn' | 'manual' // how the run was triggered
+  schedule_id: string | null // the runner this run belongs to, if any
 }
 
 export interface ScheduleRecord {
@@ -46,13 +48,15 @@ export interface ScheduleRecord {
   enabled: boolean
   created_at: string
   project_id: string | null // null = standalone Runner
+  run_at?: string | null // one-shot fire time; null/absent = recurring (cron)
+  next_run?: string | null // computed next fire time (null when paused/invalid)
 }
 
 export interface ChatSummary {
   id: string
   title: string
   agent: string
-  project_id: string
+  project_id: string | null // null = loose chat (no project)
   updated_at: string
   created_at: string
 }
@@ -64,7 +68,6 @@ export interface ProjectSummary {
   instructions: string
   n_chats: number
   updated_at: string
-  is_inbox: boolean
 }
 
 export interface BriefingSummary {
@@ -73,10 +76,18 @@ export interface BriefingSummary {
   mtime: number
 }
 
+export interface ProjectMemory {
+  id: string
+  project_id: string
+  text: string
+  created_at: string
+}
+
 // The project "workspace hub": a project plus everything that flows through it.
 export interface ProjectDetail {
   project: ProjectSummary
   chats: ChatSummary[]
+  memories: ProjectMemory[]
   schedules: ScheduleRecord[]
   runs: RunRecord[]
 }

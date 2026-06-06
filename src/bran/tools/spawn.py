@@ -48,6 +48,7 @@ async def spawn_agent(args: dict[str, Any]) -> dict[str, Any]:
         agent=agent, task=task,
         parent_run_id=current_run_id.get(),
         project_id=current_project_id.get(),
+        source="spawn",
     )
     insert_run(record)
 
@@ -96,7 +97,7 @@ async def spawn_agent(args: dict[str, Any]) -> dict[str, Any]:
     {"project_id": str, "text": str},
 )
 async def save_project_memory(args: dict[str, Any]) -> dict[str, Any]:
-    from bran.persistence import get_project, update_project
+    from bran.persistence import add_project_memory, get_project
 
     project_id = args["project_id"]
     text = (args.get("text") or "").strip()
@@ -109,17 +110,11 @@ async def save_project_memory(args: dict[str, Any]) -> dict[str, Any]:
         return {"content": [{"type": "text",
                              "text": f"Error: no project with id {project_id!r}."}]}
 
-    sep = "\n\n" if (project.instructions or "").strip() else ""
-    project.instructions = (project.instructions or "") + sep + text
-    update_project(project)
-
+    add_project_memory(project_id, text)
     return {
         "content": [{
             "type": "text",
-            "text": (
-                f"Saved to project '{project.name}'. "
-                f"Memory is now {len(project.instructions)} chars."
-            ),
+            "text": f"Pinned a memory to project '{project.name}'.",
         }]
     }
 

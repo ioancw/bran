@@ -41,24 +41,44 @@ def _project_append_system(project_id: str | None) -> str | None:
     """
     if not project_id:
         return None
-    from bran.persistence import get_project
+    from bran.persistence import get_project, list_project_memories
 
     project = get_project(project_id)
     if project is None:
         return None
-    body = (project.instructions or "").strip()
-    return f"## Project memory\n{body}" if body else None
+    parts: list[str] = []
+    brief = (project.instructions or "").strip()
+    if brief:
+        parts.append("## Instructions\n" + brief)
+    mems = list_project_memories(project_id)
+    if mems:
+        parts.append("## Memory\n" + "\n".join(f"- {m.text}" for m in mems))
+    return "\n\n".join(parts) if parts else None
 
 
-async def _fire(agent: str, task: str, schedule_name: str, project_id: str | None) -> None:
+async def _fire(
+    agent: str, task: str, schedule_name: str, project_id: str | None,
+    schedule_id: str | None = None, once: bool = False,
+) -> None:
     log.info("scheduler firing: %s (%s)", schedule_name, agent)
     try:
         await run_agent(
-            agent, task, project_id=project_id,
+            agent, task, project_id=project_id, source="runner",
+            schedule_id=schedule_id,
             append_system=_project_append_system(project_id),
         )
     except Exception:
         log.exception("schedule %s failed", schedule_name)
+    finally:
+        if once:
+            # One-shot fired — disable it so it doesn't re-register on restart.
+            try:
+                from bran.persistence import set_schedule_enabled
+
+                set_schedule_enabled(schedule_name, False)
+            except Exception:
+                log.exception("failed to disable one-shot %s", schedule_name)
+            unregister_schedule(schedule_name)
 
 
 def start_scheduler() -> None:
@@ -99,15 +119,27 @@ def unregister_schedule(name: str) -> None:
 
 
 def _add_job(scheduler: AsyncIOScheduler, rec: ScheduleRecord) -> None:
-    try:
-        trigger = _trigger_from_cron(rec.cron)
-    except ValueError:
-        log.exception("skipping schedule %s — invalid cron", rec.name)
-        return
+    once = bool(rec.run_at)
+    if once:
+        from datetime import datetime
+
+        from apscheduler.triggers.date import DateTrigger
+
+        try:
+            trigger = DateTrigger(run_date=datetime.fromisoformat(rec.run_at))
+        except (ValueError, TypeError):
+            log.exception("skipping schedule %s — invalid run_at", rec.name)
+            return
+    else:
+        try:
+            trigger = _trigger_from_cron(rec.cron)
+        except ValueError:
+            log.exception("skipping schedule %s — invalid cron", rec.name)
+            return
     scheduler.add_job(
         _fire,
         trigger=trigger,
-        args=(rec.agent, rec.task, rec.name, rec.project_id),
+        args=(rec.agent, rec.task, rec.name, rec.project_id, rec.id, once),
         id=_job_id(rec.name),
         name=rec.name,
         replace_existing=True,
@@ -119,3 +151,16 @@ def _add_job(scheduler: AsyncIOScheduler, rec: ScheduleRecord) -> None:
 
 def _job_id(name: str) -> str:
     return f"bran-schedule:{name}"
+
+
+def next_run_for(cron: str) -> str | None:
+    """Next fire time (UTC ISO-8601) for a cron expression, or None if the
+    expression is invalid. Read-only — does not touch the running scheduler."""
+    from datetime import datetime, timezone
+
+    try:
+        trigger = _trigger_from_cron(cron)
+    except ValueError:
+        return None
+    nxt = trigger.get_next_fire_time(None, datetime.now(timezone.utc))
+    return nxt.isoformat() if nxt else None

@@ -2,6 +2,7 @@
   import { api } from '../lib/api'
   import { navigate, href, link } from '../lib/router.svelte'
   import { fmtCost, fmtDuration, localDateTime } from '../lib/time'
+  import Page from '../components/Page.svelte'
   import StatusBadge from '../components/StatusBadge.svelte'
   import Prose from '../components/Prose.svelte'
   import ChatLog from '../chat/ChatLog.svelte'
@@ -59,10 +60,9 @@
   }
 </script>
 
-<header class="page-header">
-  <h1>Run {runId.slice(0, 8)}</h1>
-  <span class="subheading">{run?.agent ?? ''}</span>
-  <div class="page-actions">
+<Page title={'Run ' + runId.slice(0, 8)}>
+  {#snippet subtitle()}{run?.agent ?? ''}{/snippet}
+  {#snippet actions()}
     {#if run}
       <StatusBadge status={run.status} />
       {#if run.status === 'running' || run.status === 'pending'}
@@ -71,9 +71,8 @@
         <button class="btn-outline" onclick={rerun}>↻ re-run</button>
       {/if}
     {/if}
-  </div>
-</header>
-<div class="px-8 py-6">
+  {/snippet}
+
   {#if error}<div class="card" style="color: var(--red);">{error}</div>{/if}
   {#if run}
     <div class="grid grid-cols-4 gap-6">
@@ -116,4 +115,4 @@
       </div>
     </div>
   {/if}
-</div>
+</Page>

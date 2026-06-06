@@ -6,20 +6,91 @@ import sqlite3
 import uuid
 
 from bran.persistence import (
-    INBOX_PROJECT_ID,
+    ChatRecord,
     ProjectRecord,
     RunRecord,
     ScheduleRecord,
     _add_column_if_missing,
     _conn,
+    add_project_memory,
+    delete_project,
+    delete_project_memory,
+    get_chat,
+    list_project_memories,
     get_run,
     get_schedule,
     insert_project,
     insert_run,
     insert_schedule,
+    list_chats,
     list_runs,
     list_schedules,
+    upsert_chat,
 )
+
+
+def _chat(project_id=None) -> ChatRecord:
+    c = ChatRecord(id=f"sess-{uuid.uuid4().hex}", title="t", agent="orchestrator", project_id=project_id)
+    upsert_chat(c)
+    return c
+
+
+def test_chat_defaults_to_loose():
+    assert ChatRecord(id="x", title="t", agent="orchestrator").project_id is None
+
+
+def test_loose_chats_vs_project_chats():
+    pid = _project()
+    loose = _chat(project_id=None)
+    inproj = _chat(project_id=pid)
+    # list_chats() with no project = loose chats only
+    loose_ids = {c.id for c in list_chats(project_id=None)}
+    assert loose.id in loose_ids and inproj.id not in loose_ids
+    # scoped to the project = only its chats
+    proj_ids = {c.id for c in list_chats(project_id=pid)}
+    assert inproj.id in proj_ids and loose.id not in proj_ids
+
+
+def test_deleting_project_makes_its_chats_loose():
+    pid = _project()
+    c = _chat(project_id=pid)
+    assert delete_project(pid) is True
+    assert get_chat(c.id).project_id is None  # loose, not deleted
+
+
+def test_run_source_defaults_to_manual_and_roundtrips():
+    rec = RunRecord.new(agent="research", task="t")
+    assert rec.source == "manual"
+    rec2 = RunRecord.new(agent="research", task="t", source="runner")
+    insert_run(rec2)
+    assert get_run(rec2.id).source == "runner"
+
+
+def test_project_memory_crud_and_cascade():
+    pid = _project()
+    m1 = add_project_memory(pid, "fact one")
+    add_project_memory(pid, "fact two")
+    assert [m.text for m in list_project_memories(pid)] == ["fact one", "fact two"]
+    assert delete_project_memory(m1.id) is True
+    assert [m.text for m in list_project_memories(pid)] == ["fact two"]
+    # cascade: deleting the project removes its memory entries
+    delete_project(pid)
+    assert list_project_memories(pid) == []
+
+
+def test_activity_excludes_chat_turn_runs():
+    # A project's "Activity" = autonomous/background runs, classified by `source`
+    # (not a session_id heuristic), so failed/orphaned chat runs don't leak.
+    pid = _project()
+    turn = RunRecord.new(agent="orchestrator", task="hi", project_id=pid, source="chat")
+    insert_run(turn)
+    bg = RunRecord.new(agent="research", task="bg", project_id=pid, source="runner")
+    insert_run(bg)
+
+    activity = {r.id for r in list_runs(project_id=pid, exclude_chats=True)}
+    assert bg.id in activity and turn.id not in activity
+    everything = {r.id for r in list_runs(project_id=pid)}
+    assert turn.id in everything and bg.id in everything
 
 
 def test_legacy_migration_adds_column_then_indexes():

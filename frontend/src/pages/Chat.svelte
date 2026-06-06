@@ -1,7 +1,10 @@
 <script lang="ts">
   import { api, streamChat } from '../lib/api'
   import { router, navigate, href, link } from '../lib/router.svelte'
-  import { relativeTime } from '../lib/time'
+  import { workspace, setScope, loadChats, loadProjects, projectName, bumpActivity, setLive } from '../lib/workspace.svelte'
+  import { errorText } from '../lib/errors'
+  import Page from '../components/Page.svelte'
+  import ProjectRail from '../components/ProjectRail.svelte'
   import ChatLog from '../chat/ChatLog.svelte'
   import { applyEvent, freshState, type ChatItem, type ReducerState } from '../chat/events'
   import type { Catalog, ChatSummary } from '../lib/types'
@@ -9,28 +12,34 @@
   let { sessionId }: { sessionId: string | null } = $props()
 
   let catalog = $state<Catalog>({ agents: [], commands: [] })
-  let chats = $state<ChatSummary[]>([])
   let activeChat = $state<ChatSummary | null>(null)
-  // The project whose chats the sidebar shows. A chat is always viewed inside
-  // its project — the active chat's project is authoritative; otherwise the
-  // ?project= query, else Inbox.
-  let scopeProjectId = $state('inbox')
-  let projectsById = $state<Record<string, string>>({})
   let items = $state<ChatItem[]>([])
   let streaming = $state(false)
   let streamingIndex = $state(-1)
   let pendingAgent = $state<string | null>(null)
   let input = $state('')
-  let showNewForm = $state(false)
-  let newAgent = $state('orchestrator')
 
   let rstate: ReducerState = freshState()
   let loadedId: string | null = null
   let autoSent = false
   let messagesEl: HTMLDivElement | undefined = $state()
 
+  // Scope = the project whose conversations the rail + sidebar show (null =
+  // loose). It lives in the shared workspace store now; a chat is viewed inside
+  // its project (the active chat's project is authoritative), else the ?project=
+  // query. Initialise synchronously so there's no loose-then-rescope flash.
+  setScope(router.route.query.get('project'))
+  const scopeId = $derived(workspace.scopeProjectId)
+  const scopeName = $derived(projectName(scopeId) ?? 'Recents')
+
   const currentAgent = $derived(activeChat?.agent ?? pendingAgent ?? 'orchestrator')
-  const scopeProjectName = $derived(projectsById[scopeProjectId] ?? scopeProjectId)
+
+  // Breadcrumb scope switcher.
+  let scopeMenuOpen = $state(false)
+  function switchScope(id: string | null) {
+    scopeMenuOpen = false
+    navigate(id ? '/chat?project=' + encodeURIComponent(id) : '/chat')
+  }
 
   function scrollSoon() {
     requestAnimationFrame(() => messagesEl?.scrollTo(0, messagesEl.scrollHeight))
@@ -38,22 +47,7 @@
 
   $effect(() => {
     void api.catalog().then((c) => (catalog = c)).catch(() => {})
-    void api.projects().then((ps) => {
-      projectsById = Object.fromEntries(ps.map((p) => [p.id, p.name]))
-    }).catch(() => {})
-  })
-
-  async function refreshChats() {
-    try {
-      chats = await api.chats(scopeProjectId)
-    } catch {
-      /* ignore */
-    }
-  }
-  // Reload the sidebar whenever the scope project changes.
-  $effect(() => {
-    void scopeProjectId
-    void refreshChats()
+    void loadProjects()
   })
 
   // React to the active session id (route change). Skip our own URL pivot
@@ -70,7 +64,7 @@
         try {
           const c = await api.chat(sid)
           activeChat = c
-          scopeProjectId = c.project_id || 'inbox' // a chat is scoped to its project
+          setScope(c.project_id) // a chat is scoped to its project (null = loose)
         } catch {
           activeChat = null
         }
@@ -78,7 +72,18 @@
       })()
     } else {
       activeChat = null
-      scopeProjectId = router.route.query.get('project') || 'inbox'
+      setScope(router.route.query.get('project'))
+    }
+  })
+
+  // The breadcrumb title comes from `activeChat`, but a freshly-created chat
+  // starts as "(new)" until the backend generates a title. Once Recents
+  // refreshes with the real title, fold it back into the breadcrumb.
+  $effect(() => {
+    if (!activeChat) return
+    const fresh = workspace.chats.find((c) => c.id === activeChat!.id)
+    if (fresh && fresh.title !== activeChat.title) {
+      activeChat = { ...activeChat, title: fresh.title }
     }
   })
 
@@ -111,6 +116,7 @@
     input = ''
     items.push({ kind: 'user', text })
     streaming = true
+    setLive(true, 'thinking…')
     scrollSoon()
 
     const fields: Record<string, string> = { prompt: text }
@@ -120,22 +126,28 @@
       if (activeChat.project_id) fields.project_id = activeChat.project_id
     } else {
       if (pendingAgent) fields.chat_agent = pendingAgent
-      fields.project_id = router.route.query.get('project') || 'inbox'
+      const proj = router.route.query.get('project')
+      if (proj) fields.project_id = proj // else loose
     }
 
     try {
       for await (const ev of streamChat(fields)) {
         if (ev.type === 'done') break
+        // Reflect what the agent is doing into the rail's live Progress row.
+        if (ev.type === 'tool_use') setLive(true, `using ${ev.name}`)
+        else if (ev.type === 'thinking') setLive(true, 'thinking…')
+        else if (ev.type === 'text') setLive(true, 'responding…')
         const r = applyEvent(items, rstate, ev)
         if (r.session && !activeChat) {
           const id = r.session
-          const proj = router.route.query.get('project') || 'inbox'
+          const proj = router.route.query.get('project')
           activeChat = {
             id, title: '(new)', agent: pendingAgent ?? 'orchestrator',
             project_id: proj, updated_at: new Date().toISOString(),
             created_at: new Date().toISOString(),
           }
-          scopeProjectId = proj
+          setScope(proj)
+          try { localStorage.setItem('bran.didChat', '1') } catch { /* ignore */ }
           loadedId = id // pre-set so the route effect won't reload + wipe
           navigate('/chat/' + id)
         }
@@ -143,31 +155,14 @@
         scrollSoon()
       }
     } catch (e) {
-      items.push({ kind: 'error', message: String(e) })
+      items.push({ kind: 'error', message: errorText(e) })
     } finally {
       streaming = false
       streamingIndex = -1
-      void refreshChats()
+      setLive(false)
+      void loadChats() // refresh the sidebar Recents
+      bumpActivity() // refresh the rail's Progress (new run recorded)
     }
-  }
-
-  function startNewChat() {
-    pendingAgent = newAgent
-    activeChat = null
-    items = []
-    rstate = freshState()
-    loadedId = null
-    showNewForm = false
-    navigate('/chat?project=' + encodeURIComponent(scopeProjectId))
-  }
-
-  async function deleteChat(id: string, ev: Event) {
-    ev.preventDefault()
-    ev.stopPropagation()
-    if (!confirm('Delete this chat? The SDK transcript stays on disk.')) return
-    await api.deleteChat(id)
-    if (activeChat?.id === id) navigate('/chat')
-    else chats = chats.filter((c) => c.id !== id)
   }
 
   // --- Autocomplete (/ commands, @ agents) ---
@@ -216,64 +211,35 @@
   }
 </script>
 
-<header class="page-header">
-  <h1>Chat</h1>
-  <span class="subheading">
-    {#if scopeProjectId !== 'inbox'}
-      in <a href={href('/projects/' + scopeProjectId)} use:link class="text-accent-soft" style="text-decoration: none;">{scopeProjectName}</a>
-    {:else}Inbox{/if}
-    {#if activeChat} · {activeChat.agent}{/if}
-  </span>
-  <div class="page-actions">
-    <span class="text-muted" style="font-size: 11px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.1em;">
-      {streaming ? 'thinking…' : ''}
-    </span>
-  </div>
-</header>
-
-<div class="px-8 py-6">
-  <div style="display: flex; gap: 16px; height: calc(100vh - 180px);">
-    <!-- Chat list (scoped to the current project) -->
-    <aside class="card flush" style="width: 260px; flex-shrink: 0; display: flex; flex-direction: column; padding: 0;">
-      <div style="padding: 14px;">
-        <button class="btn-primary" style="width: 100%;" onclick={() => (showNewForm = !showNewForm)}>+ new chat</button>
-        {#if showNewForm}
-          <div class="card-quiet" style="margin-top: 10px;">
-            <span class="label-cap" style="display: block; margin-bottom: 4px;">Agent</span>
-            <select class="field" bind:value={newAgent}>
-              {#each catalog.agents as a}<option value={a.name}>{a.name}</option>{/each}
-            </select>
-            <div style="display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px;">
-              <button class="btn-ghost" onclick={() => (showNewForm = false)}>cancel</button>
-              <button class="btn-primary" onclick={startNewChat}>start</button>
-            </div>
+<Page fill={true}>
+  {#snippet head()}
+    <!-- Cowork-style breadcrumb: <scope ▾> / conversation -->
+    <div class="bc">
+      <span class="crumb-wrap">
+        <button class="crumb crumb-scope" onclick={() => (scopeMenuOpen = !scopeMenuOpen)}>
+          {scopeName}
+          <svg width="11" height="11" viewBox="0 0 10 10" fill="none" aria-hidden="true" style="margin-left: 4px;">
+            <path d="M2 4l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+        {#if scopeMenuOpen}
+          <div class="crumb-menu card">
+            <button class="crumb-opt" class:on={!scopeId} onclick={() => switchScope(null)}>Recents (loose chats)</button>
+            {#each workspace.projects as p}
+              <button class="crumb-opt" class:on={scopeId === p.id} onclick={() => switchScope(p.id)}>{p.name}</button>
+            {/each}
           </div>
         {/if}
-      </div>
-      <div style="padding: 0 14px 6px;">
-        <div class="label-cap">{scopeProjectName} · conversations</div>
-      </div>
-      <div style="flex: 1; overflow-y: auto; padding: 0 8px 14px;">
-        {#each chats as c}
-          <a href={href('/chat/' + encodeURIComponent(c.id))} use:link
-             class="chat-row" style="display: block; padding: 8px 10px; border-radius: var(--radius); margin-bottom: 3px; text-decoration: none; background: {activeChat?.id === c.id ? 'var(--accent-glow)' : 'transparent'};">
-            <div style="display: flex; align-items: center; gap: 6px;">
-              {#if activeChat?.id === c.id && streaming}<span class="live-dot sm"></span>{/if}
-              <span style="font-size: 13px; font-weight: 500; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: {activeChat?.id === c.id ? 'var(--accent-soft)' : 'var(--fg-bright)'};">{c.title}</span>
-              <button onclick={(e) => deleteChat(c.id, e)} title="delete" style="background: transparent; border: 0; color: var(--muted); cursor: pointer;">×</button>
-            </div>
-            <div style="display: flex; gap: 6px;">
-              <span class="font-mono" style="font-size: 10px; color: var(--fg-dim);">{c.agent}</span>
-              <span class="ml-auto text-muted font-mono" style="font-size: 9px;">{relativeTime(c.updated_at)}</span>
-            </div>
-          </a>
-        {:else}
-          <div class="text-muted" style="padding: 20px 14px; font-size: 12px; text-align: center; font-style: italic;">No conversations in this project yet.</div>
-        {/each}
-      </div>
-    </aside>
+      </span>
+      <span class="crumb-sep">/</span>
+      <span class="crumb-title">{activeChat?.title ?? 'New chat'}</span>
+      {#if activeChat}<span class="crumb-agent mono">{activeChat.agent}</span>{/if}
+    </div>
+    <span class="ml-auto thinking">{streaming ? 'thinking…' : ''}</span>
+  {/snippet}
 
-    <!-- Message area -->
+  <div style="display: flex; gap: 16px; flex: 1; min-height: 0;">
+    <!-- Center: conversation + composer -->
     <div style="flex: 1; min-width: 0; display: flex; flex-direction: column;">
       <div bind:this={messagesEl} class="space-y-3" style="flex: 1; overflow-y: auto; padding-right: 6px;">
         {#if !items.length}
@@ -281,6 +247,15 @@
             <div class="brackets">[       ]</div>
             <h3>{currentAgent !== 'orchestrator' ? `chat with ${currentAgent}` : 'start a conversation'}</h3>
             <p class="cta">type a message below — try <code>/digest</code> or <code>@research</code></p>
+            {#if !activeChat}
+              <div style="margin-top: 16px; display: inline-flex; align-items: center; gap: 8px;">
+                <span class="label-cap">agent</span>
+                <select class="field" bind:value={pendingAgent} style="font-size: 12px; width: auto;">
+                  <option value={null}>orchestrator</option>
+                  {#each catalog.agents as a}<option value={a.name}>{a.name}</option>{/each}
+                </select>
+              </div>
+            {/if}
           </div>
         {:else}
           <ChatLog {items} {streamingIndex} />
@@ -305,7 +280,7 @@
             <textarea bind:value={input} oninput={refreshAc} onkeydown={onKeydown}
                       rows="2" placeholder="Send a message… (try / or @)" class="field"
                       style="resize: none; font-family: var(--font-prose); font-size: 15px;"></textarea>
-            <button class="btn-primary" disabled={streaming} onclick={send} style="white-space: nowrap;">Send ↵</button>
+            <button class="btn-primary" disabled={streaming} onclick={send} style="white-space: nowrap;">send ↵</button>
           </div>
           <div class="text-muted" style="font-size: 10px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.12em; margin-top: 6px;">
             ⏎ send · ⇧⏎ newline · / commands · @ agents · {currentAgent}
@@ -313,5 +288,93 @@
         </div>
       </div>
     </div>
+
+    <!-- Right rail: project context (Cowork-style), only when in a project. -->
+    {#if scopeId}
+      <aside class="chat-rail">
+        <div style="margin-bottom: 10px; display: flex; align-items: baseline; gap: 8px;">
+          <a href={href('/projects/' + encodeURIComponent(scopeId))} use:link class="text-bright" style="font-weight: 600; text-decoration: none;">{scopeName}</a>
+          <span class="label-cap">project</span>
+        </div>
+        <ProjectRail projectId={scopeId} mode="chat" />
+      </aside>
+    {/if}
   </div>
-</div>
+</Page>
+
+<style>
+  /* Breadcrumb bar — prose, prominent, like Cowork's center-top crumb. */
+  .bc {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-family: var(--font-prose);
+    font-size: 20px;
+    letter-spacing: -0.01em;
+    min-width: 0;
+  }
+  .crumb-wrap { position: relative; display: inline-block; }
+  .crumb {
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    font: inherit;
+    display: inline-flex;
+    align-items: center;
+    padding: 0;
+  }
+  .crumb-scope { color: var(--muted); }
+  .crumb-scope:hover { color: var(--accent-soft); }
+  .crumb-sep { color: var(--border2); }
+  .crumb-title {
+    color: var(--fg-bright);
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .crumb-agent {
+    font-size: 11px;
+    color: var(--accent-soft);
+    align-self: center;
+  }
+  .thinking {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+  }
+  .crumb-menu {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 6px;
+    padding: 4px;
+    min-width: 200px;
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+  }
+  .crumb-opt {
+    text-align: left;
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius);
+    padding: 7px 10px;
+    cursor: pointer;
+    color: var(--fg);
+    font-size: 13px;
+    text-transform: none;
+    letter-spacing: 0;
+    font-family: var(--font-ui);
+  }
+  .crumb-opt:hover { background: var(--surface2); }
+  .crumb-opt.on { color: var(--accent-soft); }
+  .chat-rail {
+    width: 320px;
+    flex-shrink: 0;
+    overflow-y: auto;
+    padding-left: 4px;
+  }
+</style>

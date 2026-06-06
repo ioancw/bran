@@ -3,11 +3,14 @@
   import { installCodeCopyHandler } from './lib/markdown'
   import { api } from './lib/api'
   import Sidebar from './components/Sidebar.svelte'
+  import ConfirmHost from './components/ConfirmHost.svelte'
   import Chat from './pages/Chat.svelte'
   import Runs from './pages/Runs.svelte'
   import RunDetail from './pages/RunDetail.svelte'
   import Agents from './pages/Agents.svelte'
+  import AgentDetail from './pages/AgentDetail.svelte'
   import Runners from './pages/Runners.svelte'
+  import RunnerDetail from './pages/RunnerDetail.svelte'
   import Projects from './pages/Projects.svelte'
   import ProjectDetail from './pages/ProjectDetail.svelte'
 
@@ -20,12 +23,13 @@
   $effect(() => {
     void (async () => {
       try {
-        const [agents, projects, runners] = await Promise.all([
-          api.agents(), api.projects(), api.schedules(),
+        const [agents, projects, runners, runs] = await Promise.all([
+          api.agents(), api.projects(), api.schedules(), api.runs({ limit: 200 }),
         ])
         counts.agents = agents.length
         counts.projects = projects.length
         counts.runners = runners.length
+        counts.runs = runs.length
       } catch {
         /* leave counts null */
       }
@@ -46,8 +50,12 @@
       <RunDetail runId={seg[1]} />
     {:else if seg[0] === 'runs'}
       <Runs />
+    {:else if seg[0] === 'agents' && seg[1]}
+      <AgentDetail agentName={decodeURIComponent(seg[1])} />
     {:else if seg[0] === 'agents'}
       <Agents />
+    {:else if seg[0] === 'runners' && seg[1]}
+      <RunnerDetail runnerName={decodeURIComponent(seg[1])} />
     {:else if seg[0] === 'runners'}
       <Runners />
     {:else if seg[0] === 'projects' && seg[1]}
@@ -59,3 +67,4 @@
     {/if}
   </main>
 </div>
+<ConfirmHost />
