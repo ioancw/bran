@@ -4,7 +4,7 @@
   // so history is the agent's scheduled/manual runs.)
   import { api } from '../lib/api'
   import { href, link, navigate } from '../lib/router.svelte'
-  import { fmtCost, relativeTime } from '../lib/time'
+  import { fmtCost, relativeTime, localDateTime } from '../lib/time'
   import { errorText } from '../lib/errors'
   import { confirmDialog } from '../lib/confirm.svelte'
   import Page from '../components/Page.svelte'
@@ -19,6 +19,7 @@
   let error = $state<string | null>(null)
   let loaded = $state(false)
   let firing = $state(false)
+  let busy = $state(false)
 
   const projName = (id: string | null) => (id ? projects.find((p) => p.id === id)?.name ?? id : null)
 
@@ -48,6 +49,17 @@
     } catch (e) {
       error = String(e)
       firing = false
+    }
+  }
+  async function toggleEnabled() {
+    if (!runner || busy) return
+    busy = true
+    try {
+      runner = await api.setScheduleEnabled(runner.name, !runner.enabled)
+    } catch (e) {
+      error = String(e)
+    } finally {
+      busy = false
     }
   }
   async function remove() {
@@ -106,7 +118,11 @@
           <div class="label-cap" style="margin-bottom: 8px;">Trigger</div>
           <div style="font-size: 13px;" class="space-y-2">
             <div><span class="label-cap">schedule</span><br /><span class="mono text-bright">{runner.cron}</span></div>
-            <div><span class="label-cap">state</span> <span class="src" style="color: {runner.enabled ? 'var(--accent-soft)' : 'var(--muted)'};">{runner.enabled ? 'enabled' : 'paused'}</span></div>
+            <div><span class="label-cap">next</span> <span class="text-dim">{runner.enabled && runner.next_run ? localDateTime(runner.next_run) : '—'}</span></div>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <span class="src" style="color: {runner.enabled ? 'var(--accent-soft)' : 'var(--muted)'};">{runner.enabled ? 'enabled' : 'paused'}</span>
+              <button class="btn-ghost" disabled={busy} onclick={toggleEnabled}>{busy ? '…' : runner.enabled ? 'pause' : 'resume'}</button>
+            </div>
           </div>
         </div>
 

@@ -47,6 +47,7 @@ export interface ScheduleRecord {
   enabled: boolean
   created_at: string
   project_id: string | null // null = standalone Runner
+  next_run?: string | null // computed next fire time (null when paused/invalid)
 }
 
 export interface ChatSummary {

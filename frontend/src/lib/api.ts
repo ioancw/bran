@@ -86,6 +86,10 @@ export const api = {
     const r = await fetch(`/spa/schedules/${encodeURIComponent(name)}`, { method: 'DELETE' })
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
   },
+  setScheduleEnabled: (name: string, enabled: boolean) =>
+    form<ScheduleRecord>(`/spa/schedules/${encodeURIComponent(name)}/enabled`, {
+      enabled: enabled ? 'true' : 'false',
+    }),
   moveChat: (chatId: string, projectId: string) =>
     form<{ chat_id: string; project_id: string }>(
       `/spa/chats/${encodeURIComponent(chatId)}/move`, { project_id: projectId },

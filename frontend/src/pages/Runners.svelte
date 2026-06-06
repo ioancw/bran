@@ -5,6 +5,7 @@
   import { router, href, link } from '../lib/router.svelte'
   import { confirmDialog } from '../lib/confirm.svelte'
   import { errorText } from '../lib/errors'
+  import { localDateTime } from '../lib/time'
   import Page from '../components/Page.svelte'
   import type { AgentInfo, ProjectSummary, ScheduleRecord } from '../lib/types'
 
@@ -68,6 +69,14 @@
     await api.deleteSchedule(name)
     await load()
   }
+  async function toggle(r: ScheduleRecord) {
+    try {
+      const updated = await api.setScheduleEnabled(r.name, !r.enabled)
+      runners = runners.map((x) => (x.name === r.name ? updated : x))
+    } catch (e) {
+      error = String(e)
+    }
+  }
 </script>
 
 <Page title="Runners">
@@ -110,10 +119,10 @@
       <div class="empty-state"><h3>no runners</h3><p class="cta">create one to run an agent on a schedule</p></div>
     {:else}
       <div class="card flush" style="overflow-x: auto;">
-        <table style="width: 100%; border-collapse: collapse; min-width: 640px;">
+        <table style="width: 100%; border-collapse: collapse; min-width: 780px;">
           <thead>
             <tr class="label-cap" style="text-align: left;">
-              <th style="padding: 10px 14px;">Name</th><th>Agent</th><th>Cron</th><th>Attached</th><th>Task</th><th></th>
+              <th style="padding: 10px 14px;">Name</th><th>Agent</th><th>Cron</th><th>Next</th><th>Attached</th><th>State</th><th>Task</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -124,8 +133,10 @@
                 </td>
                 <td class="mono text-accent-soft">{r.agent}</td>
                 <td class="mono text-dim">{r.cron}</td>
+                <td class="text-dim" style="font-size: 12px; white-space: nowrap;">{r.enabled && r.next_run ? localDateTime(r.next_run) : '—'}</td>
                 <td class="text-dim">{projName(r.project_id) ?? '—'}</td>
-                <td class="text-dim" style="max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{r.task}</td>
+                <td><button class="state-btn" class:on={r.enabled} onclick={() => toggle(r)} title={r.enabled ? 'pause' : 'resume'}>{r.enabled ? 'on' : 'paused'}</button></td>
+                <td class="text-dim" style="max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{r.task}</td>
                 <td><button class="btn-ghost" onclick={() => remove(r.name)}>×</button></td>
               </tr>
             {/each}
@@ -135,3 +146,21 @@
     {/if}
   </div>
 </Page>
+
+<style>
+  .state-btn {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border2);
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    transition: all 0.12s var(--transition);
+  }
+  .state-btn.on { color: var(--accent-soft); border-color: var(--accent-soft); background: var(--accent-glow); }
+  .state-btn:hover { border-color: var(--muted); }
+</style>
