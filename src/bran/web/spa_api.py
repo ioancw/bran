@@ -153,13 +153,14 @@ async def agents() -> list[dict[str, Any]]:
 async def runs(
     agent: str | None = None, status_: str | None = None,
     project_id: str | None = None, schedule_id: str | None = None,
-    limit: int = 200,
+    exclude_chats: bool = False, limit: int = 200,
 ) -> list[dict[str, Any]]:
     return [
         asdict(r)
         for r in list_runs(agent=agent or None, status=status_ or None,
                            project_id=project_id or None,
-                           schedule_id=schedule_id or None, limit=limit)
+                           schedule_id=schedule_id or None,
+                           exclude_chats=exclude_chats, limit=limit)
     ]
 
 

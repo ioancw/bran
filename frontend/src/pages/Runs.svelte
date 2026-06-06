@@ -11,8 +11,9 @@
   let loaded = $state(false)
   let error = $state<string | null>(null)
 
-  // Source filter — turns the flat log into a filterable activity feed.
-  const SOURCES = ['all', 'chat', 'runner', 'spawn', 'manual'] as const
+  // The Runs page is the fleet activity log — autonomous/managed executions.
+  // Interactive chat turns live in Chat/Recents, so they're excluded here.
+  const SOURCES = ['all', 'runner', 'spawn', 'manual'] as const
   type Source = (typeof SOURCES)[number]
   let filter = $state<Source>('all')
 
@@ -21,7 +22,7 @@
 
   async function load() {
     try {
-      runs = await api.runs({ limit: 200 })
+      runs = await api.runs({ limit: 200, exclude_chats: true })
     } catch (e) {
       error = String(e)
     } finally {
