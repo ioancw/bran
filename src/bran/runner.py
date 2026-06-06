@@ -36,6 +36,7 @@ def _begin_run(
     record: RunRecord | None,
     project_id: str | None = None,
     source: str = "manual",
+    schedule_id: str | None = None,
 ) -> RunRecord:
     """Return a freshly-`running` record, persisted.
 
@@ -51,6 +52,7 @@ def _begin_run(
             agent=agent, task=task, parent_run_id=parent_run_id,
             project_id=project_id,  # None = standalone run
             source=source,
+            schedule_id=schedule_id,
         )
         record.status = "running"
         insert_run(record)
@@ -130,6 +132,7 @@ async def run_agent(
     record: RunRecord | None = None,
     project_id: str | None = None,
     source: str = "manual",
+    schedule_id: str | None = None,
 ) -> RunRecord:
     """Execute an agent run end-to-end, returning the persisted record.
 
@@ -145,7 +148,7 @@ async def run_agent(
     `record` is supplied — the caller already set the record's project).
     """
     agent_def = get_agent(agent)  # raises KeyError if unknown
-    record = _begin_run(agent, task, parent_run_id, record, project_id, source)
+    record = _begin_run(agent, task, parent_run_id, record, project_id, source, schedule_id)
 
     options = build_options_for(
         agent_def, resume=resume_session, max_turns=max_turns,

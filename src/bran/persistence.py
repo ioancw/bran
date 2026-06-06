@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS runs (
     ended_at        TEXT,
     metadata        TEXT,
     project_id      TEXT,
-    source          TEXT
+    source          TEXT,
+    schedule_id     TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_agent      ON runs(agent);
@@ -52,7 +53,8 @@ CREATE TABLE IF NOT EXISTS schedules (
     cron        TEXT NOT NULL,
     enabled     INTEGER NOT NULL DEFAULT 1,
     created_at  TEXT NOT NULL,
-    project_id  TEXT
+    project_id  TEXT,
+    run_at      TEXT
 );
 
 -- Chat metadata. Each row corresponds to a single conversation in the web UI.
@@ -135,6 +137,10 @@ class RunRecord:
     # (scheduled) | "spawn" (background spawn_agent) | "manual" (one-shot/API).
     # Lets the project Activity feed show autonomous work and hide chat turns.
     source: str = "manual"
+    # The runner (schedule) this run belongs to, if any — set for scheduled
+    # fires and for "run now" launched from a runner, so a runner's history is
+    # exact rather than approximated by agent. None for chats/spawns/ad-hoc.
+    schedule_id: str | None = None
 
     @staticmethod
     def new(
@@ -143,6 +149,7 @@ class RunRecord:
         parent_run_id: str | None = None,
         project_id: str | None = None,
         source: str = "manual",
+        schedule_id: str | None = None,
     ) -> "RunRecord":
         return RunRecord(
             id=str(uuid.uuid4()),
@@ -152,6 +159,7 @@ class RunRecord:
             parent_run_id=parent_run_id,
             project_id=project_id,
             source=source,
+            schedule_id=schedule_id,
         )
 
     def to_row(self) -> tuple:
@@ -172,6 +180,7 @@ class RunRecord:
             json.dumps(self.metadata),
             self.project_id,
             self.source,
+            self.schedule_id,
         )
 
     @staticmethod
@@ -195,6 +204,7 @@ class RunRecord:
             # None = standalone; absent only on legacy rows read mid-migration.
             project_id=(row["project_id"] if "project_id" in keys else None),
             source=(row["source"] if "source" in keys and row["source"] else "manual"),
+            schedule_id=(row["schedule_id"] if "schedule_id" in keys else None),
         )
 
 
@@ -210,15 +220,18 @@ class ScheduleRecord:
     # Optional project this Runner is attached to (for context/visibility).
     # None = standalone automation, the default — Runners don't belong to projects.
     project_id: str | None = None
+    # One-shot trigger: an ISO-8601 datetime to fire once, then self-disable.
+    # None = a recurring cron schedule (the `cron` field). Mutually exclusive.
+    run_at: str | None = None
 
     @staticmethod
     def new(
         name: str, agent: str, task: str, cron: str,
-        project_id: str | None = None,
+        project_id: str | None = None, run_at: str | None = None,
     ) -> "ScheduleRecord":
         return ScheduleRecord(
             id=str(uuid.uuid4()), name=name, agent=agent, task=task, cron=cron,
-            project_id=project_id,
+            project_id=project_id, run_at=run_at,
         )
 
 
@@ -279,8 +292,8 @@ def insert_run(record: RunRecord) -> None:
             """INSERT INTO runs
             (id, agent, task, status, session_id, parent_run_id, result, error,
              total_cost_usd, num_turns, duration_ms, started_at, ended_at, metadata,
-             project_id, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+             project_id, source, schedule_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             record.to_row(),
         )
 
@@ -317,6 +330,7 @@ def get_run(run_id: str) -> RunRecord | None:
 def list_runs(
     agent: str | None = None, limit: int = 50, status: str | None = None,
     project_id: str | None = None, exclude_chats: bool = False,
+    schedule_id: str | None = None,
 ) -> list[RunRecord]:
     sql = "SELECT * FROM runs"
     clauses: list[str] = []
@@ -330,6 +344,9 @@ def list_runs(
     if project_id:
         clauses.append("project_id = ?")
         params.append(project_id)
+    if schedule_id:
+        clauses.append("schedule_id = ?")
+        params.append(schedule_id)
     if exclude_chats:
         # Activity = autonomous/background runs (runner fires, spawns, manual) —
         # never interactive chat turns. Keyed on the explicit `source`, so it's
@@ -356,6 +373,7 @@ def _row_to_schedule(r: sqlite3.Row) -> ScheduleRecord:
         enabled=bool(r["enabled"]),
         created_at=r["created_at"],
         project_id=(r["project_id"] if "project_id" in keys else None),
+        run_at=(r["run_at"] if "run_at" in keys else None),
     )
 
 
@@ -363,8 +381,8 @@ def insert_schedule(record: ScheduleRecord) -> None:
     with _lock, _conn() as conn:
         conn.execute(
             """INSERT INTO schedules
-               (id, name, agent, task, cron, enabled, created_at, project_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               (id, name, agent, task, cron, enabled, created_at, project_id, run_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 record.id,
                 record.name,
@@ -374,6 +392,7 @@ def insert_schedule(record: ScheduleRecord) -> None:
                 1 if record.enabled else 0,
                 record.created_at,
                 record.project_id,
+                record.run_at,
             ),
         )
 
@@ -673,6 +692,10 @@ def _migrate_runs_schedules_add_project_id() -> None:
             "WHERE source IS NULL AND session_id IN (SELECT id FROM chats)"
         )
         conn.execute("UPDATE runs SET source = 'manual' WHERE source IS NULL")
+        # schedule_id links a run to the runner that produced it (exact history);
+        # run_at marks a one-shot ("once") schedule. Both nullable, no backfill.
+        _add_column_if_missing(conn, "runs", "schedule_id", "TEXT")
+        _add_column_if_missing(conn, "schedules", "run_at", "TEXT")
         # Safe to index now that the column exists on both fresh and legacy DBs.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id)")
 

@@ -152,12 +152,14 @@ async def agents() -> list[dict[str, Any]]:
 @router.get("/runs")
 async def runs(
     agent: str | None = None, status_: str | None = None,
-    project_id: str | None = None, limit: int = 200,
+    project_id: str | None = None, schedule_id: str | None = None,
+    limit: int = 200,
 ) -> list[dict[str, Any]]:
     return [
         asdict(r)
         for r in list_runs(agent=agent or None, status=status_ or None,
-                           project_id=project_id or None, limit=limit)
+                           project_id=project_id or None,
+                           schedule_id=schedule_id or None, limit=limit)
     ]
 
 
@@ -174,12 +176,16 @@ async def new_run(
     agent: Annotated[str, Form()],
     task: Annotated[str, Form()],
     project_id: Annotated[str | None, Form()] = None,
+    schedule_id: Annotated[str | None, Form()] = None,
 ) -> dict[str, Any]:
     try:
         get_agent(agent)
     except KeyError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
-    record = RunRecord.new(agent=agent, task=task, project_id=project_id or None)
+    record = RunRecord.new(
+        agent=agent, task=task, project_id=project_id or None,
+        schedule_id=schedule_id or None,
+    )
     insert_run(record)
 
     async def _go():
@@ -220,16 +226,27 @@ async def run_transcript(run_id: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _schedule_dict(s: ScheduleRecord) -> dict[str, Any]:
-    """A schedule plus its computed next fire time (None when paused/invalid)."""
+    """A schedule plus its computed next fire time (None when paused/invalid).
+    One-shot runners (`run_at` set) fire once: next_run is run_at while it's
+    still in the future, else None."""
     d = asdict(s)
     next_run: str | None = None
     if s.enabled:
-        try:
-            from bran.scheduler import next_run_for
+        if s.run_at:
+            from datetime import datetime, timezone
 
-            next_run = next_run_for(s.cron)
-        except Exception:
-            next_run = None
+            try:
+                when = datetime.fromisoformat(s.run_at)
+                next_run = s.run_at if when > datetime.now(timezone.utc) else None
+            except ValueError:
+                next_run = None
+        else:
+            try:
+                from bran.scheduler import next_run_for
+
+                next_run = next_run_for(s.cron)
+            except Exception:
+                next_run = None
     d["next_run"] = next_run
     return d
 
@@ -243,16 +260,29 @@ async def schedules(project_id: str | None = None) -> list[dict[str, Any]]:
 async def new_schedule(
     name: Annotated[str, Form()],
     agent: Annotated[str, Form()],
-    cron: Annotated[str, Form()],
+    cron: Annotated[str, Form()] = "",
     task: Annotated[str, Form()] = "",
     project_id: Annotated[str | None, Form()] = None,
+    run_at: Annotated[str | None, Form()] = None,
 ) -> dict[str, Any]:
     try:
         get_agent(agent)
     except KeyError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+    run_at = (run_at or "").strip() or None
+    if run_at:
+        # One-shot: validate the datetime; cron is unused for these.
+        from datetime import datetime
+
+        try:
+            datetime.fromisoformat(run_at)
+        except ValueError:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"invalid run_at: {run_at!r}")
+        cron = ""
+    elif not cron.strip():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "cron or run_at required")
     rec = ScheduleRecord.new(name=name, agent=agent, task=task, cron=cron,
-                             project_id=project_id or None)
+                             project_id=project_id or None, run_at=run_at)
     insert_schedule(rec)
     # Register with the live scheduler if one is running (lazy import so the
     # web module doesn't pull APScheduler in when --no-scheduler is used).
@@ -262,7 +292,7 @@ async def new_schedule(
         register_schedule(rec)
     except Exception:
         pass
-    return asdict(rec)
+    return _schedule_dict(rec)
 
 
 @router.post("/schedules/{name}/enabled")
