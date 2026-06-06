@@ -52,7 +52,7 @@ export interface ChatSummary {
   id: string
   title: string
   agent: string
-  project_id: string
+  project_id: string | null // null = loose chat (no project)
   updated_at: string
   created_at: string
 }
@@ -64,7 +64,6 @@ export interface ProjectSummary {
   instructions: string
   n_chats: number
   updated_at: string
-  is_inbox: boolean
 }
 
 export interface BriefingSummary {
@@ -73,10 +72,18 @@ export interface BriefingSummary {
   mtime: number
 }
 
+export interface ProjectMemory {
+  id: string
+  project_id: string
+  text: string
+  created_at: string
+}
+
 // The project "workspace hub": a project plus everything that flows through it.
 export interface ProjectDetail {
   project: ProjectSummary
   chats: ChatSummary[]
+  memories: ProjectMemory[]
   schedules: ScheduleRecord[]
   runs: RunRecord[]
 }

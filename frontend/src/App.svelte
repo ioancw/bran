@@ -3,6 +3,7 @@
   import { installCodeCopyHandler } from './lib/markdown'
   import { api } from './lib/api'
   import Sidebar from './components/Sidebar.svelte'
+  import ConfirmHost from './components/ConfirmHost.svelte'
   import Chat from './pages/Chat.svelte'
   import Runs from './pages/Runs.svelte'
   import RunDetail from './pages/RunDetail.svelte'
@@ -20,12 +21,13 @@
   $effect(() => {
     void (async () => {
       try {
-        const [agents, projects, runners] = await Promise.all([
-          api.agents(), api.projects(), api.schedules(),
+        const [agents, projects, runners, runs] = await Promise.all([
+          api.agents(), api.projects(), api.schedules(), api.runs({ limit: 200 }),
         ])
         counts.agents = agents.length
         counts.projects = projects.length
         counts.runners = runners.length
+        counts.runs = runs.length
       } catch {
         /* leave counts null */
       }
@@ -59,3 +61,4 @@
     {/if}
   </main>
 </div>
+<ConfirmHost />

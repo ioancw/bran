@@ -6,6 +6,7 @@ import type {
   ChatEvent,
   ChatSummary,
   ProjectDetail,
+  ProjectMemory,
   ProjectSummary,
   RunRecord,
   ScheduleRecord,
@@ -62,8 +63,17 @@ export const api = {
     const r = await fetch(`/spa/projects/${encodeURIComponent(id)}`, { method: 'DELETE' })
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
   },
-  pinMemory: (projectId: string, text: string) =>
-    form<{ ok: boolean }>(`/spa/projects/${encodeURIComponent(projectId)}/memory/append`, { text }),
+  memories: (projectId: string) =>
+    getJSON<ProjectMemory[]>(`/spa/projects/${encodeURIComponent(projectId)}/memory`),
+  addMemory: (projectId: string, text: string) =>
+    form<ProjectMemory>(`/spa/projects/${encodeURIComponent(projectId)}/memory`, { text }),
+  deleteMemory: async (projectId: string, entryId: string): Promise<void> => {
+    const r = await fetch(
+      `/spa/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(entryId)}`,
+      { method: 'DELETE' },
+    )
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
+  },
 
   newSchedule: (fields: { name: string; agent: string; cron: string; task?: string; project_id?: string }) => {
     const body: Record<string, string> = {
