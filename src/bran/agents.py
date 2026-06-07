@@ -266,7 +266,12 @@ ORCHESTRATOR = Agent(
         "  in finance' requests, delegate to the `finance-news` agent.\n"
         "- For long-running or fire-and-forget tasks that should run ONCE, now, "
         "  use `mcp__bran__spawn_agent` to launch a background run and return "
-        "  immediately with its run ID.\n"
+        "  immediately with its run ID. To fan work out, call it once per task. "
+        "  Later (once they finish) collect each run's output with "
+        "  `mcp__bran__get_run_result` (by the run_id spawn gave you) and "
+        "  synthesise the results into one answer — that is the point of fanning "
+        "  out. If a run is still running, say so and check back; don't loop. Use "
+        "  `mcp__bran__list_recent_runs` to find recent run ids if needed.\n"
         "- To set up a RECURRING or scheduled job (the user says 'schedule', "
         "  'every morning/weekday', 'each week', 'at 7am', 'remind me to run X'), "
         "  use the Runner tools: `mcp__bran__create_runner` (a cron expression for "
@@ -283,6 +288,8 @@ ORCHESTRATOR = Agent(
         "Read", "Glob", "Grep", "WebSearch", "WebFetch",
         "Agent",  # required to invoke subagents
         "mcp__bran__spawn_agent",
+        "mcp__bran__get_run_result",
+        "mcp__bran__list_recent_runs",
         "mcp__bran__save_project_memory",
         "mcp__bran__create_runner",
         "mcp__bran__list_runners",
