@@ -14,6 +14,7 @@ from typing import Any
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
 from bran.background import current_project_id, current_run_id, spawn_background
+from bran.tools.schedules import RUNNER_TOOLS
 
 
 @tool(
@@ -124,5 +125,5 @@ async def save_project_memory(args: dict[str, Any]) -> dict[str, Any]:
 spawn_agent_server = create_sdk_mcp_server(
     name="bran",
     version="0.1.0",
-    tools=[spawn_agent, save_project_memory],
+    tools=[spawn_agent, save_project_memory, *RUNNER_TOOLS],
 )
