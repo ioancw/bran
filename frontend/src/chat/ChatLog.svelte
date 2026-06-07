@@ -12,15 +12,14 @@
 
 {#each items as item, i (i)}
   {#if item.kind === 'user'}
-    <div class="card" style="background: var(--accent-glow); border-color: rgba(255,255,255,0.04);">
-      <div class="label-cap" style="color: var(--accent-soft); margin-bottom: 6px;">You</div>
-      <div class="text-fg" style="font-family: var(--font-prose); font-size: 15px; line-height: 1.55; white-space: pre-wrap;">{item.text}</div>
+    <!-- Your turn: a compact right-aligned bubble (position says who it is). -->
+    <div class="msg-user">
+      <div class="user-bubble">{item.text}</div>
     </div>
   {:else if item.kind === 'assistant'}
-    <div class="card">
-      <div class="label-cap" style="margin-bottom: 6px;">assistant</div>
-      <div class="msg-prose"><Prose text={item.text} streaming={i === streamingIndex} /></div>
-    </div>
+    <!-- bran's turn: prose flows on the canvas, no card chrome — the answer is
+         the page, not a boxed message. -->
+    <div class="msg-assistant"><Prose text={item.text} streaming={i === streamingIndex} /></div>
   {:else if item.kind === 'thinking'}
     <details class="card" style="padding: 0;">
       <summary class="label-cap" style="padding: 10px 16px; cursor: pointer;">💭 thinking · {item.text.length} chars</summary>
@@ -44,3 +43,28 @@
     <div class="card" style="color: var(--red); border-color: color-mix(in srgb, var(--red) 30%, transparent);">{item.message}</div>
   {/if}
 {/each}
+
+<style>
+  .msg-user {
+    display: flex;
+    justify-content: flex-end;
+  }
+  .user-bubble {
+    max-width: 80%;
+    background: var(--accent-glow);
+    border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+    border-radius: 16px 16px 5px 16px;
+    padding: 9px 15px;
+    font-family: var(--font-prose);
+    font-size: 15px;
+    line-height: 1.5;
+    color: var(--fg-bright);
+    white-space: pre-wrap;
+  }
+  /* Assistant prose: borderless, generous, with a touch of left inset so it
+     reads as reading material rather than a chat box. */
+  .msg-assistant {
+    padding: 2px 4px 2px 2px;
+    line-height: 1.65;
+  }
+</style>
