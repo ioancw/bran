@@ -171,14 +171,22 @@
   let acItems = $state<AcItem[]>([])
   let acIndex = $state(0)
 
+  // Where the / or @ token being completed starts, so pickAc can splice just
+  // that token (not clobber the whole message).
+  let acTokenStart = -1
+
   function refreshAc() {
-    const m = input.match(/^([/@])(\S*)$/)
+    // Match the token at the end of the input: a / or @ at the start of the
+    // line OR after whitespace, so mentions work mid-sentence ("ask @research…"),
+    // not only as the first character.
+    const m = input.match(/(^|\s)([/@])(\S*)$/)
     if (!m) {
       acOpen = false
       return
     }
-    const [, trigger, q] = m
-    const query = q.toLowerCase()
+    const trigger = m[2]
+    const query = m[3].toLowerCase()
+    acTokenStart = (m.index ?? 0) + m[1].length
     if (trigger === '/') {
       acItems = catalog.commands
         .filter((c) => c.name.toLowerCase().startsWith(query))
@@ -194,7 +202,8 @@
   function pickAc(i: number) {
     const it = acItems[i]
     if (!it) return
-    input = it.token
+    // Replace only the token being completed, preserving any text before it.
+    input = input.slice(0, acTokenStart < 0 ? 0 : acTokenStart) + it.token
     acOpen = false
   }
   function onKeydown(e: KeyboardEvent) {
