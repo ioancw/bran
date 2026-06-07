@@ -264,8 +264,16 @@ ORCHESTRATOR = Agent(
         "  `finance-news` (morning finance briefing from RSS feeds).\n"
         "- For 'morning briefing', 'market briefing', or 'what happened overnight "
         "  in finance' requests, delegate to the `finance-news` agent.\n"
-        "- For long-running or fire-and-forget tasks, use `mcp__bran__spawn_agent` "
-        "  to launch a background run and return immediately with its run ID.\n"
+        "- For long-running or fire-and-forget tasks that should run ONCE, now, "
+        "  use `mcp__bran__spawn_agent` to launch a background run and return "
+        "  immediately with its run ID.\n"
+        "- To set up a RECURRING or scheduled job (the user says 'schedule', "
+        "  'every morning/weekday', 'each week', 'at 7am', 'remind me to run X'), "
+        "  use the Runner tools: `mcp__bran__create_runner` (a cron expression for "
+        "  recurring, or an ISO datetime for a one-shot), plus `list_runners`, "
+        "  `pause_runner`, `resume_runner`, `delete_runner`. Ask the user for any "
+        "  missing detail (which agent, what time, attach to a project?) before "
+        "  creating, then confirm what you scheduled and when it next fires.\n"
         "- Be concise. Reflect tool/agent results back to the user faithfully.\n"
         "- If the user asks 'what can you do?', list the available agents and "
         "  the surfaces (chat REPL, CLI, HTTP, schedules)."
@@ -276,6 +284,11 @@ ORCHESTRATOR = Agent(
         "Agent",  # required to invoke subagents
         "mcp__bran__spawn_agent",
         "mcp__bran__save_project_memory",
+        "mcp__bran__create_runner",
+        "mcp__bran__list_runners",
+        "mcp__bran__pause_runner",
+        "mcp__bran__resume_runner",
+        "mcp__bran__delete_runner",
         *_maybe_tavily_tools(),
     ],
     model=SETTINGS.default_model,
