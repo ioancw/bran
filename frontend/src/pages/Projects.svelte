@@ -69,6 +69,13 @@
         </div>
       </div>
     {:else}
+      <section class="proj-hero">
+        <div class="proj-rule"></div>
+        <p class="proj-standfirst">
+          A workspace keeps a project's <em>conversations, memory, and scheduled agents</em> in one place — your room to think with the fleet.
+        </p>
+      </section>
+      <div class="label-cap" style="margin-bottom: 12px;">Workspaces · {projects.length}</div>
       <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px;">
         {#each projects as p}
           <a href={href('/projects/' + encodeURIComponent(p.id))} use:link class="card project-card" style="text-decoration: none; display: block;">
@@ -85,6 +92,33 @@
 </Page>
 
 <style>
+  /* Editorial entrance: an accent rule + a serif-italic standfirst that gives
+     the front door an authored, magazine feel before the workspace grid. */
+  .proj-hero {
+    max-width: 640px;
+    margin: 4px 0 30px;
+  }
+  .proj-rule {
+    width: 52px;
+    height: 2px;
+    background: var(--accent);
+    margin-bottom: 18px;
+  }
+  .proj-standfirst {
+    font-family: var(--font-prose);
+    font-style: italic;
+    font-weight: 400;
+    font-size: 23px;
+    line-height: 1.45;
+    letter-spacing: -0.01em;
+    color: var(--fg-dim);
+    margin: 0;
+  }
+  .proj-standfirst em {
+    font-style: italic;
+    color: var(--fg-bright);
+  }
+
   /* Subtle lift on the project cards — the grid is the front door. */
   .project-card {
     transition: border-color 0.15s var(--transition), transform 0.15s var(--transition);

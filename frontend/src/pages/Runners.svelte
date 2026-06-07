@@ -99,8 +99,8 @@
     {#if error}<div class="card" style="color: var(--red);">{errorText(error)}</div>{/if}
 
     {#if showForm}
-      <div class="card-quiet">
-        <span class="label-cap" style="display: block; margin-bottom: 8px;">New runner — an agent on a cron schedule</span>
+      <div class="card-quiet" style="max-width: 660px;">
+        <span class="label-cap" style="display: block; margin-bottom: 8px;">New runner — an agent on a schedule</span>
         <div class="grid grid-cols-2 gap-4">
           <input class="field" bind:value={fName} placeholder="name (unique)" />
           <select class="field" bind:value={fAgent}>

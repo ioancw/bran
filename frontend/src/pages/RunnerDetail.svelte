@@ -99,7 +99,7 @@
             <div class="space-y-2">
               {#each runs.slice(0, 20) as r}
                 <a href={href('/runs/' + r.id)} use:link class="row-link card-quiet" style="display: flex; gap: 10px; align-items: baseline; text-decoration: none;">
-                  <span class="src">{r.source}</span>
+                  <span class="src src-{r.source}">{r.source}</span>
                   <StatusBadge status={r.status} />
                   <span class="text-dim" style="font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{r.task}</span>
                   <span class="ml-auto text-muted" style="font-size: 11px; white-space: nowrap;">{relativeTime(r.started_at)} · {fmtCost(r.total_cost_usd)}</span>
@@ -159,14 +159,5 @@
     transition: background 0.12s var(--transition);
   }
   .row-link:hover { background: var(--surface2); }
-  .src {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    padding: 2px 6px;
-    border-radius: var(--radius);
-    background: var(--surface2);
-    color: var(--muted);
-  }
+  /* .src lives in global.css (shared source-pill component). */
 </style>

@@ -93,16 +93,5 @@
   .chip:hover { color: var(--fg-bright); border-color: var(--muted); }
   .chip.on { background: var(--accent-glow); border-color: var(--accent-soft); color: var(--accent-soft); }
   .chip-n { opacity: 0.6; font-family: var(--font-mono); font-size: 10px; }
-  .src {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    padding: 2px 6px;
-    border-radius: var(--radius);
-    background: var(--surface2);
-    color: var(--muted);
-  }
-  .src-runner, .src-scheduled { color: var(--accent-soft); }
-  .src-spawn { color: var(--fg-dim); }
+  /* .src / .src-* now live in global.css (shared source-pill component). */
 </style>

@@ -5,7 +5,7 @@
    is the midnight dark theme. Theme switching lives in base.html. */
 
 :root {
-  --font-ui:      'DM Sans', system-ui, -apple-system, sans-serif;
+  --font-ui:      'Schibsted Grotesk', system-ui, -apple-system, sans-serif;
   --font-mono:    'Geist Mono', monospace;
   --font-prose:   'Source Serif 4', Georgia, serif;
   --bg:           #0c0c0e;
