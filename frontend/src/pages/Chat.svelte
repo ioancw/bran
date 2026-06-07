@@ -198,21 +198,13 @@
   <div style="display: flex; gap: 16px; flex: 1; min-height: 0;">
     <!-- Center: conversation + composer -->
     <div style="flex: 1; min-width: 0; display: flex; flex-direction: column;">
-      <div bind:this={messagesEl} class="space-y-3" style="flex: 1; overflow-y: auto; padding-right: 6px;">
+      <div bind:this={messagesEl} class="space-y-3" class:chat-empty={!items.length}
+           style="flex: 1; overflow-y: auto; padding-right: 6px;">
         {#if !items.length}
-          <div class="empty-state" style="padding: 80px 24px;">
+          <div class="empty-state">
             <div class="brackets">[       ]</div>
             <h3>{currentAgent !== 'orchestrator' ? `chat with ${currentAgent}` : 'start a conversation'}</h3>
             <p class="cta">type a message below — try <code>/digest</code> or <code>@research</code></p>
-            {#if !activeChat}
-              <div style="margin-top: 16px; display: inline-flex; align-items: center; gap: 8px;">
-                <span class="label-cap">agent</span>
-                <select class="field" bind:value={pendingAgent} style="font-size: 12px; width: auto;">
-                  <option value={null}>orchestrator</option>
-                  {#each catalog.agents as a}<option value={a.name}>{a.name}</option>{/each}
-                </select>
-              </div>
-            {/if}
           </div>
         {:else}
           <ChatLog {items} {streamingIndex} />
@@ -223,7 +215,16 @@
       <div style="margin-top: 14px;">
         <Composer bind:value={input} {catalog} hint="⏎ send · ⇧⏎ newline · / @"
                   busy={streaming} placeholder="Message bran…" onsubmit={send}>
-          {#snippet leading()}<span class="composer-agent">{currentAgent}</span>{/snippet}
+          {#snippet leading()}
+            {#if activeChat}
+              <span class="composer-agent">{activeChat.agent}</span>
+            {:else}
+              <select class="composer-agent-select" bind:value={pendingAgent} title="agent for this chat">
+                <option value={null}>orchestrator</option>
+                {#each catalog.agents.filter((a) => a.name !== 'orchestrator') as a}<option value={a.name}>{a.name}</option>{/each}
+              </select>
+            {/if}
+          {/snippet}
         </Composer>
       </div>
     </div>
@@ -242,6 +243,26 @@
 </Page>
 
 <style>
+  /* New/empty chat: centre the invitation vertically so it doesn't sit top-heavy
+     above a void (the composer stays pinned at the bottom). */
+  .chat-empty {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  /* Agent picker living in the composer footer (new chats only) — styled to read
+     like the inline agent label, with a dropdown affordance. */
+  .composer-agent-select {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    outline: none;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--accent-soft);
+  }
+
   /* Breadcrumb bar — prose, prominent, like Cowork's center-top crumb. */
   .bc {
     display: flex;
