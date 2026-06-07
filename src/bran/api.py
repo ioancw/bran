@@ -14,6 +14,7 @@ in-process and starts/stops with the app's lifespan unless disabled at startup.
 
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from typing import Annotated, Any
@@ -204,6 +205,17 @@ def _build_api_router(enable_scheduler: bool) -> APIRouter:
 def build_app(enable_scheduler: bool = True) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        # Crash recovery: any run left 'pending'/'running' is an orphan from a
+        # previous process — mark it failed so it doesn't show in-progress forever.
+        try:
+            from bran.persistence import reconcile_interrupted_runs
+
+            n = reconcile_interrupted_runs()
+            if n:
+                logging.getLogger("bran.api").info("reconciled %d interrupted run(s) on startup", n)
+        except Exception:
+            logging.getLogger("bran.api").exception("run reconciliation failed")
+
         if enable_scheduler:
             from bran.scheduler import start_scheduler, stop_scheduler
 

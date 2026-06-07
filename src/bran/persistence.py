@@ -327,6 +327,23 @@ def get_run(run_id: str) -> RunRecord | None:
     return RunRecord.from_row(row) if row else None
 
 
+def reconcile_interrupted_runs() -> int:
+    """Mark any run still 'pending'/'running' as failed. Called once at server
+    startup: after a restart these are orphans — the asyncio task that was
+    driving them died with the previous process, so nothing will ever finish
+    them and they'd otherwise show in-progress (yellow) forever. Returns the
+    number reconciled."""
+    with _lock, _conn() as conn:
+        cur = conn.execute(
+            "UPDATE runs SET status = 'failed', "
+            "error = COALESCE(error, 'Interrupted — the server restarted before this run finished.'), "
+            "ended_at = COALESCE(ended_at, ?) "
+            "WHERE status IN ('pending', 'running')",
+            (utcnow_iso(),),
+        )
+        return cur.rowcount
+
+
 def list_runs(
     agent: str | None = None, limit: int = 50, status: str | None = None,
     project_id: str | None = None, exclude_chats: bool = False,
