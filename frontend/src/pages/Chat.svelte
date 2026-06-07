@@ -275,15 +275,19 @@
             {/each}
           </div>
         {/if}
-        <div class="card-quiet" style="padding: 10px 12px;">
-          <div style="display: flex; gap: 10px; align-items: flex-end;">
-            <textarea bind:value={input} oninput={refreshAc} onkeydown={onKeydown}
-                      rows="2" placeholder="Send a message… (try / or @)" class="field"
-                      style="resize: none; font-family: var(--font-prose); font-size: 15px;"></textarea>
-            <button class="btn-primary" disabled={streaming} onclick={send} style="white-space: nowrap;">send ↵</button>
-          </div>
-          <div class="text-muted" style="font-size: 10px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.12em; margin-top: 6px;">
-            ⏎ send · ⇧⏎ newline · / commands · @ agents · {currentAgent}
+        <div class="composer">
+          <textarea bind:value={input} oninput={refreshAc} onkeydown={onKeydown}
+                    rows="2" placeholder="Message bran…" class="composer-input"></textarea>
+          <div class="composer-footer">
+            <span class="composer-agent">{currentAgent}</span>
+            <span class="composer-hint">⏎ send · ⇧⏎ newline · / @</span>
+            <button class="composer-send" disabled={streaming} onclick={send} aria-label="Send message">
+              {#if streaming}
+                <span class="composer-spin"></span>
+              {:else}
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+              {/if}
+            </button>
           </div>
         </div>
       </div>
@@ -377,4 +381,75 @@
     overflow-y: auto;
     padding-left: 4px;
   }
+
+  /* Composer — a solid, focused input that lights up when you type in it,
+     with a footer control row and a proper round send button. */
+  .composer {
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: 16px;
+    padding: 10px 12px 8px;
+    transition: border-color 0.15s var(--transition), box-shadow 0.15s var(--transition);
+  }
+  .composer:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+  }
+  .composer-input {
+    width: 100%;
+    background: transparent;
+    border: 0;
+    resize: none;
+    color: var(--fg);
+    font-family: var(--font-prose);
+    font-size: 15px;
+    line-height: 1.5;
+    outline: none;
+  }
+  .composer-input::placeholder { color: var(--muted); }
+  .composer-footer {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 6px;
+  }
+  .composer-agent {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--accent-soft);
+  }
+  .composer-hint {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+  .composer-send {
+    margin-left: auto;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    border: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s var(--transition), transform 0.1s var(--transition);
+  }
+  .composer-send:hover:not(:disabled) { background: var(--accent-soft); }
+  .composer-send:active:not(:disabled) { transform: scale(0.94); }
+  .composer-send:disabled { opacity: 0.55; cursor: default; }
+  .composer-spin {
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255, 255, 255, 0.4);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: composer-spin 0.7s linear infinite;
+  }
+  @keyframes composer-spin { to { transform: rotate(360deg); } }
 </style>
