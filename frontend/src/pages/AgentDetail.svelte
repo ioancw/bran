@@ -67,13 +67,22 @@
     <div class="grid grid-cols-3 gap-6">
       <!-- Main: run now + recent runs -->
       <div class="col-span-2 space-y-6">
-        <div class="card">
+        <div>
           <div class="label-cap" style="margin-bottom: 8px;">Run now</div>
-          <textarea class="field" bind:value={task} rows="3"
-                    placeholder={`Task for ${agentName}… (blank = a default run)`}
-                    style="resize: none; font-family: var(--font-prose); font-size: 15px;"></textarea>
-          <div style="display: flex; justify-content: flex-end; margin-top: 8px;">
-            <button class="btn-primary" disabled={firing} onclick={runNow}>{firing ? 'starting…' : 'run now →'}</button>
+          <div class="composer">
+            <textarea class="composer-input" bind:value={task} rows="3"
+                      placeholder={`Task for ${agentName}… (blank = a default run)`}
+                      onkeydown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); runNow() } }}></textarea>
+            <div class="composer-footer">
+              <span class="composer-hint">fires a one-off run</span>
+              <button class="composer-send" disabled={firing} onclick={runNow} aria-label="Run now">
+                {#if firing}
+                  <span class="composer-spin"></span>
+                {:else}
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+                {/if}
+              </button>
+            </div>
           </div>
         </div>
 

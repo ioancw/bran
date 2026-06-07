@@ -63,13 +63,15 @@
     <div class="ph-grid">
       <!-- Center: launcher + conversations (takes the remaining width) -->
       <div class="space-y-6">
-        <div class="card">
-          <textarea class="field" bind:value={prompt} rows="4"
+        <div class="composer">
+          <textarea class="composer-input" bind:value={prompt} rows="3"
                     placeholder={`What would you like to work on in ${name}?`}
-                    onkeydown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); launch() } }}
-                    style="resize: none; font-family: var(--font-prose); font-size: 16px;"></textarea>
-          <div style="display: flex; justify-content: flex-end; margin-top: 10px;">
-            <button class="btn-primary" onclick={launch}>start →</button>
+                    onkeydown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); launch() } }}></textarea>
+          <div class="composer-footer">
+            <span class="composer-hint">⏎ to start · ⇧⏎ newline</span>
+            <button class="composer-send" onclick={launch} aria-label="Start a conversation">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+            </button>
           </div>
         </div>
 
