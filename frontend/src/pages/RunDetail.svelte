@@ -76,21 +76,21 @@
   {#if error}<div class="card" style="color: var(--red);">{error}</div>{/if}
   {#if run}
     <div class="grid grid-cols-4 gap-6">
-      <aside class="col-span-1 space-y-2">
+      <aside class="col-span-1 space-y-3">
         <div class="card-quiet">
-          <div class="label-cap">task</div>
-          <div class="text-fg" style="font-size: 13px; white-space: pre-wrap;">{run.task}</div>
+          <div class="label-cap" style="margin-bottom: 6px;">task</div>
+          <div class="text-fg" style="font-size: 13px; line-height: 1.5; white-space: pre-wrap;">{run.task}</div>
         </div>
-        <div class="card-quiet" style="font-size: 12px;">
-          <div class="label-cap">details</div>
-          <div>turns: {run.num_turns ?? '—'}</div>
-          <div>cost: {fmtCost(run.total_cost_usd)}</div>
-          <div>duration: {fmtDuration(run.duration_ms)}</div>
-          <div>started: {localDateTime(run.started_at)}</div>
-          <div class="mono text-dim" style="word-break: break-all;">session: {run.session_id ?? '—'}</div>
+        <div class="card-quiet meta-list" style="font-size: 12.5px;">
+          <div class="label-cap" style="margin-bottom: 8px;">details</div>
+          <div><span class="label-cap">turns</span> {run.num_turns ?? '—'}</div>
+          <div><span class="label-cap">cost</span> {fmtCost(run.total_cost_usd)}</div>
+          <div><span class="label-cap">duration</span> {fmtDuration(run.duration_ms)}</div>
+          <div><span class="label-cap">started</span> {localDateTime(run.started_at)}</div>
+          <div class="mono text-dim" style="word-break: break-all; margin-top: 6px;">session: {run.session_id ?? '—'}</div>
         </div>
-        <div class="card-quiet" style="font-size: 12px;">
-          <div class="label-cap">origin</div>
+        <div class="card-quiet meta-list" style="font-size: 12.5px;">
+          <div class="label-cap" style="margin-bottom: 8px;">origin</div>
           {#if run.project_id}
             <div><a href={href('/projects/' + run.project_id)} use:link class="text-accent-soft" style="text-decoration: none;">↳ project</a></div>
           {:else}
@@ -105,14 +105,22 @@
         {#if run.error}
           <div class="card" style="color: var(--red); white-space: pre-wrap; border-color: color-mix(in srgb, var(--red) 30%, transparent);">{run.error}</div>
         {/if}
-        {#if run.result}
-          <div class="card"><div class="label-cap" style="margin-bottom: 6px;">result</div><div class="msg-prose"><Prose text={run.result} /></div></div>
-        {/if}
         {#if transcript.length}
+          <!-- The transcript already ends with the final answer, so the
+               separate result card below is only shown when there's no
+               transcript (avoids rendering the result twice). -->
           <div class="label-cap">transcript</div>
           <div class="space-y-3"><ChatLog items={transcript} /></div>
+        {:else if run.result}
+          <div class="card"><div class="label-cap" style="margin-bottom: 6px;">result</div><div class="msg-prose"><Prose text={run.result} /></div></div>
         {/if}
       </div>
     </div>
   {/if}
 </Page>
+
+<style>
+  /* Roomier label/value rows in the run's metadata column. */
+  .meta-list > div { line-height: 1.85; }
+  .meta-list .label-cap { margin-right: 7px; }
+</style>
