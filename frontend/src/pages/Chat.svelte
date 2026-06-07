@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte'
   import { api, streamChat } from '../lib/api'
   import { router, navigate, href, link } from '../lib/router.svelte'
   import { workspace, setScope, loadChats, loadProjects, projectName, bumpActivity, setLive } from '../lib/workspace.svelte'
@@ -8,7 +9,7 @@
   import ProjectRail from '../components/ProjectRail.svelte'
   import ChatLog from '../chat/ChatLog.svelte'
   import { applyEvent, freshState, type ChatItem, type ReducerState } from '../chat/events'
-  import type { Catalog, ChatSummary } from '../lib/types'
+  import type { Catalog, ChatSummary, RunRecord } from '../lib/types'
 
   let { sessionId }: { sessionId: string | null } = $props()
 
@@ -46,6 +47,54 @@
     requestAnimationFrame(() => messagesEl?.scrollTo(0, messagesEl.scrollHeight))
   }
 
+  // --- Auto fan-in -----------------------------------------------------------
+  // When a turn fans out >=2 background runs (spawn_agent), watch them; once
+  // they ALL finish, automatically ask the agent to collect + synthesise their
+  // results — so you get one combined answer without prompting again. Works
+  // while you're viewing the chat (a chat turn has no server-side callback).
+  let watchedSpawnIds = new Set<string>()
+  let fanoutTimers: ReturnType<typeof setInterval>[] = []
+
+  function spawnRunIds(): string[] {
+    const ids: string[] = []
+    for (const it of items) {
+      if (it.kind === 'tool' && it.name === 'mcp__bran__spawn_agent') {
+        const m = it.resultText?.match(/run_id=([0-9a-f-]{8,})/i)
+        if (m) ids.push(m[1])
+      }
+    }
+    return ids
+  }
+  function clearFanoutWatchers() {
+    fanoutTimers.forEach(clearInterval)
+    fanoutTimers = []
+  }
+  function watchFanout(ids: string[]) {
+    const timer = setInterval(async () => {
+      let runs: (RunRecord | null)[]
+      try {
+        runs = await Promise.all(ids.map((id) => api.run(id).catch(() => null)))
+      } catch {
+        return
+      }
+      const known = runs.filter((r): r is RunRecord => !!r)
+      if (known.length < ids.length) return
+      const terminal = (s: string) => s === 'completed' || s === 'failed' || s === 'cancelled'
+      if (!known.every((r) => terminal(r.status))) return
+      // All finished — but wait until the chat is idle and the user isn't typing,
+      // so we don't interrupt a turn or clobber a draft.
+      if (streaming || input.trim()) return
+      clearInterval(timer)
+      fanoutTimers = fanoutTimers.filter((t) => t !== timer)
+      if (known.some((r) => r.status === 'completed')) {
+        input = 'Those background runs have finished — collect their results and synthesise them into one combined summary for me.'
+        void send()
+      }
+    }, 3000)
+    fanoutTimers.push(timer)
+  }
+  onDestroy(clearFanoutWatchers)
+
   $effect(() => {
     void api.catalog().then((c) => (catalog = c)).catch(() => {})
     void loadProjects()
@@ -57,6 +106,8 @@
     const sid = sessionId
     if (sid === loadedId || streaming) return
     loadedId = sid
+    clearFanoutWatchers()
+    watchedSpawnIds = new Set()
     items = []
     rstate = freshState()
     pendingAgent = null
@@ -105,6 +156,8 @@
       const st = freshState()
       for (const ev of events) applyEvent(next, st, ev)
       items = next
+      // Seed already-spawned ids so loading a historical fan-out never auto-fires.
+      spawnRunIds().forEach((id) => watchedSpawnIds.add(id))
       scrollSoon()
     } catch {
       /* ignore */
@@ -163,6 +216,11 @@
       setLive(false)
       void loadChats() // refresh the sidebar Recents
       bumpActivity() // refresh the rail's Progress (new run recorded)
+      // Auto fan-in: if this turn fanned out >=2 new background runs, watch them
+      // and synthesise automatically once they all finish.
+      const fresh = spawnRunIds().filter((id) => !watchedSpawnIds.has(id))
+      fresh.forEach((id) => watchedSpawnIds.add(id))
+      if (fresh.length >= 2) watchFanout(fresh)
     }
   }
 
