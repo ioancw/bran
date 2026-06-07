@@ -196,6 +196,10 @@ input[type="email"].field, select.field, textarea.field {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
+/* In the light theme the surface2 fill is a muddy tan on inputs — use the
+   lighter surface so fields read clean, with the border doing the defining.
+   (Dark themes keep the subtly-raised surface2 fill.) */
+[data-theme="light"] .field { background: var(--surface); }
 
 /* Composer — the shared "type here" input: a solid rounded surface that lights
    up (accent focus-ring) when you type, a footer control row, and a round
@@ -224,6 +228,10 @@ input[type="email"].field, select.field, textarea.field {
   outline: none;
 }
 .composer-input::placeholder { color: var(--muted); }
+/* The composer container shows the focus ring (:focus-within), so the inner
+   textarea must not draw its own — override the global :focus-visible outline. */
+.composer-input:focus,
+.composer-input:focus-visible { outline: none; box-shadow: none; }
 .composer-footer {
   display: flex;
   align-items: center;
