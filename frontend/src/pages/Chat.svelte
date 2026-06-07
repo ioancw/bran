@@ -4,6 +4,7 @@
   import { workspace, setScope, loadChats, loadProjects, projectName, bumpActivity, setLive } from '../lib/workspace.svelte'
   import { errorText } from '../lib/errors'
   import Page from '../components/Page.svelte'
+  import Composer from '../components/Composer.svelte'
   import ProjectRail from '../components/ProjectRail.svelte'
   import ChatLog from '../chat/ChatLog.svelte'
   import { applyEvent, freshState, type ChatItem, type ReducerState } from '../chat/events'
@@ -165,59 +166,6 @@
     }
   }
 
-  // --- Autocomplete (/ commands, @ agents) ---
-  interface AcItem { trigger: string; name: string; description: string; token: string }
-  let acOpen = $state(false)
-  let acItems = $state<AcItem[]>([])
-  let acIndex = $state(0)
-
-  // Where the / or @ token being completed starts, so pickAc can splice just
-  // that token (not clobber the whole message).
-  let acTokenStart = -1
-
-  function refreshAc() {
-    // Match the token at the end of the input: a / or @ at the start of the
-    // line OR after whitespace, so mentions work mid-sentence ("ask @research…"),
-    // not only as the first character.
-    const m = input.match(/(^|\s)([/@])(\S*)$/)
-    if (!m) {
-      acOpen = false
-      return
-    }
-    const trigger = m[2]
-    const query = m[3].toLowerCase()
-    acTokenStart = (m.index ?? 0) + m[1].length
-    if (trigger === '/') {
-      acItems = catalog.commands
-        .filter((c) => c.name.toLowerCase().startsWith(query))
-        .map((c) => ({ trigger: '/', name: c.name, description: c.description, token: `/${c.name} ` }))
-    } else {
-      acItems = catalog.agents
-        .filter((a) => a.name.toLowerCase().includes(query))
-        .map((a) => ({ trigger: '@', name: a.name, description: a.description, token: `@${a.name} ` }))
-    }
-    acIndex = 0
-    acOpen = acItems.length > 0
-  }
-  function pickAc(i: number) {
-    const it = acItems[i]
-    if (!it) return
-    // Replace only the token being completed, preserving any text before it.
-    input = input.slice(0, acTokenStart < 0 ? 0 : acTokenStart) + it.token
-    acOpen = false
-  }
-  function onKeydown(e: KeyboardEvent) {
-    if (acOpen) {
-      if (e.key === 'Escape') { e.preventDefault(); acOpen = false; return }
-      if (e.key === 'ArrowDown') { e.preventDefault(); acIndex = Math.min(acItems.length - 1, acIndex + 1); return }
-      if (e.key === 'ArrowUp') { e.preventDefault(); acIndex = Math.max(0, acIndex - 1); return }
-      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickAc(acIndex); return }
-    }
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      void send()
-    }
-  }
 </script>
 
 <Page fill={true}>
@@ -272,33 +220,11 @@
       </div>
 
       <!-- Composer -->
-      <div style="margin-top: 14px; position: relative;">
-        {#if acOpen}
-          <div class="card" style="position: absolute; bottom: 100%; left: 0; right: 0; margin-bottom: 6px; padding: 4px; max-height: 280px; overflow-y: auto; z-index: 50;">
-            {#each acItems as it, i}
-              <button type="button" onmousedown={(e) => { e.preventDefault(); pickAc(i) }}
-                      style="display: flex; gap: 10px; width: 100%; text-align: left; padding: 8px 10px; border: 0; border-radius: var(--radius); cursor: pointer; background: {i === acIndex ? 'var(--accent-glow)' : 'transparent'};">
-                <code class="font-mono" style="font-size: 13px; min-width: 110px; color: {i === acIndex ? 'var(--accent-soft)' : 'var(--fg-bright)'};">{it.trigger}{it.name}</code>
-                <span class="text-dim" style="font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{it.description}</span>
-              </button>
-            {/each}
-          </div>
-        {/if}
-        <div class="composer">
-          <textarea bind:value={input} oninput={refreshAc} onkeydown={onKeydown}
-                    rows="2" placeholder="Message bran…" class="composer-input"></textarea>
-          <div class="composer-footer">
-            <span class="composer-agent">{currentAgent}</span>
-            <span class="composer-hint">⏎ send · ⇧⏎ newline · / @</span>
-            <button class="composer-send" disabled={streaming} onclick={send} aria-label="Send message">
-              {#if streaming}
-                <span class="composer-spin"></span>
-              {:else}
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
-              {/if}
-            </button>
-          </div>
-        </div>
+      <div style="margin-top: 14px;">
+        <Composer bind:value={input} {catalog} hint="⏎ send · ⇧⏎ newline · / @"
+                  busy={streaming} placeholder="Message bran…" onsubmit={send}>
+          {#snippet leading()}<span class="composer-agent">{currentAgent}</span>{/snippet}
+        </Composer>
       </div>
     </div>
 

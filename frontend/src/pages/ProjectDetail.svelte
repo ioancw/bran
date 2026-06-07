@@ -9,8 +9,9 @@
   import { errorText } from '../lib/errors'
   import { relativeTime } from '../lib/time'
   import Page from '../components/Page.svelte'
+  import Composer from '../components/Composer.svelte'
   import ProjectRail from '../components/ProjectRail.svelte'
-  import type { ProjectDetail } from '../lib/types'
+  import type { Catalog, ProjectDetail } from '../lib/types'
 
   let { projectId }: { projectId: string } = $props()
 
@@ -18,6 +19,7 @@
   let error = $state<string | null>(null)
   let name = $state('')
   let prompt = $state('')
+  let catalog = $state<Catalog>({ agents: [], commands: [] })
 
   async function load() {
     try {
@@ -31,6 +33,9 @@
     void projectId
     setScope(projectId) // sidebar Recents shows this project's conversations
     void load()
+  })
+  $effect(() => {
+    void api.catalog().then((c) => (catalog = c)).catch(() => {})
   })
 
   function launch() {
@@ -63,17 +68,8 @@
     <div class="ph-grid">
       <!-- Center: launcher + conversations (takes the remaining width) -->
       <div class="space-y-6">
-        <div class="composer">
-          <textarea class="composer-input" bind:value={prompt} rows="3"
-                    placeholder={`What would you like to work on in ${name}?`}
-                    onkeydown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); launch() } }}></textarea>
-          <div class="composer-footer">
-            <span class="composer-hint">⏎ to start · ⇧⏎ newline</span>
-            <button class="composer-send" onclick={launch} aria-label="Start a conversation">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
-            </button>
-          </div>
-        </div>
+        <Composer bind:value={prompt} {catalog} hint="⏎ to start · ⇧⏎ newline"
+                  placeholder={`What would you like to work on in ${name}?`} rows={3} onsubmit={launch} />
 
         <section>
           <div class="label-cap" style="margin-bottom: 10px;">Recents ({data.chats.length})</div>
