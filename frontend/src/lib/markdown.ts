@@ -7,6 +7,21 @@
 
 import MarkdownIt from 'markdown-it'
 import katex from 'katex'
+import Prism from 'prismjs'
+// Language grammars (dependency order: each registers on import). javascript +
+// markup/css live in Prism core; the rest are a focused set for bran's work.
+import 'prismjs/components/prism-typescript'
+import 'prismjs/components/prism-python'
+import 'prismjs/components/prism-bash'
+import 'prismjs/components/prism-json'
+import 'prismjs/components/prism-sql'
+import 'prismjs/components/prism-yaml'
+import 'prismjs/components/prism-toml'
+import 'prismjs/components/prism-go'
+import 'prismjs/components/prism-rust'
+import 'prismjs/components/prism-r'
+import 'prismjs/components/prism-markdown'
+import 'prismjs/components/prism-diff'
 
 let _md: MarkdownIt | null = null
 
@@ -18,12 +33,35 @@ function escapeAttr(s: string): string {
     .replace(/"/g, '&quot;')
 }
 
+// Common language aliases → Prism grammar keys.
+const LANG_ALIAS: Record<string, string> = {
+  js: 'javascript', jsx: 'javascript', node: 'javascript',
+  ts: 'typescript', tsx: 'typescript',
+  py: 'python', sh: 'bash', shell: 'bash', zsh: 'bash',
+  yml: 'yaml', md: 'markdown', rs: 'rust', golang: 'go',
+}
+
+/** Syntax-highlight `code` to token HTML, falling back to escaped plain text
+ *  when the language is unknown or Prism throws. Result is HTML-safe. */
+function highlightCode(code: string, lang: string, escape: (s: string) => string): string {
+  const key = LANG_ALIAS[lang.toLowerCase()] || lang.toLowerCase()
+  const grammar = key && Prism.languages[key]
+  if (grammar) {
+    try {
+      return Prism.highlight(code, grammar, key)
+    } catch {
+      /* fall through to plain */
+    }
+  }
+  return escape(code)
+}
+
 function makeMd(): MarkdownIt {
   const md = new MarkdownIt({ html: false, linkify: true, breaks: false })
   const renderBlock = (code: string, lang: string) => {
     const langLabel = lang || 'code'
     const langClass = lang ? ` class="language-${escapeAttr(lang)}"` : ''
-    const escapedCode = md.utils.escapeHtml(code)
+    const codeHtml = highlightCode(code, lang, md.utils.escapeHtml)
     return (
       '<pre class="md-code"><div class="md-code-header">' +
       '<span class="md-code-lang">' +
@@ -35,7 +73,7 @@ function makeMd(): MarkdownIt {
       '</div><code' +
       langClass +
       '>' +
-      escapedCode +
+      codeHtml +
       '</code></pre>'
     )
   }

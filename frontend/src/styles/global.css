@@ -953,6 +953,39 @@ body.chat-fill main > div.stagger-in > #chat-layout {
   border-color: transparent;
 }
 
+/* Prism syntax-highlight tokens, mapped to bran's theme palette so they recolour
+   with every theme (no fixed light/dark syntax theme). */
+.md-code .token.comment,
+.md-code .token.prolog,
+.md-code .token.doctype,
+.md-code .token.cdata { color: var(--muted); font-style: italic; }
+.md-code .token.punctuation { color: var(--fg-dim); }
+.md-code .token.keyword,
+.md-code .token.operator,
+.md-code .token.boolean,
+.md-code .token.atrule,
+.md-code .token.important,
+.md-code .token.selector { color: var(--accent-soft); }
+.md-code .token.string,
+.md-code .token.char,
+.md-code .token.attr-value,
+.md-code .token.regex,
+.md-code .token.inserted { color: var(--green); }
+.md-code .token.number,
+.md-code .token.constant,
+.md-code .token.symbol,
+.md-code .token.unit { color: var(--amber); }
+.md-code .token.function,
+.md-code .token.class-name,
+.md-code .token.builtin { color: var(--blue); }
+.md-code .token.property,
+.md-code .token.tag,
+.md-code .token.attr-name,
+.md-code .token.variable,
+.md-code .token.parameter { color: var(--accent); }
+.md-code .token.deleted { color: var(--red); }
+.md-code .token.namespace { opacity: 0.7; }
+
 /* ===========================================================================
  * Chat: tool blocks. One block per tool call (call + result paired).
  *
