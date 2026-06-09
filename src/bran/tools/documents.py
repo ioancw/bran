@@ -21,7 +21,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from claude_agent_sdk import tool
+from claude_agent_sdk import create_sdk_mcp_server, tool
 
 _MAX_PAGES = 50
 _MAX_BYTES = 20 * 1024 * 1024  # 20 MB
@@ -112,5 +112,9 @@ async def read_pdf(args: dict[str, Any]) -> dict[str, Any]:
     return _ok(f"{head}\n\n{text}")
 
 
-# All document tools, for the `bran` MCP server to splat into its tool list.
+# Document tools live on their own least-privilege server ("bran_docs" =>
+# mcp__bran_docs__<name>) so utility agents (research, finance-news, summariser)
+# can read PDFs WITHOUT also getting the orchestration tools (spawn/runners) on
+# the main "bran" server.
 DOCUMENT_TOOLS = [read_pdf]
+documents_server = create_sdk_mcp_server(name="bran_docs", version="0.1.0", tools=DOCUMENT_TOOLS)

@@ -26,6 +26,7 @@ from claude_agent_sdk import AgentDefinition, ClaudeAgentOptions, HookMatcher
 
 from bran.config import SETTINGS
 from bran.permissions import WRITE_TOOL_MATCHER, confine_writes_hook
+from bran.tools.documents import documents_server
 from bran.tools.spawn import spawn_agent_server
 
 
@@ -136,15 +137,18 @@ RESEARCH_AGENT = AgentDefinition(
         "if Tavily isn't listed in your tools.\n"
         "2. Find at least three independent sources.\n"
         "3. Read the most promising ones in full with `mcp__tavily__tavily_extract` "
-        "(preferred) or `WebFetch`.\n"
+        "(preferred) or `WebFetch`. If a source is a PDF (a URL ending `.pdf` or a "
+        "local file path), read it with `mcp__bran_docs__read_pdf` — WebFetch/"
+        "extract return garbage for PDFs.\n"
         "4. Cross-check claims across sources.\n"
         "5. Write a tight, well-structured answer with inline citations as "
         "(Source: <domain>) and a Sources list at the end.\n"
         "Be skeptical of low-quality sources. Note uncertainty explicitly."
         + _MATH_NOTATION_NOTE
     ),
-    tools=["WebSearch", "WebFetch", "Read", "Write", "Glob", "Grep", *TAVILY_TOOLS],
-    mcpServers=["tavily"] if os.getenv("TAVILY_API_KEY") else [],
+    tools=["WebSearch", "WebFetch", "Read", "Write", "Glob", "Grep",
+           "mcp__bran_docs__read_pdf", *TAVILY_TOOLS],
+    mcpServers=["bran_docs", "tavily"] if os.getenv("TAVILY_API_KEY") else ["bran_docs"],
     model="sonnet",
 )
 
@@ -162,7 +166,8 @@ SUMMARISER_AGENT = AgentDefinition(
         "Preserve every concrete number, name, and date. Never invent facts."
         + _MATH_NOTATION_NOTE
     ),
-    tools=["Read", "Glob", "Grep"],
+    tools=["Read", "Glob", "Grep", "mcp__bran_docs__read_pdf"],
+    mcpServers=["bran_docs"],
     model="haiku",
 )
 
@@ -238,8 +243,8 @@ FINANCE_NEWS_AGENT = AgentDefinition(
         "happened overnight in finance' style request."
     ),
     prompt=FINANCE_NEWS_PROMPT,
-    tools=["WebFetch", "Write", "Read", *TAVILY_TOOLS],
-    mcpServers=["tavily"] if os.getenv("TAVILY_API_KEY") else [],
+    tools=["WebFetch", "Write", "Read", "mcp__bran_docs__read_pdf", *TAVILY_TOOLS],
+    mcpServers=["bran_docs", "tavily"] if os.getenv("TAVILY_API_KEY") else ["bran_docs"],
     model="sonnet",
 )
 
@@ -286,8 +291,8 @@ ORCHESTRATOR = Agent(
         "  missing detail (which agent, what time, attach to a project?) before "
         "  creating, then confirm what you scheduled and when it next fires.\n"
         "- To read a PDF (a filing, paper, or report — a local file path or an "
-        "  http(s) URL the user gives you), use `mcp__bran__read_pdf`; the plain "
-        "  Read tool can't parse PDFs. Summarise/analyse the extracted text.\n"
+        "  http(s) URL the user gives you), use `mcp__bran_docs__read_pdf`; the "
+        "  plain Read tool can't parse PDFs. Summarise/analyse the extracted text.\n"
         "- Be concise. Reflect tool/agent results back to the user faithfully.\n"
         "- If the user asks 'what can you do?', list the available agents and "
         "  the surfaces (chat REPL, CLI, HTTP, schedules)."
@@ -299,7 +304,7 @@ ORCHESTRATOR = Agent(
         "mcp__bran__spawn_agent",
         "mcp__bran__get_run_result",
         "mcp__bran__list_recent_runs",
-        "mcp__bran__read_pdf",
+        "mcp__bran_docs__read_pdf",
         "mcp__bran__save_project_memory",
         "mcp__bran__create_runner",
         "mcp__bran__list_runners",
@@ -314,7 +319,7 @@ ORCHESTRATOR = Agent(
         "summariser": SUMMARISER_AGENT,
         "finance-news": FINANCE_NEWS_AGENT,
     },
-    mcp_servers={"bran": spawn_agent_server, **_maybe_tavily_servers()},
+    mcp_servers={"bran": spawn_agent_server, "bran_docs": documents_server, **_maybe_tavily_servers()},
     # Gate writes by delegated research/finance-news sub-agents (they fetch
     # untrusted web content). The orchestrator itself holds no Write tool.
     hooks=_WRITE_CONFINEMENT_HOOKS,
@@ -325,8 +330,9 @@ RESEARCH = Agent(
     name="research",
     description="One-shot web research agent. Same skill set as the sub-agent, callable directly.",
     system_prompt=RESEARCH_AGENT.prompt,
-    tools=["WebSearch", "WebFetch", "Read", "Write", "Glob", "Grep", *_maybe_tavily_tools()],
-    mcp_servers=_maybe_tavily_servers(),
+    tools=["WebSearch", "WebFetch", "Read", "Write", "Glob", "Grep",
+           "mcp__bran_docs__read_pdf", *_maybe_tavily_tools()],
+    mcp_servers={"bran_docs": documents_server, **_maybe_tavily_servers()},
     model="sonnet",
     hooks=_WRITE_CONFINEMENT_HOOKS,
 )
@@ -336,7 +342,8 @@ SUMMARISER = Agent(
     name="summariser",
     description="One-shot text summariser.",
     system_prompt=SUMMARISER_AGENT.prompt,
-    tools=["Read", "Glob", "Grep"],
+    tools=["Read", "Glob", "Grep", "mcp__bran_docs__read_pdf"],
+    mcp_servers={"bran_docs": documents_server},
     model="haiku",
 )
 
@@ -350,8 +357,8 @@ FINANCE_NEWS = Agent(
         "scheduling with `bran schedule add morning-finance finance-news ... --cron '0 7 * * *'`."
     ),
     system_prompt=FINANCE_NEWS_PROMPT,
-    tools=["WebFetch", "Write", "Read", *_maybe_tavily_tools()],
-    mcp_servers=_maybe_tavily_servers(),
+    tools=["WebFetch", "Write", "Read", "mcp__bran_docs__read_pdf", *_maybe_tavily_tools()],
+    mcp_servers={"bran_docs": documents_server, **_maybe_tavily_servers()},
     model="sonnet",
     hooks=_WRITE_CONFINEMENT_HOOKS,
 )
