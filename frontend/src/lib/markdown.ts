@@ -67,9 +67,10 @@ function makeMd(): MarkdownIt {
       '<span class="md-code-lang">' +
       escapeAttr(langLabel) +
       '</span>' +
-      '<button type="button" class="md-copy-btn" data-code="' +
-      escapeAttr(code) +
-      '">copy</button>' +
+      // The copy handler reads the code back out of the <code> element's
+      // textContent — carrying it in an attribute meant later placeholder
+      // substitution could inject markup into the attribute and break out.
+      '<button type="button" class="md-copy-btn">copy</button>' +
       '</div><code' +
       langClass +
       '>' +
@@ -90,6 +91,21 @@ export function renderMarkdown(src: string): string {
   const md = _md
 
   let text = src
+
+  // Math delimiters inside code must stay literal — mask fences and inline
+  // code spans before math extraction, restore them before markdown runs.
+  const codeBlocks: string[] = []
+  const maskCode = (re: RegExp) => {
+    text = text.replace(re, (m) => {
+      codeBlocks.push(m)
+      return `¤¤BRAN_CODE_${codeBlocks.length - 1}¤¤`
+    })
+  }
+  // Fenced blocks (```/~~~), tolerating an unclosed fence mid-stream.
+  maskCode(/^([`~]{3,}).*\n[\s\S]*?(?:^\1[`~]*[ \t]*$|(?![\s\S]))/gm)
+  // Inline code spans (`...`, ``...``).
+  maskCode(/(`+)(?!`)[\s\S]*?\1/g)
+
   const mathBlocks: { content: string; displayMode: boolean }[] = []
   const placeholder = (i: number) => `¤¤BRAN_MATH_${i}¤¤`
   const extract = (re: RegExp, displayMode: boolean) => {
@@ -101,6 +117,8 @@ export function renderMarkdown(src: string): string {
   extract(/\\\[([\s\S]+?)\\\]/g, true) // \[ ... \]
   extract(/\$\$([\s\S]+?)\$\$/g, true) // $$ ... $$
   extract(/\\\(([\s\S]+?)\\\)/g, false) // \( ... \)
+
+  text = text.replace(/¤¤BRAN_CODE_(\d+)¤¤/g, (_m, idx: string) => codeBlocks[+idx] ?? '')
 
   const rendered = md.render(text)
 
@@ -114,7 +132,9 @@ export function renderMarkdown(src: string): string {
         errorColor: 'var(--red)',
       })
     } catch {
-      return block.content
+      // KaTeX can still throw with throwOnError:false (internal errors); the
+      // source is LLM/web-influenced, so it must not reach {@html} unescaped.
+      return md.utils.escapeHtml(block.content)
     }
   })
 }
@@ -123,10 +143,10 @@ export function renderMarkdown(src: string): string {
 export function installCodeCopyHandler(): void {
   document.addEventListener('click', (e) => {
     const target = e.target as HTMLElement
-    const btn = target.closest<HTMLButtonElement>('.md-copy-btn[data-code]')
+    const btn = target.closest<HTMLButtonElement>('.md-copy-btn')
     if (!btn) return
     e.preventDefault()
-    const code = btn.dataset.code || ''
+    const code = btn.closest('pre')?.querySelector('code')?.textContent || ''
     navigator.clipboard.writeText(code).then(() => {
       const original = btn.textContent
       btn.textContent = 'copied!'

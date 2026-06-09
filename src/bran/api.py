@@ -2,7 +2,7 @@
 
 Layout:
     /                       the Svelte SPA (served from web/spa/), no auth
-    /spa/*                  JSON API the SPA consumes                (no auth)
+    /spa/*                  JSON API the SPA consumes  (no token; same-origin only)
     /api/*                  external JSON API                       (bearer auth)
     /static/*               static assets (favicon)
     /healthz                health probe                            (no auth)
@@ -113,7 +113,15 @@ def _build_api_router(enable_scheduler: bool) -> APIRouter:
         body: RunRequest,
     ) -> dict[str, Any]:
         if body.background:
-            from bran.persistence import RunRecord, insert_run
+            from bran.agents import get_agent
+            from bran.persistence import RunRecord, insert_run, update_run, utcnow_iso
+
+            # Validate before inserting the row: run_agent's own KeyError would
+            # fire inside the background task, after we've already answered.
+            try:
+                get_agent(name)
+            except KeyError as e:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, str(e))
 
             record = RunRecord.new(agent=name, task=body.task)
             insert_run(record)
@@ -127,11 +135,18 @@ def _build_api_router(enable_scheduler: bool) -> APIRouter:
                         max_turns=body.max_turns,
                         record=record,
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # _drive records failures itself; this catches errors raised
+                    # *before* it takes over (option validation etc.) so the row
+                    # can't sit "pending" until the next restart reconciles it.
+                    if record.status in ("pending", "running"):
+                        record.status = "failed"
+                        record.error = f"{type(exc).__name__}: {exc}"
+                        record.ended_at = utcnow_iso()
+                        update_run(record)
 
             spawn_background(_go(), name=f"http-spawn:{record.id}")
-            return {"run_id": record.id, "status": "running", "background": True}
+            return {"run_id": record.id, "status": record.status, "background": True}
 
         try:
             record = await run_agent(

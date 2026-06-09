@@ -1,9 +1,10 @@
-"""JSON API for the Svelte SPA (mounted unauthenticated, localhost-first).
+"""JSON API for the Svelte SPA (token-free, localhost-first; same-origin only).
 
 This is the single contract the frontend consumes. Chat live-stream and replay
 both emit the unified schema from `bran.web.events`, so the client renders them
-through one path. The legacy HTMX routes in `routes.py` are untouched and will
-be removed once the SPA takes over `/`.
+through one path. There is no bearer token on this surface, but every route is
+gated by `_require_same_origin` so other websites in the user's browser can't
+fire requests at it (CSRF).
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import re
 from dataclasses import asdict
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Form, HTTPException, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 
 from bran.agents import get_agent, list_agents
@@ -51,7 +52,40 @@ from bran.runner import run_agent, stream_agent
 from bran.transcript import find_session_file, parse_transcript
 from bran.web.events import events_from_message, events_from_transcript_entry
 
-router = APIRouter(prefix="/spa", tags=["spa"])
+async def _require_same_origin(request: Request) -> None:
+    """CSRF guard for the unauthenticated SPA surface.
+
+    /spa is token-free (localhost-first), but several POST handlers take form
+    bodies — CORS "simple requests" that any web page the user visits can fire
+    at 127.0.0.1 without a preflight, silently starting agent runs or creating
+    schedules. Browsers tell us where a request came from, so reject anything
+    cross-site: via Sec-Fetch-Site when present (all modern browsers), else by
+    comparing the Origin header's host against the request Host. Requests with
+    neither header come from non-browser clients (curl, httpx) where CSRF
+    doesn't apply.
+    """
+    site = request.headers.get("sec-fetch-site")
+    if site is not None:
+        # "none" = direct navigation (address bar / bookmark) — user-initiated.
+        if site not in ("same-origin", "none"):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "Cross-origin requests are not allowed"
+            )
+        return
+    origin = request.headers.get("origin")
+    if origin:
+        from urllib.parse import urlsplit
+
+        # "null" (sandboxed iframe, data: URI) is also cross-origin.
+        if origin == "null" or urlsplit(origin).netloc != request.headers.get("host"):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "Cross-origin requests are not allowed"
+            )
+
+
+router = APIRouter(
+    prefix="/spa", tags=["spa"], dependencies=[Depends(_require_same_origin)]
+)
 
 
 # ---------------------------------------------------------------------------
@@ -238,8 +272,13 @@ def _schedule_dict(s: ScheduleRecord) -> dict[str, Any]:
 
             try:
                 when = datetime.fromisoformat(s.run_at)
+                if when.tzinfo is None:
+                    # Naive run_at (the conversational create_runner path stores
+                    # these) means server-local time — same as DateTrigger reads
+                    # it. Make it aware, or the comparison below raises TypeError.
+                    when = when.astimezone()
                 next_run = s.run_at if when > datetime.now(timezone.utc) else None
-            except ValueError:
+            except (ValueError, TypeError):
                 next_run = None
         else:
             try:

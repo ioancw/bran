@@ -8,7 +8,7 @@ import pytest
 from apscheduler.triggers.cron import CronTrigger
 
 from bran.persistence import ProjectRecord, insert_project, update_project
-from bran.scheduler import _project_append_system, _trigger_from_cron
+from bran.scheduler import _project_append_system, _translate_dow, _trigger_from_cron
 
 
 def test_valid_five_field_cron():
@@ -20,6 +20,45 @@ def test_valid_five_field_cron():
 def test_invalid_field_count_raises(expr):
     with pytest.raises(ValueError):
         _trigger_from_cron(expr)
+
+
+# Cron numbers weekdays 0/7=Sunday..6=Saturday; APScheduler 0=Monday..6=Sunday.
+@pytest.mark.parametrize(
+    ("dow", "expected"),
+    [
+        ("*", "*"),
+        ("1", "mon"),
+        ("0", "sun"),
+        ("7", "sun"),
+        ("1-5", "mon,tue,wed,thu,fri"),
+        ("0,3", "sun,wed"),
+        ("0,7", "sun"),
+        ("*/2", "sun,tue,thu,sat"),
+        ("1-5/2", "mon,wed,fri"),
+        ("mon-fri", "mon-fri"),
+        ("sat,sun", "sat,sun"),
+    ],
+)
+def test_translate_dow(dow, expected):
+    assert _translate_dow(dow) == expected
+
+
+@pytest.mark.parametrize("dow", ["8", "1-9", "1/0"])
+def test_translate_dow_invalid_raises(dow):
+    with pytest.raises(ValueError):
+        _translate_dow(dow)
+
+
+def test_numeric_cron_monday_fires_on_monday():
+    """`0 9 * * 1` means Monday in cron; without translation APScheduler
+    would read day_of_week=1 as Tuesday."""
+    from datetime import datetime
+
+    trigger = _trigger_from_cron("0 9 * * 1")
+    # A Wednesday; the next fire must be the following Monday.
+    after = datetime(2026, 6, 10, 12, 0, tzinfo=trigger.timezone)
+    nxt = trigger.get_next_fire_time(None, after)
+    assert nxt.weekday() == 0  # Monday
 
 
 def test_standalone_runner_has_no_project_memory():

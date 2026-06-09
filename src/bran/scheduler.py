@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -21,6 +22,48 @@ log = logging.getLogger("bran.scheduler")
 _scheduler: AsyncIOScheduler | None = None
 
 
+# Indexed by *cron* weekday number (0/7=Sunday .. 6=Saturday).
+_CRON_DOW_NAMES = ("sun", "mon", "tue", "wed", "thu", "fri", "sat")
+
+
+def _translate_dow(dow: str) -> str:
+    """Rewrite numeric day-of-week tokens from cron to APScheduler convention.
+
+    Standard cron numbers weekdays 0=Sunday..6=Saturday (7 also Sunday), but
+    APScheduler's CronTrigger uses 0=Monday..6=Sunday — a raw `0 9 * * 1`
+    passed through verbatim would fire on Tuesday. Day *names* are unambiguous
+    (nl_cron emits them for exactly this reason) and pass through unchanged;
+    numeric tokens — including ranges, lists, and steps — are expanded to
+    explicit name lists so the trigger fires on the days the cron author meant.
+    """
+    if dow == "*":
+        return dow
+    out: list[str] = []
+    for token in dow.split(","):
+        tok = token.strip()
+        if not tok:
+            continue
+        if re.search(r"[a-zA-Z]", tok):
+            out.append(tok)
+            continue
+        body, _, step_s = tok.partition("/")
+        step = int(step_s) if step_s else 1
+        if step < 1:
+            raise ValueError(f"Invalid day-of-week step in {dow!r}")
+        if body == "*":
+            lo, hi = 0, 6
+        elif "-" in body:
+            lo_s, hi_s = body.split("-", 1)
+            lo, hi = int(lo_s), int(hi_s)
+        else:
+            lo = hi = int(body)
+        if not (0 <= lo <= 7 and lo <= hi <= 7):
+            raise ValueError(f"Invalid day-of-week value in {dow!r}")
+        out.extend(_CRON_DOW_NAMES[d % 7] for d in range(lo, hi + 1, step))
+    # dict.fromkeys: dedupe (e.g. "0,7") while keeping order.
+    return ",".join(dict.fromkeys(out)) if out else dow
+
+
 def _trigger_from_cron(expr: str) -> CronTrigger:
     """Parse a standard 5-field cron string (minute hour dom month dow)."""
     parts = expr.split()
@@ -30,7 +73,7 @@ def _trigger_from_cron(expr: str) -> CronTrigger:
         )
     minute, hour, dom, month, dow = parts
     return CronTrigger(
-        minute=minute, hour=hour, day=dom, month=month, day_of_week=dow
+        minute=minute, hour=hour, day=dom, month=month, day_of_week=_translate_dow(dow)
     )
 
 
