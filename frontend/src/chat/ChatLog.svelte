@@ -2,15 +2,53 @@
   // Renders a list of ChatItems — the one render path for both live chat and
   // transcript replay. `streamingIndex` marks the assistant bubble that should
   // show a blinking cursor (live only).
-  import type { ChatItem } from './events'
+  import type { ChatItem, ToolItem } from './events'
   import Prose from '../components/Prose.svelte'
   import ToolBlock from './ToolBlock.svelte'
+  import ToolGroup from './ToolGroup.svelte'
   import SpawnCard from './SpawnCard.svelte'
 
   let { items, streamingIndex = -1 }: { items: ChatItem[]; streamingIndex?: number } = $props()
+
+  // Fold runs of 3+ consecutive same-name tool calls into one ToolGroup (keeps a
+  // big fan-out scannable). Spawn cards are never grouped — you want to see them.
+  type Row =
+    | { group: false; item: ChatItem; idx: number }
+    | { group: true; name: string; tools: ToolItem[] }
+  const SPAWN = 'mcp__bran__spawn_agent'
+  const rows = $derived.by<Row[]>(() => {
+    const out: Row[] = []
+    let i = 0
+    while (i < items.length) {
+      const it = items[i]
+      if (it.kind === 'tool' && it.name !== SPAWN) {
+        let j = i
+        while (
+          j < items.length && items[j].kind === 'tool' &&
+          (items[j] as ToolItem).name === it.name && (items[j] as ToolItem).name !== SPAWN
+        ) j++
+        const run = items.slice(i, j) as ToolItem[]
+        if (run.length >= 3) {
+          out.push({ group: true, name: it.name, tools: run })
+        } else {
+          run.forEach((t, k) => out.push({ group: false, item: t, idx: i + k }))
+        }
+        i = j
+      } else {
+        out.push({ group: false, item: it, idx: i })
+        i++
+      }
+    }
+    return out
+  })
 </script>
 
-{#each items as item, i (i)}
+{#each rows as row, ri (ri)}
+  {#if row.group}
+    <ToolGroup name={row.name} tools={row.tools} />
+  {:else}
+    {@const item = row.item}
+    {@const i = row.idx}
   {#if item.kind === 'user'}
     <!-- Your turn: a compact right-aligned bubble (position says who it is). -->
     <div class="msg-user">
@@ -41,6 +79,7 @@
     </div>
   {:else if item.kind === 'error'}
     <div class="card" style="color: var(--red); border-color: color-mix(in srgb, var(--red) 30%, transparent);">{item.message}</div>
+  {/if}
   {/if}
 {/each}
 

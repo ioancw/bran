@@ -31,27 +31,32 @@ def _err(text: str) -> dict[str, Any]:
 def _parse_schedule(s: str) -> tuple[str, str | None]:
     """Map a schedule string to (cron, run_at).
 
-    A 5-field cron expression -> recurring (cron, None). An ISO-8601 datetime
-    -> one-shot ("", run_at). Raises ValueError if it's neither.
+    An ISO-8601 datetime -> one-shot ("", run_at). Otherwise a 5-field cron OR
+    natural language ("every weekday at 9am") -> recurring (cron, None), via
+    `nl_cron`. Raises ValueError (with a recoverable suggestion) if neither.
     """
     s = (s or "").strip()
     if not s:
-        raise ValueError("a schedule is required (a cron expression or an ISO datetime)")
+        raise ValueError("a schedule is required (cron, natural language, or an ISO datetime)")
     try:
         datetime.fromisoformat(s)
         return "", s  # one-shot
     except ValueError:
         pass
-    if len(s.split()) == 5:
-        return s, None  # recurring cron
-    raise ValueError(
-        f"{s!r} is neither a 5-field cron expression "
-        "(e.g. '0 7 * * 1-5') nor an ISO-8601 datetime"
-    )
+    from bran.nl_cron import NlCronParseError, parse
+
+    try:
+        return parse(s).cron, None  # cron or natural language
+    except NlCronParseError as e:
+        raise ValueError(str(e))
 
 
 def _when(rec: Any) -> str:
-    return f"once at {rec.run_at}" if rec.run_at else f"on cron '{rec.cron}'"
+    if rec.run_at:
+        return f"once at {rec.run_at}"
+    from bran.nl_cron import humanize_cron
+
+    return humanize_cron(rec.cron)
 
 
 def _register(rec: Any) -> None:
@@ -96,9 +101,11 @@ def _next_run(rec: Any) -> str:
         "- name: a short unique slug (e.g. 'morning-brief'). Must not already exist.\n"
         "- agent: a known agent name (e.g. 'finance-news', 'research', 'orchestrator').\n"
         "- task: the prompt the agent runs each time it fires.\n"
-        "- schedule: EITHER a 5-field cron expression (minute hour dom month dow — "
-        "e.g. '0 7 * * 1-5' = 07:00 on weekdays) for a recurring runner, OR an "
-        "ISO-8601 datetime (e.g. '2026-06-10T09:00:00') for a one-shot run.\n"
+        "- schedule: for a recurring runner, EITHER plain English ('every weekday "
+        "at 9am', 'daily at 18:30', 'every 2 hours', 'every Monday at 8:30') OR a "
+        "5-field cron expression ('0 9 * * mon-fri'); OR, for a one-shot run, an "
+        "ISO-8601 datetime ('2026-06-10T09:00:00'). You can pass the user's own "
+        "words through. Confirm the resolved time back to them.\n"
         "- project_id: the project to attach the runner to (it then runs with that "
         "project's memory); pass an empty string for a standalone runner. The "
         "current project's id, if any, is in your system prompt — do not invent one.\n"
