@@ -285,6 +285,9 @@ ORCHESTRATOR = Agent(
         "  `pause_runner`, `resume_runner`, `delete_runner`. Ask the user for any "
         "  missing detail (which agent, what time, attach to a project?) before "
         "  creating, then confirm what you scheduled and when it next fires.\n"
+        "- To read a PDF (a filing, paper, or report — a local file path or an "
+        "  http(s) URL the user gives you), use `mcp__bran__read_pdf`; the plain "
+        "  Read tool can't parse PDFs. Summarise/analyse the extracted text.\n"
         "- Be concise. Reflect tool/agent results back to the user faithfully.\n"
         "- If the user asks 'what can you do?', list the available agents and "
         "  the surfaces (chat REPL, CLI, HTTP, schedules)."
@@ -296,6 +299,7 @@ ORCHESTRATOR = Agent(
         "mcp__bran__spawn_agent",
         "mcp__bran__get_run_result",
         "mcp__bran__list_recent_runs",
+        "mcp__bran__read_pdf",
         "mcp__bran__save_project_memory",
         "mcp__bran__create_runner",
         "mcp__bran__list_runners",
