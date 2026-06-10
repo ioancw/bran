@@ -30,6 +30,23 @@ Notifier = Callable[[RunRecord], Union[None, Awaitable[None]]]
 _notifiers: list[Notifier] = []
 
 
+def _result_snippet(record: RunRecord, limit: int = 400) -> str:
+    """A short, single-paragraph taste of a run's output for notifications.
+
+    Notifications used to carry only status ("agent X completed") — useless for
+    actually consuming the result. This pulls the head of the result text so the
+    ping delivers the value, not just the fact that something finished.
+    """
+    text = (record.result or "").strip()
+    if not text:
+        return ""
+    # Collapse to the first non-empty lines up to the limit.
+    out = text[:limit].strip()
+    if len(text) > limit:
+        out += "…"
+    return out
+
+
 def register_notifier(fn: Notifier) -> None:
     """Add a notifier. Safe to call multiple times with the same fn — dedup'd."""
     if fn not in _notifiers:
@@ -70,6 +87,9 @@ async def webhook_notifier(record: RunRecord) -> None:
     import httpx
 
     payload = asdict(record)
+    # A human-readable taste of the output so consumers (ntfy/Slack/Discord) can
+    # show the actual result, not just status. The full text stays in `result`.
+    payload["summary"] = _result_snippet(record)
     # ntfy.sh-friendly headers; harmless for other targets.
     headers = {
         "Title": f"bran: {record.agent} {record.status}",
@@ -91,6 +111,11 @@ def bell_notifier(record: RunRecord) -> None:
         f"\a[bran] {badge} {record.agent} · {record.status} · "
         f"{record.num_turns or 0} turns · {cost} · run {record.id[:8]}\n"
     )
+    # A one-line taste of the output so the console ping actually delivers
+    # something, not just status. (Single line — keep the bell terse.)
+    snippet = _result_snippet(record, limit=160).replace("\n", " ")
+    if snippet:
+        sys.stderr.write(f"       {snippet}\n")
     sys.stderr.flush()
 
 

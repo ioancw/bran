@@ -34,6 +34,7 @@
       items: [
         { key: 'agents', label: 'Agents', to: '/agents' },
         { key: 'runners', label: 'Runners', to: '/runners' },
+        { key: 'outputs', label: 'Outputs', to: '/outputs' },
         { key: 'runs', label: 'Runs', to: '/runs' },
       ],
     },

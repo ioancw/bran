@@ -6,6 +6,7 @@
   import ConfirmHost from './components/ConfirmHost.svelte'
   import Chat from './pages/Chat.svelte'
   import Runs from './pages/Runs.svelte'
+  import Outputs from './pages/Outputs.svelte'
   import RunDetail from './pages/RunDetail.svelte'
   import Agents from './pages/Agents.svelte'
   import AgentDetail from './pages/AgentDetail.svelte'
@@ -18,18 +19,21 @@
 
   // Nav counts (best-effort; nav still renders if these fail).
   let counts = $state<Record<string, number | null>>({
-    projects: null, chat: null, runs: null, agents: null, runners: null,
+    projects: null, chat: null, runs: null, outputs: null, agents: null, runners: null,
   })
   $effect(() => {
     void (async () => {
       try {
-        const [agents, projects, runners, runs] = await Promise.all([
-          api.agents(), api.projects(), api.schedules(), api.runs({ limit: 200 }),
+        const [agents, projects, runners, runs, outputs] = await Promise.all([
+          api.agents(), api.projects(), api.schedules(),
+          api.runs({ limit: 200, exclude_chats: true }),
+          api.runs({ limit: 200, exclude_chats: true, status: 'completed' }),
         ])
         counts.agents = agents.length
         counts.projects = projects.length
         counts.runners = runners.length
         counts.runs = runs.length
+        counts.outputs = outputs.filter((r) => (r.result ?? '').trim()).length
       } catch {
         /* leave counts null */
       }
@@ -46,6 +50,8 @@
       <Projects />
     {:else if seg[0] === 'chat'}
       <Chat sessionId={seg[1] ?? null} />
+    {:else if seg[0] === 'outputs'}
+      <Outputs />
     {:else if seg[0] === 'runs' && seg[1]}
       <RunDetail runId={seg[1]} />
     {:else if seg[0] === 'runs'}
