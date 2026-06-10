@@ -83,11 +83,21 @@ export interface ProjectMemory {
   created_at: string
 }
 
+// A working file uploaded into a project's folder.
+export interface ProjectFile {
+  name: string
+  size: number
+  size_human: string
+  modified: number
+  path: string
+}
+
 // The project "workspace hub": a project plus everything that flows through it.
 export interface ProjectDetail {
   project: ProjectSummary
   chats: ChatSummary[]
   memories: ProjectMemory[]
+  files: ProjectFile[]
   schedules: ScheduleRecord[]
   runs: RunRecord[]
 }

@@ -14,12 +14,18 @@ import re
 from dataclasses import asdict
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 
 from bran.agents import get_agent, list_agents
 from bran.background import spawn_background
 from bran.config import SETTINGS
+from bran.project_files import (
+    delete_file as delete_project_file,
+    files_prompt,
+    list_files as list_project_files,
+    save_upload as save_project_file,
+)
 from bran.persistence import (
     ChatRecord,
     ProjectRecord,
@@ -139,6 +145,9 @@ def _build_project_context(project: ProjectRecord) -> str:
     memories = list_project_memories(project.id)
     if memories:
         parts.append("## Memory\n" + "\n".join(f"- {m.text}" for m in memories))
+    files = files_prompt(project.id)
+    if files:
+        parts.append(files)
     return "\n\n".join(parts)
 
 
@@ -412,6 +421,7 @@ async def project_detail(project_id: str) -> dict[str, Any]:
             for c in chats
         ],
         "memories": [asdict(m) for m in list_project_memories(project_id)],
+        "files": list_project_files(project_id),
         "schedules": [asdict(s) for s in list_schedules(project_id=project_id)],
         # Activity = the project's autonomous/background runs (runner fires,
         # spawns) — NOT interactive chat turns, which live in Recents above.
@@ -478,6 +488,54 @@ async def remove_memory(project_id: str, entry_id: str) -> dict[str, Any]:
     if not delete_project_memory(entry_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"No memory {entry_id}")
     return {"deleted": entry_id}
+
+
+# ---------------------------------------------------------------------------
+# Project working files — managed-upload folder the agents read on demand.
+# ---------------------------------------------------------------------------
+
+_MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB per file
+
+
+@router.get("/projects/{project_id}/files")
+async def project_files(project_id: str) -> list[dict[str, Any]]:
+    if get_project(project_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No project {project_id}")
+    return list_project_files(project_id)
+
+
+@router.post("/projects/{project_id}/files")
+async def upload_files(
+    project_id: str, files: Annotated[list[UploadFile], File()]
+) -> list[dict[str, Any]]:
+    """Upload one or more files into the project's working folder."""
+    if get_project(project_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No project {project_id}")
+    saved: list[dict[str, Any]] = []
+    for f in files:
+        data = await f.read()
+        if len(data) > _MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                f"{f.filename!r} is {len(data):,} bytes — exceeds the "
+                f"{_MAX_UPLOAD_BYTES:,} byte limit",
+            )
+        try:
+            saved.append(save_project_file(project_id, f.filename or "upload", data))
+        except ValueError as e:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+    return saved
+
+
+@router.delete("/projects/{project_id}/files/{filename}")
+async def remove_file(project_id: str, filename: str) -> dict[str, Any]:
+    try:
+        ok = delete_project_file(project_id, filename)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+    if not ok:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No file {filename!r}")
+    return {"deleted": filename}
 
 
 # ---------------------------------------------------------------------------

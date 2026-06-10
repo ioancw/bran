@@ -6,6 +6,7 @@ import type {
   ChatEvent,
   ChatSummary,
   ProjectDetail,
+  ProjectFile,
   ProjectMemory,
   ProjectSummary,
   RunRecord,
@@ -77,6 +78,26 @@ export const api = {
   deleteMemory: async (projectId: string, entryId: string): Promise<void> => {
     const r = await fetch(
       `/spa/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(entryId)}`,
+      { method: 'DELETE' },
+    )
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
+  },
+
+  projectFiles: (projectId: string) =>
+    getJSON<ProjectFile[]>(`/spa/projects/${encodeURIComponent(projectId)}/files`),
+  uploadFiles: async (projectId: string, files: FileList | File[]): Promise<ProjectFile[]> => {
+    const body = new FormData()
+    for (const f of Array.from(files)) body.append('files', f)
+    const r = await fetch(`/spa/projects/${encodeURIComponent(projectId)}/files`, {
+      method: 'POST',
+      body, // browser sets multipart Content-Type + boundary
+    })
+    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
+    return r.json() as Promise<ProjectFile[]>
+  },
+  deleteFile: async (projectId: string, name: string): Promise<void> => {
+    const r = await fetch(
+      `/spa/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(name)}`,
       { method: 'DELETE' },
     )
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)

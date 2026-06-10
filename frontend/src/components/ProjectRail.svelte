@@ -86,6 +86,41 @@
     await api.deleteSchedule(n)
     await load()
   }
+
+  // --- Working files (managed-upload folder the agents read on demand) ---
+  let fileInput = $state<HTMLInputElement | null>(null)
+  let uploading = $state(false)
+  let dragOver = $state(false)
+  let fileError = $state('')
+
+  async function doUpload(files: FileList | File[]) {
+    if (!files.length) return
+    uploading = true
+    fileError = ''
+    try {
+      await api.uploadFiles(projectId, files)
+      await load()
+    } catch (e) {
+      fileError = e instanceof Error ? e.message : 'upload failed'
+    } finally {
+      uploading = false
+    }
+  }
+  function onPick(e: Event) {
+    const input = e.currentTarget as HTMLInputElement
+    if (input.files?.length) void doUpload(input.files)
+    input.value = '' // allow re-picking the same file
+  }
+  function onDrop(e: DragEvent) {
+    e.preventDefault()
+    dragOver = false
+    if (e.dataTransfer?.files?.length) void doUpload(e.dataTransfer.files)
+  }
+  async function removeFile(name: string) {
+    if (!(await confirmDialog(`Remove "${name}" from this project?`))) return
+    await api.deleteFile(projectId, name)
+    await load()
+  }
 </script>
 
 {#if data}
@@ -227,11 +262,51 @@
       </Section>
     {/if}
 
-    <Section label="Context" open={false}>
-      <div class="text-muted" style="font-size: 12px;">
-        <div style="margin-bottom: 4px;">On your computer</div>
-        <div class="card-quiet" style="font-size: 11px;">Local files — coming soon</div>
-      </div>
+    <Section label="Files" open={mode === 'home'}>
+      <p class="text-muted" style="font-size: 11px; margin-bottom: 8px;">
+        Uploaded files agents in this project can read on demand (PDFs, notes, data).
+      </p>
+
+      {#if data.files.length}
+        <div class="space-y-2" style="margin-bottom: 10px;">
+          {#each data.files as f}
+            <div class="file-row">
+              <span class="file-name mono" title={f.name}>{f.name}</span>
+              <span class="text-dim" style="font-size: 10px; white-space: nowrap;">{f.size_human}</span>
+              {#if mode === 'home'}
+                <button class="btn-ghost" title="remove" onclick={() => removeFile(f.name)}>×</button>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <div class="text-muted" style="font-size: 12px; font-style: italic; margin-bottom: 10px;">no files yet</div>
+      {/if}
+
+      {#if mode === 'home'}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="dropzone"
+          class:over={dragOver}
+          role="button"
+          tabindex="0"
+          onclick={() => fileInput?.click()}
+          onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && fileInput?.click()}
+          ondragover={(e) => { e.preventDefault(); dragOver = true }}
+          ondragleave={() => (dragOver = false)}
+          ondrop={onDrop}
+        >
+          {#if uploading}uploading…{:else}<span class="text-dim">drop files here, or</span> <span class="text-bright">browse</span>{/if}
+        </div>
+        <input
+          bind:this={fileInput}
+          type="file"
+          multiple
+          style="display: none;"
+          onchange={onPick}
+        />
+        {#if fileError}<div style="color: var(--danger, #c33); font-size: 11px; margin-top: 6px;">{fileError}</div>{/if}
+      {/if}
     </Section>
 
     {#if mode === 'home'}
@@ -250,6 +325,36 @@
 {/if}
 
 <style>
+  /* Working-files list + dropzone. */
+  .file-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+  }
+  .file-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--fg);
+  }
+  .dropzone {
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 12px 10px;
+    text-align: center;
+    font-size: 11px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .dropzone:hover { border-color: var(--accent-soft); }
+  .dropzone.over {
+    border-color: var(--accent);
+    background: var(--accent-glow);
+  }
+
   /* Read-only instructions preview in the chat rail. */
   .ref-text {
     font-family: var(--font-mono);
