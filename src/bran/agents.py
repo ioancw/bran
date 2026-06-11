@@ -180,13 +180,17 @@ FINANCE_NEWS_PROMPT = (
     "## RSS feeds (fetch in parallel)\n"
     "1. BBC Business — https://feeds.bbci.co.uk/news/business/rss.xml\n"
     "2. Bloomberg Markets — https://feeds.bloomberg.com/markets/news.rss\n"
-    "3. Financial Times — https://www.ft.com/rss/home/international\n"
-    "4. MarketWatch Top Stories — https://feeds.content.dowjones.io/public/rss/mw_topstories\n"
-    "5. Investing.com Economy — https://www.investing.com/rss/news_14.rss\n"
-    "6. Investing.com Forex — https://www.investing.com/rss/news_1.rss\n\n"
-    "Use `WebFetch` for each. If `mcp__tavily__tavily_extract` is in your tools, "
-    "prefer it for individual articles you want to read in full — it returns clean "
-    "body text rather than rendered HTML.\n\n"
+    "3. Bloomberg Economics — https://feeds.bloomberg.com/economics/news.rss\n"
+    "4. Financial Times — https://www.ft.com/rss/home/international\n"
+    "5. MarketWatch Top Stories — https://feeds.content.dowjones.io/public/rss/mw_topstories\n"
+    "6. Investing.com Economy — https://www.investing.com/rss/news_14.rss\n"
+    "7. Investing.com Forex — https://www.investing.com/rss/news_1.rss\n\n"
+    "Fetch each feed with `mcp__bran_docs__fetch_url`, which returns the raw RSS "
+    "XML and (unlike the built-in `WebFetch` tool) can reach every feed above, "
+    "including the FT. Fetch them up front, then parse the <item> entries. To read "
+    "the full body of an individual article you want to summarise in depth, you may "
+    "use `WebFetch`, or `mcp__tavily__tavily_extract` when it is in your tools — it "
+    "returns clean body text rather than rendered HTML.\n\n"
     "## Filter (default: finance)\n"
     "Unless the user passes a different filter in their prompt, apply the **finance** "
     "lens: prioritise markets (equities, bonds, FX, commodities), central banks, "
@@ -206,6 +210,7 @@ FINANCE_NEWS_PROMPT = (
     "otherwise skip this section.>\n\n"
     "## BBC Business\n"
     "## Bloomberg Markets\n"
+    "## Bloomberg Economics\n"
     "## Financial Times\n"
     "## MarketWatch\n"
     "## Economy & Macro (Investing.com)\n"
@@ -223,13 +228,16 @@ FINANCE_NEWS_PROMPT = (
     "- One sentence per story summary. Always include the URL.\n"
     "- FT articles require a subscription — flag '(paywall)' next to FT links.\n"
     "- Investing.com feeds are headlines-only; add '(headline only)' when ambiguous.\n"
-    "- If a feed fails to load, note it and continue with the others.\n"
+    "- If a feed fails to load, note it under a short 'Feeds unavailable' line and "
+    "continue with the others — never fabricate stories for a feed you couldn't fetch.\n"
     "- End with the feed timestamps so the user can gauge freshness.\n\n"
     "## Always save the briefing\n"
-    "Whether invoked interactively or on a schedule, save the final markdown to "
-    "`.bran/briefings/briefing_<YYYY-MM-DD>.md` using the `Write` tool BEFORE "
-    "returning your reply. The directory already exists. Use UTC date in the "
-    "filename. Then return the full briefing as your final message."
+    "Whether invoked interactively or on a schedule, use the `Write` tool to save "
+    "the final markdown to this EXACT absolute path BEFORE returning your reply:\n"
+    f"  {SETTINGS.briefings_dir}/briefing_<YYYY-MM-DD>.md\n"
+    "Use the UTC date in the filename. The directory already exists — do not invent "
+    "a different directory or a home path. Then return the full briefing as your "
+    "final message."
     + _MATH_NOTATION_NOTE
 )
 
@@ -237,13 +245,14 @@ FINANCE_NEWS_PROMPT = (
 FINANCE_NEWS_AGENT = AgentDefinition(
     description=(
         "Finance-focused morning news briefing. Fetches BBC Business, Bloomberg "
-        "Markets, FT, MarketWatch, and Investing.com (Economy + Forex) feeds and "
-        "produces a structured digest emphasising markets, rates, FX, commodities, "
-        "and macro. Use for any 'morning briefing', 'market briefing', or 'what "
-        "happened overnight in finance' style request."
+        "(Markets + Economics), FT, MarketWatch, and Investing.com (Economy + Forex) "
+        "feeds and produces a structured digest emphasising markets, rates, FX, "
+        "commodities, and macro. Use for any 'morning briefing', 'market briefing', "
+        "or 'what happened overnight in finance' style request."
     ),
     prompt=FINANCE_NEWS_PROMPT,
-    tools=["WebFetch", "Write", "Read", "mcp__bran_docs__read_pdf", *TAVILY_TOOLS],
+    tools=["WebFetch", "Write", "Read", "mcp__bran_docs__read_pdf",
+           "mcp__bran_docs__fetch_url", *TAVILY_TOOLS],
     mcpServers=["bran_docs", "tavily"] if os.getenv("TAVILY_API_KEY") else ["bran_docs"],
     model="sonnet",
 )
@@ -351,13 +360,14 @@ SUMMARISER = Agent(
 FINANCE_NEWS = Agent(
     name="finance-news",
     description=(
-        "Morning finance briefing. Pulls BBC Business, Bloomberg Markets, FT, "
-        "MarketWatch, and Investing.com feeds and produces a structured digest. "
-        "Saves to `.bran/briefings/briefing_<DATE>.md` on every run — ideal for "
+        "Morning finance briefing. Pulls BBC Business, Bloomberg (Markets + "
+        "Economics), FT, MarketWatch, and Investing.com feeds and produces a "
+        "structured digest. Saves to the briefings dir on every run — ideal for "
         "scheduling with `bran schedule add morning-finance finance-news ... --cron '0 7 * * *'`."
     ),
     system_prompt=FINANCE_NEWS_PROMPT,
-    tools=["WebFetch", "Write", "Read", "mcp__bran_docs__read_pdf", *_maybe_tavily_tools()],
+    tools=["WebFetch", "Write", "Read", "mcp__bran_docs__read_pdf",
+           "mcp__bran_docs__fetch_url", *_maybe_tavily_tools()],
     mcp_servers={"bran_docs": documents_server, **_maybe_tavily_servers()},
     model="sonnet",
     hooks=_WRITE_CONFINEMENT_HOOKS,

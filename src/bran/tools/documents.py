@@ -26,6 +26,7 @@ from claude_agent_sdk import create_sdk_mcp_server, tool
 _MAX_PAGES = 50
 _MAX_BYTES = 20 * 1024 * 1024  # 20 MB
 _TIMEOUT_S = 30.0
+_MAX_TEXT_CHARS = 600_000  # cap returned text so a huge page can't blow the buffer
 
 
 def _ok(text: str) -> dict[str, Any]:
@@ -112,9 +113,62 @@ async def read_pdf(args: dict[str, Any]) -> dict[str, Any]:
     return _ok(f"{head}\n\n{text}")
 
 
+@tool(
+    "fetch_url",
+    (
+        "Fetch the raw text of a web URL — an RSS/Atom feed, an HTML page, a JSON "
+        "or plain-text document — and return it. Uses a plain HTTP client with NO "
+        "publisher blocklist, so it reaches feeds/sites the built-in `WebFetch` "
+        "tool refuses or can't load (e.g. ft.com). `url` must be http(s). Returns "
+        "the response body as text (up to ~600k chars). For PDFs use `read_pdf` "
+        "instead. This returns the raw body (e.g. RSS XML) — parse it yourself."
+    ),
+    {"url": str},
+)
+async def fetch_url(args: dict[str, Any]) -> dict[str, Any]:
+    url = (args.get("url") or "").strip()
+    if not url:
+        return _err("a url is required (an http(s) URL).")
+    if not url.startswith(("http://", "https://")):
+        return _err("url must start with http:// or https://")
+
+    import httpx
+
+    headers = {"User-Agent": "bran/0.1 (+fetch_url)", "Accept": "*/*"}
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True, timeout=_TIMEOUT_S, headers=headers
+        ) as client:
+            resp = await client.get(url)
+    except Exception as e:
+        return _err(f"couldn't fetch {url}: {e}")
+
+    if resp.status_code >= 400:
+        return _err(f"HTTP {resp.status_code} fetching {url}")
+    if len(resp.content) > _MAX_BYTES:
+        return _err(
+            f"response is {len(resp.content):,} bytes — exceeds the {_MAX_BYTES:,} byte limit"
+        )
+
+    text = resp.text or ""
+    ctype = resp.headers.get("content-type", "")
+    truncated = len(text) > _MAX_TEXT_CHARS
+    if truncated:
+        text = text[:_MAX_TEXT_CHARS]
+    head = f"GET {url} → HTTP {resp.status_code}"
+    if ctype:
+        head += f" ({ctype})"
+    if truncated:
+        head += f" — truncated at {_MAX_TEXT_CHARS:,} chars"
+    if not text.strip():
+        return _ok(f"{head}\n\n(empty body)")
+    return _ok(f"{head}\n\n{text}")
+
+
 # Document tools live on their own least-privilege server ("bran_docs" =>
 # mcp__bran_docs__<name>) so utility agents (research, finance-news, summariser)
-# can read PDFs WITHOUT also getting the orchestration tools (spawn/runners) on
-# the main "bran" server.
-DOCUMENT_TOOLS = [read_pdf]
+# can read PDFs / fetch feeds WITHOUT also getting the orchestration tools
+# (spawn/runners) on the main "bran" server. `fetch_url` is granted only to
+# agents that list it (finance-news), so it's not ambient capability.
+DOCUMENT_TOOLS = [read_pdf, fetch_url]
 documents_server = create_sdk_mcp_server(name="bran_docs", version="0.1.0", tools=DOCUMENT_TOOLS)
