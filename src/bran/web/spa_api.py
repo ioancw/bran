@@ -300,6 +300,31 @@ def _schedule_dict(s: ScheduleRecord) -> dict[str, Any]:
     return d
 
 
+def _normalize_cron(expr: str) -> str:
+    """Resolve a schedule field — natural language ('every weekday at 8am') OR a
+    raw 5-field cron — to a canonical cron string, via nl_cron. Raises a 400 with
+    a recoverable suggestion if it can't be parsed."""
+    from bran.nl_cron import NlCronParseError, parse
+
+    try:
+        return parse(expr).cron
+    except NlCronParseError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+
+
+@router.get("/schedules/parse")
+async def parse_schedule(expr: str) -> dict[str, Any]:
+    """Interpret a schedule string (natural language or cron) without saving —
+    powers the live 'this is when it'll run' preview in the schedule forms."""
+    from bran.nl_cron import NlCronParseError, parse
+
+    try:
+        r = parse(expr)
+        return {"ok": True, "cron": r.cron, "human": r.human, "error": ""}
+    except NlCronParseError as e:
+        return {"ok": False, "cron": "", "human": "", "error": str(e)}
+
+
 @router.get("/schedules")
 async def schedules(project_id: str | None = None) -> list[dict[str, Any]]:
     return [_schedule_dict(s) for s in list_schedules(project_id=project_id or None)]
@@ -330,6 +355,8 @@ async def new_schedule(
         cron = ""
     elif not cron.strip():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "cron or run_at required")
+    else:
+        cron = _normalize_cron(cron)  # accept natural language too
     rec = ScheduleRecord.new(name=name, agent=agent, task=task, cron=cron,
                              project_id=project_id or None, run_at=run_at)
     insert_schedule(rec)
@@ -338,6 +365,53 @@ async def new_schedule(
     try:
         from bran.scheduler import register_schedule
 
+        register_schedule(rec)
+    except Exception:
+        pass
+    return _schedule_dict(rec)
+
+
+@router.post("/schedules/{name}")
+async def edit_schedule(
+    name: str,
+    agent: Annotated[str, Form()],
+    cron: Annotated[str, Form()] = "",
+    task: Annotated[str, Form()] = "",
+    run_at: Annotated[str | None, Form()] = None,
+) -> dict[str, Any]:
+    """Edit a runner's agent / task / trigger in place and re-sync the live job.
+
+    Name, project, and paused state are preserved (rename/move/pause are separate
+    actions). Same validation as create: agent must exist; run_at (if given)
+    makes it a one-shot and clears cron, else cron is required."""
+    from bran.persistence import get_schedule, update_schedule
+
+    if get_schedule(name) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No schedule {name}")
+    try:
+        get_agent(agent)
+    except KeyError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+    run_at = (run_at or "").strip() or None
+    if run_at:
+        from datetime import datetime
+
+        try:
+            datetime.fromisoformat(run_at)
+        except ValueError:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"invalid run_at: {run_at!r}")
+        cron = ""
+    elif not cron.strip():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "cron or run_at required")
+    else:
+        cron = _normalize_cron(cron)  # accept natural language too
+    rec = update_schedule(name, agent=agent, task=task, cron=cron, run_at=run_at)
+    # Re-sync the live scheduler: drop the old job, add the new one (register is a
+    # no-op when the runner is paused, so paused stays paused).
+    try:
+        from bran.scheduler import register_schedule, unregister_schedule
+
+        unregister_schedule(name)
         register_schedule(rec)
     except Exception:
         pass

@@ -58,6 +58,10 @@ export const api = {
     form<{ run_id: string; cancelled: number }>(`/spa/runs/${encodeURIComponent(id)}/cancel`, {}),
 
   schedules: () => getJSON<ScheduleRecord[]>('/spa/schedules'),
+  parseSchedule: (expr: string) =>
+    getJSON<{ ok: boolean; cron: string; human: string; error: string }>(
+      `/spa/schedules/parse?expr=${encodeURIComponent(expr)}`,
+    ),
 
   projects: () => getJSON<ProjectSummary[]>('/spa/projects'),
   projectDetail: (id: string) => getJSON<ProjectDetail>(`/spa/projects/${encodeURIComponent(id)}`),
@@ -110,6 +114,13 @@ export const api = {
     if (fields.project_id) body.project_id = fields.project_id // omit → standalone
     if (fields.run_at) body.run_at = fields.run_at // present → one-shot
     return form<ScheduleRecord>('/spa/schedules', body)
+  },
+  updateSchedule: (name: string, fields: { agent: string; task?: string; cron?: string; run_at?: string }) => {
+    const body: Record<string, string> = {
+      agent: fields.agent, task: fields.task ?? '', cron: fields.cron ?? '',
+    }
+    if (fields.run_at) body.run_at = fields.run_at // present → one-shot
+    return form<ScheduleRecord>(`/spa/schedules/${encodeURIComponent(name)}`, body)
   },
   deleteSchedule: async (name: string): Promise<void> => {
     const r = await fetch(`/spa/schedules/${encodeURIComponent(name)}`, { method: 'DELETE' })

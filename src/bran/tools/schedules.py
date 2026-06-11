@@ -205,6 +205,53 @@ async def _set_enabled(name: str, enabled: bool) -> dict[str, Any]:
 
 
 @tool(
+    "update_runner",
+    (
+        "Edit an EXISTING Runner's agent, task (the prompt it runs), and/or "
+        "schedule without recreating it — its name and run history are preserved. "
+        "Use when the user says 'change the prompt for X', 'run it at 8 instead', "
+        "'point it at the research agent', etc. Arguments:\n"
+        "- name: the runner to edit (must exist).\n"
+        "- agent / task / schedule: pass a NEW value for any you want to change; "
+        "pass an empty string to leave that field as-is. `schedule` takes the same "
+        "formats as create_runner (plain English, 5-field cron, or an ISO datetime "
+        "for a one-shot). Confirm the new settings and next fire time back."
+    ),
+    {"name": str, "agent": str, "task": str, "schedule": str},
+)
+async def update_runner(args: dict[str, Any]) -> dict[str, Any]:
+    from bran.agents import get_agent
+    from bran.persistence import get_schedule, update_schedule
+
+    name = (args.get("name") or "").strip()
+    rec = get_schedule(name)
+    if rec is None:
+        return _err(f"no runner named {name!r}. List runners to see what exists.")
+
+    agent = (args.get("agent") or "").strip() or rec.agent
+    new_task = (args.get("task") or "").strip()
+    task = new_task if new_task else rec.task
+    sched = (args.get("schedule") or "").strip()
+    if sched:
+        try:
+            cron, run_at = _parse_schedule(sched)
+        except ValueError as e:
+            return _err(str(e))
+    else:
+        cron, run_at = rec.cron, rec.run_at
+
+    try:
+        get_agent(agent)
+    except KeyError:
+        return _err(f"unknown agent {agent!r}. List agents first if unsure.")
+
+    new = update_schedule(name, agent=agent, task=task, cron=cron, run_at=run_at)
+    _unregister(name)
+    _register(new)  # no-op when paused
+    return _ok(f"Updated runner '{name}': {agent} runs {_when(new)}. {_next_run(new)}")
+
+
+@tool(
     "delete_runner",
     "Delete a Runner permanently. The user must clearly want it removed.",
     {"name": str},
@@ -220,4 +267,4 @@ async def delete_runner(args: dict[str, Any]) -> dict[str, Any]:
 
 
 # All runner tools, for the `bran` MCP server to splat into its tool list.
-RUNNER_TOOLS = [create_runner, list_runners, pause_runner, resume_runner, delete_runner]
+RUNNER_TOOLS = [create_runner, list_runners, update_runner, pause_runner, resume_runner, delete_runner]

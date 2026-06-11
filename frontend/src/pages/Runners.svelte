@@ -7,6 +7,7 @@
   import { errorText } from '../lib/errors'
   import { localDateTime } from '../lib/time'
   import Page from '../components/Page.svelte'
+  import CronField from '../components/CronField.svelte'
   import type { AgentInfo, ProjectSummary, ScheduleRecord } from '../lib/types'
 
   let runners = $state<ScheduleRecord[]>([])
@@ -113,13 +114,15 @@
           {#if fKind === 'once'}
             <input class="field" type="datetime-local" bind:value={fRunAt} />
           {:else}
-            <input class="field" bind:value={fCron} placeholder="cron — e.g. 0 8 * * * (08:00 daily)" />
+            <CronField bind:value={fCron} />
           {/if}
           <select class="field" bind:value={fProject}>
             <option value="">standalone (no project)</option>
             {#each projects as p}<option value={p.id}>attach to: {p.name}</option>{/each}
           </select>
-          <input class="field" bind:value={fTask} placeholder={fKind === 'once' ? 'task / prompt to run once' : 'task / prompt to run each tick'} style="grid-column: span 2;" />
+          <textarea class="field" bind:value={fTask} rows="4"
+            placeholder={fKind === 'once' ? 'prompt to run once — what should the agent do?' : 'prompt to run each tick — what should the agent do?'}
+            style="grid-column: span 2; resize: vertical; line-height: 1.5;"></textarea>
         </div>
         <div style="display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px;">
           <button class="btn-ghost" onclick={() => (showForm = false)}>cancel</button>

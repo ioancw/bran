@@ -440,6 +440,26 @@ def get_schedule(name: str) -> ScheduleRecord | None:
     return _row_to_schedule(row) if row else None
 
 
+def update_schedule(
+    name: str, *, agent: str, task: str, cron: str, run_at: str | None,
+) -> ScheduleRecord | None:
+    """Edit an existing runner's agent/task/trigger in place (keyed by name).
+
+    `name`, `project_id`, and `enabled` are preserved — name is the stable
+    identifier (the APScheduler job id + how the user refers to it), and pausing
+    is a separate action. Returns the fresh record, or None if no such runner.
+    Callers running `bran serve` should re-register the live job afterwards.
+    """
+    with _lock, _conn() as conn:
+        cur = conn.execute(
+            "UPDATE schedules SET agent = ?, task = ?, cron = ?, run_at = ? WHERE name = ?",
+            (agent, task, cron, run_at, name),
+        )
+        if cur.rowcount == 0:
+            return None
+    return get_schedule(name)
+
+
 def set_schedule_enabled(name: str, enabled: bool) -> ScheduleRecord | None:
     """Pause/resume a runner. Updates the row and returns the fresh record (or
     None if no such schedule). Callers in `bran serve` should also (un)register

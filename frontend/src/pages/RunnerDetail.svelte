@@ -9,30 +9,71 @@
   import { confirmDialog } from '../lib/confirm.svelte'
   import Page from '../components/Page.svelte'
   import StatusBadge from '../components/StatusBadge.svelte'
-  import type { ProjectSummary, RunRecord, ScheduleRecord } from '../lib/types'
+  import CronField from '../components/CronField.svelte'
+  import type { AgentInfo, ProjectSummary, RunRecord, ScheduleRecord } from '../lib/types'
 
   let { runnerName }: { runnerName: string } = $props()
 
   let runner = $state<ScheduleRecord | null>(null)
   let runs = $state<RunRecord[]>([])
   let projects = $state<ProjectSummary[]>([])
+  let agents = $state<AgentInfo[]>([])
   let error = $state<string | null>(null)
   let loaded = $state(false)
   let firing = $state(false)
   let busy = $state(false)
 
+  // --- edit mode ---
+  let editing = $state(false)
+  let saving = $state(false)
+  let eAgent = $state('')
+  let eTask = $state('')
+  let eKind = $state<'cron' | 'once'>('cron')
+  let eCron = $state('')
+  let eRunAt = $state('')
+  let editError = $state('')
+
   const projName = (id: string | null) => (id ? projects.find((p) => p.id === id)?.name ?? id : null)
 
   async function load() {
     try {
-      const [schedules, ps] = await Promise.all([api.schedules(), api.projects()])
+      const [schedules, ps, ag] = await Promise.all([api.schedules(), api.projects(), api.agents()])
       runner = schedules.find((s) => s.name === runnerName) ?? null
       projects = ps
+      agents = ag
       if (runner) runs = await api.runs({ schedule_id: runner.id, limit: 50 })
     } catch (e) {
       error = String(e)
     } finally {
       loaded = true
+    }
+  }
+
+  function startEdit() {
+    if (!runner) return
+    eAgent = runner.agent
+    eTask = runner.task ?? ''
+    eKind = runner.run_at ? 'once' : 'cron'
+    eCron = runner.cron ?? ''
+    eRunAt = runner.run_at ? runner.run_at.slice(0, 16) : '' // ISO → datetime-local
+    editError = ''
+    editing = true
+  }
+  async function saveEdit() {
+    if (!runner || saving) return
+    saving = true
+    editError = ''
+    try {
+      const fields =
+        eKind === 'once'
+          ? { agent: eAgent, task: eTask, run_at: eRunAt }
+          : { agent: eAgent, task: eTask, cron: eCron.trim() }
+      runner = await api.updateSchedule(runner.name, fields)
+      editing = false
+    } catch (e) {
+      editError = e instanceof Error ? e.message : 'save failed'
+    } finally {
+      saving = false
     }
   }
   $effect(() => {
@@ -73,7 +114,10 @@
 <Page title={runnerName}>
   {#snippet subtitle()}runner{/snippet}
   {#snippet actions()}
-    {#if runner}<button class="btn-outline" onclick={remove}>delete</button>{/if}
+    {#if runner && !editing}
+      <button class="btn-outline" onclick={startEdit}>edit</button>
+      <button class="btn-outline" onclick={remove}>delete</button>
+    {/if}
   {/snippet}
 
   {#if error}<div class="card" style="color: var(--red);">{errorText(error)}</div>{/if}
@@ -85,13 +129,48 @@
     <div class="grid grid-cols-3 gap-6">
       <!-- Main: run now + run history -->
       <div class="col-span-2 space-y-6">
-        <div class="card">
-          <div class="label-cap" style="margin-bottom: 8px;">Task</div>
-          <div class="text-fg" style="font-size: 14px; white-space: pre-wrap; margin-bottom: 12px;">{runner.task || '—'}</div>
-          <div style="display: flex; justify-content: flex-end;">
-            <button class="btn-primary" disabled={firing} onclick={runNow}>{firing ? 'starting…' : 'run now →'}</button>
+        {#if editing}
+          <div class="card">
+            <div class="label-cap" style="margin-bottom: 8px;">Edit runner</div>
+            <div class="space-y-3">
+              <div>
+                <div class="label-cap" style="margin-bottom: 4px;">Prompt / task</div>
+                <textarea class="field" rows="6" bind:value={eTask}
+                  placeholder="what the agent should do each time it runs"
+                  style="resize: vertical; line-height: 1.5;"></textarea>
+              </div>
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <div class="label-cap" style="margin-bottom: 4px;">Agent</div>
+                  <select class="field" bind:value={eAgent}>
+                    {#each agents as a}<option value={a.name}>{a.name}</option>{/each}
+                  </select>
+                </div>
+                <div>
+                  <div class="label-cap" style="margin-bottom: 4px;">Trigger</div>
+                  {#if eKind === 'once'}
+                    <input class="field" type="datetime-local" bind:value={eRunAt} />
+                  {:else}
+                    <CronField bind:value={eCron} />
+                  {/if}
+                </div>
+              </div>
+              {#if editError}<div style="color: var(--red); font-size: 12px;">{editError}</div>{/if}
+              <div style="display: flex; gap: 6px; justify-content: flex-end;">
+                <button class="btn-ghost" disabled={saving} onclick={() => (editing = false)}>cancel</button>
+                <button class="btn-primary" disabled={saving} onclick={saveEdit}>{saving ? 'saving…' : 'save'}</button>
+              </div>
+            </div>
           </div>
-        </div>
+        {:else}
+          <div class="card">
+            <div class="label-cap" style="margin-bottom: 8px;">Task</div>
+            <div class="text-fg" style="font-size: 14px; white-space: pre-wrap; margin-bottom: 12px;">{runner.task || '—'}</div>
+            <div style="display: flex; justify-content: flex-end;">
+              <button class="btn-primary" disabled={firing} onclick={runNow}>{firing ? 'starting…' : 'run now →'}</button>
+            </div>
+          </div>
+        {/if}
 
         <section>
           <div class="label-cap" style="margin-bottom: 8px;">Runs ({runs.length})</div>

@@ -10,6 +10,7 @@
   import { confirmDialog } from '../lib/confirm.svelte'
   import Section from './Section.svelte'
   import StatusBadge from './StatusBadge.svelte'
+  import CronField from './CronField.svelte'
   import type { AgentInfo, ProjectDetail } from '../lib/types'
 
   // `home` = the project page (configure: editable Knowledge + Scheduled open,
@@ -226,8 +227,10 @@
             <select class="field" bind:value={sAgent} style="margin-bottom: 6px;">
               {#each agents as a}<option value={a.name}>{a.name}</option>{/each}
             </select>
-            <input class="field" bind:value={sCron} placeholder="cron e.g. 0 8 * * *" style="margin-bottom: 6px;" />
-            <input class="field" bind:value={sTask} placeholder="task / prompt" />
+            <div style="margin-bottom: 6px;"><CronField bind:value={sCron} /></div>
+            <textarea class="field" bind:value={sTask} rows="4"
+              placeholder="prompt — what should the agent do each run?"
+              style="resize: vertical; line-height: 1.5;"></textarea>
             <div style="display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px;">
               <button class="btn-ghost" onclick={() => (showSchedForm = false)}>cancel</button>
               <button class="btn-primary" onclick={addSchedule}>add</button>

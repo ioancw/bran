@@ -296,8 +296,10 @@ ORCHESTRATOR = Agent(
         "  'every morning/weekday', 'each week', 'at 7am', 'remind me to run X'), "
         "  use the Runner tools: `mcp__bran__create_runner` (a cron expression for "
         "  recurring, or an ISO datetime for a one-shot), plus `list_runners`, "
-        "  `pause_runner`, `resume_runner`, `delete_runner`. Ask the user for any "
-        "  missing detail (which agent, what time, attach to a project?) before "
+        "  `update_runner` (edit an existing runner's agent/task/schedule in place "
+        "  — prefer this over delete+recreate when the user just wants to tweak "
+        "  one), `pause_runner`, `resume_runner`, `delete_runner`. Ask the user for "
+        "  any missing detail (which agent, what time, attach to a project?) before "
         "  creating, then confirm what you scheduled and when it next fires.\n"
         "- To read a PDF (a filing, paper, or report — a local file path or an "
         "  http(s) URL the user gives you), use `mcp__bran_docs__read_pdf`; the "
@@ -317,6 +319,7 @@ ORCHESTRATOR = Agent(
         "mcp__bran__save_project_memory",
         "mcp__bran__create_runner",
         "mcp__bran__list_runners",
+        "mcp__bran__update_runner",
         "mcp__bran__pause_runner",
         "mcp__bran__resume_runner",
         "mcp__bran__delete_runner",
