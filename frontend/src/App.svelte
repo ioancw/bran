@@ -23,7 +23,7 @@
 
   // Nav counts (best-effort; nav still renders if these fail).
   let counts = $state<Record<string, number | null>>({
-    projects: null, chat: null, runs: null, outputs: null, agents: null, runners: null,
+    projects: null, runs: null, outputs: null, agents: null, runners: null,
   })
   let fleetRuns = $state<RunRecord[]>([])
   async function loadCounts() {

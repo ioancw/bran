@@ -416,7 +416,7 @@ def build_options_for(
 
     `append_system` (when set) is concatenated onto the agent's system prompt.
     This is how project-scoped chats inject their always-on instructions —
-    see web/routes.py::chat_stream.
+    see web/spa_api.py::chat_stream.
 
     The global "About the user" instructions (Settings → About me) are layered
     in here because *every* surface — chat, runners, spawns, manual runs, CLI —

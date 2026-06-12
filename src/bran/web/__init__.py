@@ -1,1 +1,1 @@
-"""bran web UI — HTMX + Tailwind + Jinja2, mounted into the FastAPI app."""
+"""bran web layer — the Svelte SPA (served from web/spa/) and its /spa JSON API."""

@@ -79,8 +79,6 @@ export const api = {
     const r = await fetch(`/spa/projects/${encodeURIComponent(id)}`, { method: 'DELETE' })
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
   },
-  memories: (projectId: string) =>
-    getJSON<ProjectMemory[]>(`/spa/projects/${encodeURIComponent(projectId)}/memory`),
   addMemory: (projectId: string, text: string) =>
     form<ProjectMemory>(`/spa/projects/${encodeURIComponent(projectId)}/memory`, { text }),
   deleteMemory: async (projectId: string, entryId: string): Promise<void> => {
@@ -91,8 +89,6 @@ export const api = {
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
   },
 
-  projectFiles: (projectId: string) =>
-    getJSON<ProjectFile[]>(`/spa/projects/${encodeURIComponent(projectId)}/files`),
   uploadFiles: async (projectId: string, files: FileList | File[]): Promise<ProjectFile[]> => {
     const body = new FormData()
     for (const f of Array.from(files)) body.append('files', f)
@@ -134,11 +130,6 @@ export const api = {
     form<ScheduleRecord>(`/spa/schedules/${encodeURIComponent(name)}/enabled`, {
       enabled: enabled ? 'true' : 'false',
     }),
-  moveChat: (chatId: string, projectId: string) =>
-    form<{ chat_id: string; project_id: string }>(
-      `/spa/chats/${encodeURIComponent(chatId)}/move`, { project_id: projectId },
-    ),
-
   uploadAttachments: async (files: File[]): Promise<Attachment[]> => {
     const body = new FormData()
     for (const f of files) body.append('files', f)

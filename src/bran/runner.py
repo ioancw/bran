@@ -17,7 +17,6 @@ from claude_agent_sdk import (
     ClaudeAgentOptions,
     ResultMessage,
     SystemMessage,
-    TextBlock,
     ToolUseBlock,
     query,
 )
@@ -290,18 +289,3 @@ def _absorb_message(record: RunRecord, message: Any) -> None:
         record.status = "failed" if message.is_error else "completed"
 
 
-# Helpers used by the REPL to pretty-print streamed content.
-
-def extract_text(message: Any) -> str | None:
-    """Return concatenated TextBlock text from an AssistantMessage, if any."""
-    if not isinstance(message, AssistantMessage):
-        return None
-    parts = [b.text for b in message.content if isinstance(b, TextBlock)]
-    return "".join(parts) if parts else None
-
-
-def extract_tool_calls(message: Any) -> list[tuple[str, dict[str, Any]]]:
-    """Return list of (tool_name, input) for any ToolUseBlocks in the message."""
-    if not isinstance(message, AssistantMessage):
-        return []
-    return [(b.name, b.input) for b in message.content if isinstance(b, ToolUseBlock)]

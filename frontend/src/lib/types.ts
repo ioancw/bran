@@ -88,12 +88,6 @@ export interface ArtifactEntry {
   size: number | null
 }
 
-export interface BriefingSummary {
-  name: string
-  size_kb: number
-  mtime: number
-}
-
 export interface ProjectMemory {
   id: string
   project_id: string
@@ -118,22 +112,6 @@ export interface ProjectDetail {
   files: ProjectFile[]
   schedules: ScheduleRecord[]
   runs: RunRecord[]
-}
-
-export interface DashboardData {
-  stats: {
-    runs_completed: number
-    runs_failed: number
-    runs_running: number
-    total_cost_usd: number
-    per_agent: { name: string; count: number }[]
-  }
-  upcoming: { name: string; agent: string; cron: string; next_run: string | null; countdown: string }[]
-  buckets: {
-    label: string
-    items: { kind: string; title: string; snippet: string; agent: string; time_label: string; href: string }[]
-  }[]
-  today_label: string
 }
 
 // --- The unified chat event (mirror of bran.web.events). One shape for both
