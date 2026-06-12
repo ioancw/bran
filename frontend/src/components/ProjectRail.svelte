@@ -28,7 +28,9 @@
   let name = $state('')
   let description = $state('')
   let instructions = $state('')
+  let workDir = $state('')
   let savedFlash = $state(false)
+  let saveError = $state('')
   let newMemory = $state('')
 
   let showSchedForm = $state(false)
@@ -43,6 +45,7 @@
       name = data.project.name
       description = data.project.description
       instructions = data.project.instructions
+      workDir = data.project.work_dir ?? ''
     } catch {
       /* ignore — rail just stays empty */
     }
@@ -57,7 +60,15 @@
   })
 
   async function save() {
-    await api.saveProject(projectId, { name, description, instructions })
+    saveError = ''
+    try {
+      const saved = await api.saveProject(projectId, { name, description, instructions, work_dir: workDir })
+      workDir = saved.work_dir // server echoes the resolved path
+    } catch (e) {
+      // Most commonly a 400 from working-folder validation (bad/missing path).
+      saveError = e instanceof Error ? e.message : 'save failed'
+      return
+    }
     savedFlash = true
     onrenamed?.(name)
     void loadProjects() // keep names fresh elsewhere (sidebar, breadcrumb)
@@ -287,6 +298,24 @@
       {/if}
 
       {#if mode === 'home'}
+        <!-- Working folder: a real directory agents may read AND write — the
+             Cowork-style "do file work where I work". Distinct from the
+             managed uploads above (read-only material the user provides). -->
+        <div class="rail-divider"></div>
+        <div class="label-cap" style="margin-bottom: 6px;">Working folder · read + write</div>
+        <p class="text-muted" style="font-size: 11px; margin-bottom: 8px;">
+          Agents create deliverables here (reports, CSVs, edited copies). Absolute path as the server sees it — WSL-style, e.g. <code>/mnt/c/Users/you/Documents/reports</code>.
+        </p>
+        <div style="display: flex; gap: 6px;">
+          <input class="field mono" bind:value={workDir} placeholder="no working folder"
+                 style="font-size: 11px;"
+                 onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); save() } }} />
+          <button class="btn-primary" onclick={save}>save</button>
+        </div>
+        {#if saveError}<div style="color: var(--red); font-size: 11px; margin-top: 6px;">{saveError}</div>{/if}
+        {#if savedFlash}<div class="label-cap" style="color: var(--accent-soft); margin-top: 6px;">saved ✓</div>{/if}
+
+        <div class="rail-divider"></div>
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div
           class="dropzone"
@@ -309,6 +338,11 @@
           onchange={onPick}
         />
         {#if fileError}<div style="color: var(--danger, #c33); font-size: 11px; margin-top: 6px;">{fileError}</div>{/if}
+      {:else if workDir.trim()}
+        <!-- Beside a chat: just show where the agent can produce files. -->
+        <div class="rail-divider"></div>
+        <div class="label-cap" style="margin-bottom: 4px;">Working folder · read + write</div>
+        <div class="mono text-dim" style="font-size: 11px; word-break: break-all;">{workDir}</div>
       {/if}
     </Section>
 

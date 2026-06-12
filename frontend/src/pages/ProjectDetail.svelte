@@ -50,7 +50,7 @@
     if (!(await confirmDialog(`Delete project "${name}"? Its chats become loose; nothing is lost.`))) return
     await api.deleteProject(projectId)
     setScope(null)
-    navigate('/')
+    navigate('/projects')
   }
 </script>
 

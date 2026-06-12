@@ -41,9 +41,77 @@ def _default_roots() -> list[Path]:
     so the finance agent's hard-coded relative `.bran/briefings/...` target
     resolves as allowed even though it's written relative to the cwd; with the
     default BRAN_HOME the two coincide.
+
+    On top of the static roots, the *ambient* bran project's working folder
+    (projects.work_dir) is admitted when the current run is attached to one —
+    that's the Cowork-style "point a project at a real folder and let the agent
+    produce files there". The run's project travels in a contextvar set by
+    runner._drive, which propagates into SDK hook callbacks the same way it
+    already does into in-process MCP tools (see spawn_agent).
+    """
+    from bran.background import current_project_id
+
+    return write_roots_for_project(current_project_id.get())
+
+
+def write_roots_for_project(project_id: str | None) -> list[Path]:
+    """The write roots for a run attached to `project_id` (None = static only).
+
+    Also used at artifact-serving time, where the project comes from the run
+    record rather than the ambient contextvar. Lazy imports keep module load
+    light and dodge import cycles (permissions is imported by agents at
+    startup; persistence is heavier).
     """
     roots = {SETTINGS.bran_home.resolve(), (SETTINGS.project_root / ".bran").resolve()}
+    wd = work_dir_for_project(project_id)
+    if wd is not None:
+        roots.add(wd)
     return list(roots)
+
+
+def work_dir_for_project(project_id: str | None) -> Path | None:
+    """The validated work_dir of a project, or None if unset/invalid."""
+    if not project_id:
+        return None
+    from bran.persistence import get_project
+
+    project = get_project(project_id)
+    if project is None or not (project.work_dir or "").strip():
+        return None
+    try:
+        return validate_work_dir(project.work_dir)
+    except ValueError:
+        # A stored work_dir that no longer validates (deleted folder, etc.)
+        # simply grants nothing — fail closed.
+        return None
+
+
+def ambient_work_dir() -> Path | None:
+    """The validated work_dir of the currently-executing run's project, if any."""
+    from bran.background import current_project_id
+
+    return work_dir_for_project(current_project_id.get())
+
+
+def validate_work_dir(raw: str) -> Path:
+    """Validate a user-supplied working-folder path; returns it resolved.
+
+    Must be an absolute path to an existing directory, and not a filesystem
+    root — a work_dir of `/` or `C:\\` would hand the agent write access to
+    everything, which defeats the confinement entirely.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        raise ValueError("empty path")
+    p = Path(raw).expanduser()
+    if not p.is_absolute():
+        raise ValueError(f"work_dir must be an absolute path, got {raw!r}")
+    p = p.resolve()
+    if str(p) == p.anchor:
+        raise ValueError("work_dir may not be a filesystem root")
+    if not p.is_dir():
+        raise ValueError(f"work_dir does not exist or is not a directory: {p}")
+    return p
 
 
 def _resolve(path_str: str) -> Path | None:
@@ -66,6 +134,19 @@ def _resolve(path_str: str) -> Path | None:
 
 def _is_within(target: Path, roots: list[Path]) -> bool:
     return any(target == r or r in target.parents for r in roots)
+
+
+def allowed_write_target(path_str: str) -> Path | None:
+    """Resolve `path_str` and return it iff it falls inside the current allowed
+    write roots (incl. the ambient project's work_dir), else None.
+
+    Shared by the confinement hook's logic and by artifact capture/serving in
+    the runner + API, so "what counts as a sanctioned write" has one definition.
+    """
+    target = _resolve(path_str)
+    if target is not None and _is_within(target, _default_roots()):
+        return target
+    return None
 
 
 def make_write_confinement_hook(roots: list[Path] | None = None):
@@ -94,14 +175,19 @@ def make_write_confinement_hook(roots: list[Path] | None = None):
             return {}  # inside the sandbox → let the normal flow accept it
 
         pretty = ", ".join(str(r) for r in active_roots)
+        wd = ambient_work_dir()
+        suggestion = (
+            f"Save any output in the project's working folder ({wd}) instead."
+            if wd is not None
+            else f"Save any output under the briefings directory ({SETTINGS.briefings_dir}) instead."
+        )
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
                 "permissionDecisionReason": (
                     f"Write to {target_str!r} blocked: this agent may only write "
-                    f"inside {pretty}. Save any output under the briefings "
-                    f"directory ({SETTINGS.briefings_dir}) instead."
+                    f"inside {pretty}. {suggestion}"
                 ),
             }
         }

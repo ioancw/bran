@@ -96,11 +96,14 @@ def _project_append_system(project_id: str | None) -> str | None:
     mems = list_project_memories(project_id)
     if mems:
         parts.append("## Memory\n" + "\n".join(f"- {m.text}" for m in mems))
-    from bran.project_files import files_prompt
+    from bran.project_files import files_prompt, workdir_prompt
 
     files = files_prompt(project_id)
     if files:
         parts.append(files)
+    workdir = workdir_prompt(project.work_dir)
+    if workdir:
+        parts.append(workdir)
     return "\n\n".join(parts) if parts else None
 
 

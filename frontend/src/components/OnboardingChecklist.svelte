@@ -21,7 +21,7 @@
   }
 
   const steps = $derived([
-    { done: projectDone, label: 'Create a project', to: '/' },
+    { done: projectDone, label: 'Create a project', to: '/projects' },
     { done: chatDone, label: 'Start a chat', to: '/chat' },
     { done: runnerDone, label: 'Schedule a runner', to: '/runners' },
   ])

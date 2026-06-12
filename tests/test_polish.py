@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 
@@ -27,3 +28,22 @@ def test_ensure_dirs_is_idempotent_and_creates_briefings():
     SETTINGS.ensure_dirs()  # second call must not raise
     assert SETTINGS.bran_home.is_dir()
     assert SETTINGS.briefings_dir.is_dir()
+
+
+def test_save_attachment_unique_and_sanitised():
+    """Composer attachments: traversal-safe names, no collisions, under bran_home."""
+    from bran.config import SETTINGS
+    from bran.project_files import save_attachment
+
+    a = save_attachment("report.pdf", b"x")
+    b = save_attachment("report.pdf", b"y")
+    assert a["name"] == b["name"] == "report.pdf"
+    assert a["path"] != b["path"]  # unique prefix — same name never collides
+    for entry in (a, b):
+        p = Path(entry["path"])
+        assert p.is_file()
+        assert SETTINGS.bran_home.resolve() in p.resolve().parents
+    # Directory parts are stripped (traversal-safe).
+    c = save_attachment("../../etc/passwd", b"z")
+    assert c["name"] == "passwd"
+    assert SETTINGS.bran_home.resolve() in Path(c["path"]).resolve().parents

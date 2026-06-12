@@ -28,7 +28,14 @@
   // Two domains, surfaced as labeled groups so the IA is self-explanatory:
   // Workspace (where you work) vs Fleet (the agents and their runs).
   const groups = $derived([
-    { label: 'Workspace', items: [{ key: 'projects', label: 'Projects', to: '/' }] },
+    {
+      label: 'Workspace',
+      items: [
+        // Today is the assistant's home: deliveries, failures, what's coming.
+        { key: 'today', label: 'Today', to: '/' },
+        { key: 'projects', label: 'Projects', to: '/projects' },
+      ],
+    },
     {
       label: 'Fleet',
       items: [
@@ -40,7 +47,7 @@
     },
   ])
   const seg0 = $derived(router.route.segments[0] ?? '')
-  const active = $derived(seg0 === '' || seg0 === 'projects' ? 'projects' : seg0)
+  const active = $derived(seg0 === '' ? 'today' : seg0)
 
   // Active conversation = /chat/:id in the URL.
   const activeChatId = $derived(seg0 === 'chat' ? (router.route.segments[1] ?? null) : null)
@@ -92,7 +99,8 @@
           <a href={href(item.to)} use:link class="nav-item" class:active={active === item.key}>
             <span>{item.label}</span>
             {#if counts[item.key] != null}
-              <span class="count">{counts[item.key]}</span>
+              <!-- Outputs is an inbox: its count means "new since last read". -->
+              <span class="count" class:fresh={item.key === 'outputs'} title={item.key === 'outputs' ? 'new since your last visit' : undefined}>{counts[item.key]}</span>
             {/if}
           </a>
         {/each}
@@ -130,6 +138,9 @@
           <option value={t.name}>{t.label}</option>
         {/each}
       </select>
+      <a href={href('/settings')} use:link class="nav-item" class:active={active === 'settings'} style="font-size: 13px;">
+        <span>Settings</span>
+      </a>
     </div>
   </div>
 </aside>
@@ -138,6 +149,13 @@
   .nav-group-label {
     padding: 2px 12px 6px;
     color: var(--muted);
+  }
+  /* "New deliveries" badge — accent-tinted so it reads as unread, not a total. */
+  .count.fresh {
+    color: var(--accent-soft);
+    background: var(--accent-glow);
+    border-radius: 999px;
+    padding: 1px 7px;
   }
   .recents {
     flex: 1;

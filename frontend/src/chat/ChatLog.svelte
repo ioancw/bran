@@ -7,25 +7,34 @@
   import ToolBlock from './ToolBlock.svelte'
   import ToolGroup from './ToolGroup.svelte'
   import SpawnCard from './SpawnCard.svelte'
+  import PlanCard from './PlanCard.svelte'
 
-  let { items, streamingIndex = -1 }: { items: ChatItem[]; streamingIndex?: number } = $props()
+  let { items, streamingIndex = -1, onaction }: {
+    items: ChatItem[]
+    streamingIndex?: number
+    // Lets interactive cards (PlanCard approve/revise) put a message in the
+    // composer (and optionally send it). Absent on read-only surfaces.
+    onaction?: (text: string, sendNow: boolean) => void
+  } = $props()
 
   // Fold runs of 3+ consecutive same-name tool calls into one ToolGroup (keeps a
-  // big fan-out scannable). Spawn cards are never grouped — you want to see them.
+  // big fan-out scannable). Spawn/plan cards are never grouped — you want to see them.
   type Row =
     | { group: false; item: ChatItem; idx: number }
     | { group: true; name: string; tools: ToolItem[] }
   const SPAWN = 'mcp__bran__spawn_agent'
+  const PLAN = 'mcp__bran__propose_plan'
+  const NEVER_GROUP = new Set([SPAWN, PLAN])
   const rows = $derived.by<Row[]>(() => {
     const out: Row[] = []
     let i = 0
     while (i < items.length) {
       const it = items[i]
-      if (it.kind === 'tool' && it.name !== SPAWN) {
+      if (it.kind === 'tool' && !NEVER_GROUP.has(it.name)) {
         let j = i
         while (
           j < items.length && items[j].kind === 'tool' &&
-          (items[j] as ToolItem).name === it.name && (items[j] as ToolItem).name !== SPAWN
+          (items[j] as ToolItem).name === it.name && !NEVER_GROUP.has((items[j] as ToolItem).name)
         ) j++
         const run = items.slice(i, j) as ToolItem[]
         if (run.length >= 3) {
@@ -66,6 +75,9 @@
   {:else if item.kind === 'tool'}
     {#if item.name === 'mcp__bran__spawn_agent'}
       <SpawnCard tool={item} />
+    {:else if item.name === 'mcp__bran__propose_plan'}
+      <PlanCard tool={item} {onaction}
+                answered={items.slice(i + 1).some((x) => x.kind === 'user')} />
     {:else}
       <ToolBlock tool={item} />
     {/if}

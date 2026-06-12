@@ -12,10 +12,11 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import asdict
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from bran.agents import get_agent, list_agents
 from bran.background import spawn_background
@@ -24,7 +25,9 @@ from bran.project_files import (
     delete_file as delete_project_file,
     files_prompt,
     list_files as list_project_files,
+    save_attachment,
     save_upload as save_project_file,
+    workdir_prompt,
 )
 from bran.persistence import (
     ChatRecord,
@@ -41,6 +44,8 @@ from bran.persistence import (
     get_chat,
     get_project,
     get_run,
+    get_setting,
+    set_setting,
     insert_project,
     insert_run,
     insert_schedule,
@@ -148,6 +153,9 @@ def _build_project_context(project: ProjectRecord) -> str:
     files = files_prompt(project.id)
     if files:
         parts.append(files)
+    workdir = workdir_prompt(project.work_dir)
+    if workdir:
+        parts.append(workdir)
     return "\n\n".join(parts)
 
 
@@ -263,6 +271,104 @@ async def run_transcript(run_id: str) -> dict[str, Any]:
             for entry in parse_transcript(path):
                 events.extend(events_from_transcript_entry(entry))
     return {"run": asdict(rec), "events": events}
+
+
+@router.get("/runs/{run_id}/stream")
+async def run_stream(run_id: str) -> StreamingResponse:
+    """Watch a background run execute: SSE of its unified events, live.
+
+    Subscribers attaching mid-run get a full replay first (see bran.live). If
+    the run already finished — or isn't live in this process (server restart)
+    — the stream ends immediately with `done` and the client falls back to the
+    stored transcript.
+    """
+    rec = get_run(run_id)
+    if rec is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No run {run_id}")
+
+    def sse(ev: dict[str, Any]) -> str:
+        return f"data: {json.dumps(ev, default=str)}\n\n"
+
+    async def gen():
+        from bran.live import is_live, subscribe
+
+        if rec.status in ("running", "pending") and is_live(run_id):
+            async for ev in subscribe(run_id):
+                yield sse(ev)
+        yield sse({"type": "done"})
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+# ---------------------------------------------------------------------------
+# Artifacts — files a run produced (captured from its Write/Edit tool calls)
+# ---------------------------------------------------------------------------
+
+def _artifact_entries(rec: RunRecord) -> list[dict[str, Any]]:
+    """Existence-checked listing of a run's recorded artifacts."""
+    out: list[dict[str, Any]] = []
+    for i, raw in enumerate(rec.metadata.get("artifacts") or []):
+        p = Path(raw)
+        exists = p.is_file()
+        out.append({
+            "index": i,
+            "name": p.name,
+            "path": str(p),
+            "exists": exists,
+            "size": p.stat().st_size if exists else None,
+        })
+    return out
+
+
+@router.get("/runs/{run_id}/artifacts")
+async def run_artifacts(run_id: str) -> list[dict[str, Any]]:
+    rec = get_run(run_id)
+    if rec is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No run {run_id}")
+    return _artifact_entries(rec)
+
+
+@router.get("/runs/{run_id}/artifacts/{index}")
+async def download_artifact(run_id: str, index: int) -> FileResponse:
+    """Download one recorded artifact by its position in the run's list.
+
+    Index-based (not path-based) so no client-supplied path ever reaches the
+    filesystem. Defense in depth: even the *recorded* path must still resolve
+    inside the run's sanctioned write roots at serve time — guards against a
+    stale work_dir being repointed somewhere sensitive after the run.
+    """
+    rec = get_run(run_id)
+    if rec is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No run {run_id}")
+    entries = rec.metadata.get("artifacts") or []
+    if not (0 <= index < len(entries)):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No artifact #{index} on run {run_id}")
+    from bran.permissions import write_roots_for_project
+
+    p = Path(entries[index]).resolve()
+    roots = write_roots_for_project(rec.project_id)
+    if not any(p == r or r in p.parents for r in roots):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "artifact path no longer sanctioned")
+    if not p.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"artifact no longer exists: {p.name}")
+    return FileResponse(p, filename=p.name)
+
+
+# ---------------------------------------------------------------------------
+# App settings — the global "About me" instructions (every agent run sees them)
+# ---------------------------------------------------------------------------
+
+@router.get("/settings")
+async def app_settings() -> dict[str, Any]:
+    return {"user_instructions": get_setting("user_instructions")}
+
+
+@router.post("/settings")
+async def save_app_settings(
+    user_instructions: Annotated[str, Form()] = "",
+) -> dict[str, Any]:
+    set_setting("user_instructions", user_instructions)
+    return {"user_instructions": user_instructions}
 
 
 # ---------------------------------------------------------------------------
@@ -468,7 +574,8 @@ async def move_chat(chat_id: str, project_id: Annotated[str, Form()]) -> dict[st
 def _project_dict(p: ProjectRecord, n_chats: int) -> dict[str, Any]:
     return {
         "id": p.id, "name": p.name, "description": p.description,
-        "instructions": p.instructions, "n_chats": n_chats,
+        "instructions": p.instructions, "work_dir": p.work_dir,
+        "n_chats": n_chats,
         "updated_at": p.updated_at,
     }
 
@@ -522,13 +629,25 @@ async def save_project(
     name: Annotated[str, Form()],
     description: Annotated[str, Form()] = "",
     instructions: Annotated[str, Form()] = "",
+    work_dir: Annotated[str, Form()] = "",
 ) -> dict[str, Any]:
     project = get_project(project_id)
     if project is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"No project {project_id}")
+    # Validate the working folder up front so a typo'd path fails the save with
+    # a clear message instead of silently granting nothing at run time.
+    work_dir = work_dir.strip()
+    if work_dir:
+        from bran.permissions import validate_work_dir
+
+        try:
+            work_dir = str(validate_work_dir(work_dir))
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"working folder: {exc}")
     project.name = name.strip() or project.name
     project.description = description.strip()
     project.instructions = instructions
+    project.work_dir = work_dir
     update_project(project)
     return _project_dict(project, 0)
 
@@ -596,6 +715,27 @@ async def upload_files(
             )
         try:
             saved.append(save_project_file(project_id, f.filename or "upload", data))
+        except ValueError as e:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+    return saved
+
+
+@router.post("/uploads")
+async def upload_attachments(files: Annotated[list[UploadFile], File()]) -> list[dict[str, Any]]:
+    """Chat-composer attachments: one-off files referenced by absolute path in
+    the prompt (vs. project files, the per-project library). Saved under
+    bran_home/uploads with a unique prefix."""
+    saved: list[dict[str, Any]] = []
+    for f in files:
+        data = await f.read()
+        if len(data) > _MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                f"{f.filename!r} is {len(data):,} bytes — exceeds the "
+                f"{_MAX_UPLOAD_BYTES:,} byte limit",
+            )
+        try:
+            saved.append(save_attachment(f.filename or "upload", data))
         except ValueError as e:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
     return saved

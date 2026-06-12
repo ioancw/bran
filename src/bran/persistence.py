@@ -84,6 +84,9 @@ CREATE TABLE IF NOT EXISTS projects (
     name          TEXT NOT NULL,
     description   TEXT NOT NULL DEFAULT '',
     instructions  TEXT NOT NULL DEFAULT '',
+    -- Optional working folder (absolute path) agents in this project may read
+    -- AND write — the write-confinement hook admits it as an extra root.
+    work_dir      TEXT NOT NULL DEFAULT '',
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL
 );
@@ -101,6 +104,14 @@ CREATE TABLE IF NOT EXISTS project_memories (
 );
 
 CREATE INDEX IF NOT EXISTS idx_project_memories ON project_memories(project_id);
+
+-- App-level key-value settings (single-user). Currently holds
+-- 'user_instructions' — the global "About me" blob appended to every agent
+-- run's system prompt (bran's equivalent of Cowork's global instructions).
+CREATE TABLE IF NOT EXISTS app_settings (
+    key    TEXT PRIMARY KEY,
+    value  TEXT NOT NULL DEFAULT ''
+);
 """
 
 # Reentrant so the lazy bootstrap (_ensure_ready -> init_db -> _conn) can take
@@ -577,6 +588,7 @@ class ProjectRecord:
     name: str
     description: str = ""
     instructions: str = ""    # the inline memory blob — appended to chats' system prompt
+    work_dir: str = ""        # optional real folder agents may read AND write ("" = none)
     created_at: str = field(default_factory=utcnow_iso)
     updated_at: str = field(default_factory=utcnow_iso)
 
@@ -589,9 +601,11 @@ class ProjectRecord:
 
 
 def _row_to_project(r: sqlite3.Row) -> ProjectRecord:
+    keys = r.keys()
     return ProjectRecord(
         id=r["id"], name=r["name"],
         description=r["description"] or "", instructions=r["instructions"] or "",
+        work_dir=(r["work_dir"] if "work_dir" in keys else None) or "",
         created_at=r["created_at"], updated_at=r["updated_at"],
     )
 
@@ -599,10 +613,10 @@ def _row_to_project(r: sqlite3.Row) -> ProjectRecord:
 def insert_project(record: ProjectRecord) -> None:
     with _lock, _conn() as conn:
         conn.execute(
-            """INSERT INTO projects (id, name, description, instructions, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO projects (id, name, description, instructions, work_dir, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (record.id, record.name, record.description, record.instructions,
-             record.created_at, record.updated_at),
+             record.work_dir, record.created_at, record.updated_at),
         )
 
 
@@ -611,9 +625,9 @@ def update_project(record: ProjectRecord) -> None:
     with _lock, _conn() as conn:
         conn.execute(
             """UPDATE projects SET
-                 name = ?, description = ?, instructions = ?, updated_at = ?
+                 name = ?, description = ?, instructions = ?, work_dir = ?, updated_at = ?
                WHERE id = ?""",
-            (record.name, record.description, record.instructions,
+            (record.name, record.description, record.instructions, record.work_dir,
              record.updated_at, record.id),
         )
 
@@ -697,6 +711,25 @@ def count_chats_per_project() -> dict[str, int]:
 
 
 # ---------------------------------------------------------------------------
+# App settings — single-user key-value pairs (e.g. the global "About me")
+# ---------------------------------------------------------------------------
+
+def get_setting(key: str, default: str = "") -> str:
+    with _lock, _conn() as conn:
+        row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_setting(key: str, value: str) -> None:
+    with _lock, _conn() as conn:
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+
+
+# ---------------------------------------------------------------------------
 # Migrations — run after init_db() creates the bare tables.
 # ---------------------------------------------------------------------------
 
@@ -733,6 +766,8 @@ def _migrate_runs_schedules_add_project_id() -> None:
         # run_at marks a one-shot ("once") schedule. Both nullable, no backfill.
         _add_column_if_missing(conn, "runs", "schedule_id", "TEXT")
         _add_column_if_missing(conn, "schedules", "run_at", "TEXT")
+        # work_dir: optional read+write working folder for a project's agents.
+        _add_column_if_missing(conn, "projects", "work_dir", "TEXT")
         # Safe to index now that the column exists on both fresh and legacy DBs.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id)")
 

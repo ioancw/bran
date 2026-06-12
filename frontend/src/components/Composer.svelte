@@ -7,7 +7,8 @@
   // The parent owns the value (bind:value) and what happens on submit
   // (onsubmit) — e.g. send a message, start a chat, fire a run.
   import type { Snippet } from 'svelte'
-  import type { Catalog } from '../lib/types'
+  import { api } from '../lib/api'
+  import type { Attachment, Catalog } from '../lib/types'
 
   let {
     value = $bindable(''),
@@ -18,6 +19,8 @@
     rows = 2,
     leading,
     onsubmit,
+    attach = false,
+    attachments = $bindable([]),
   }: {
     value?: string
     placeholder?: string
@@ -27,7 +30,55 @@
     rows?: number
     leading?: Snippet
     onsubmit?: () => void
+    // Attachments (opt-in): paperclip / drag-drop / paste files. Uploaded
+    // immediately; the parent reads `attachments` on submit and clears it.
+    attach?: boolean
+    attachments?: Attachment[]
   } = $props()
+
+  // --- attachments ---
+  let attInput = $state<HTMLInputElement | null>(null)
+  let attBusy = $state(false)
+  let attError = $state('')
+  let dragOver = $state(false)
+
+  async function uploadAtt(files: FileList | File[]) {
+    const list = Array.from(files)
+    if (!list.length || attBusy) return
+    attBusy = true
+    attError = ''
+    try {
+      const saved = await api.uploadAttachments(list)
+      attachments = [...attachments, ...saved]
+    } catch (e) {
+      attError = e instanceof Error ? e.message : 'upload failed'
+    } finally {
+      attBusy = false
+    }
+  }
+  function onAttPick(e: Event) {
+    const input = e.currentTarget as HTMLInputElement
+    if (input.files?.length) void uploadAtt(input.files)
+    input.value = ''
+  }
+  function onDrop(e: DragEvent) {
+    if (!attach) return
+    e.preventDefault()
+    dragOver = false
+    if (e.dataTransfer?.files?.length) void uploadAtt(e.dataTransfer.files)
+  }
+  function onPaste(e: ClipboardEvent) {
+    if (!attach) return
+    const files = e.clipboardData?.files
+    if (files?.length) {
+      e.preventDefault() // a pasted screenshot shouldn't also paste as text
+      void uploadAtt(files)
+    }
+  }
+  function removeAtt(i: number) {
+    // Drop the reference only; the uploaded file on disk is harmless.
+    attachments = attachments.filter((_, k) => k !== i)
+  }
 
   // --- autocomplete (/ commands, @ agents) ---
   interface AcItem { trigger: string; name: string; description: string; token: string }
@@ -94,11 +145,33 @@
       {/each}
     </div>
   {/if}
-  <div class="composer">
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="composer" class:drag-over={dragOver}
+       ondragover={(e) => { if (attach) { e.preventDefault(); dragOver = true } }}
+       ondragleave={() => (dragOver = false)}
+       ondrop={onDrop}>
+    {#if attachments.length || attError}
+      <div class="att-row">
+        {#each attachments as a, i (a.path)}
+          <span class="att-chip mono" title={a.path}>
+            📎 {a.name} <span class="text-muted">{a.size_human}</span>
+            <button class="att-x" onclick={() => removeAtt(i)} title="remove">×</button>
+          </span>
+        {/each}
+        {#if attError}<span style="color: var(--red); font-size: 11px;">{attError}</span>{/if}
+      </div>
+    {/if}
     <textarea class="composer-input" bind:value oninput={refreshAc} onkeydown={onKeydown}
-              {rows} {placeholder}></textarea>
+              onpaste={onPaste} {rows} {placeholder}></textarea>
     <div class="composer-footer">
       {#if leading}{@render leading()}{/if}
+      {#if attach}
+        <button class="att-btn" disabled={attBusy} onclick={() => attInput?.click()}
+                title="attach files (or drag/paste them)" aria-label="Attach files">
+          {attBusy ? '…' : '📎'}
+        </button>
+        <input bind:this={attInput} type="file" multiple style="display: none;" onchange={onAttPick} />
+      {/if}
       {#if hint}<span class="composer-hint">{hint}</span>{/if}
       <button class="composer-send" disabled={busy} onclick={submit} aria-label="Send">
         {#if busy}
@@ -113,6 +186,43 @@
 
 <style>
   .composer-wrap { position: relative; }
+  .composer.drag-over { outline: 2px dashed var(--accent-soft); outline-offset: -2px; }
+  .att-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 8px 12px 0;
+  }
+  .att-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--fg-dim);
+    border: 1px solid var(--border2);
+    border-radius: 999px;
+    padding: 2px 8px;
+  }
+  .att-x {
+    background: transparent;
+    border: 0;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 0 2px;
+    line-height: 1;
+  }
+  .att-x:hover { color: var(--red); }
+  .att-btn {
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px 4px;
+    opacity: 0.7;
+    transition: opacity 0.12s var(--transition);
+  }
+  .att-btn:hover { opacity: 1; }
   .ac-pop {
     position: absolute;
     bottom: 100%;

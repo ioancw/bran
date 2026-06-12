@@ -9,7 +9,7 @@
   import ProjectRail from '../components/ProjectRail.svelte'
   import ChatLog from '../chat/ChatLog.svelte'
   import { applyEvent, freshState, type ChatItem, type ReducerState } from '../chat/events'
-  import type { Catalog, ChatSummary, RunRecord } from '../lib/types'
+  import type { Attachment, Catalog, ChatSummary, RunRecord } from '../lib/types'
 
   let { sessionId }: { sessionId: string | null } = $props()
 
@@ -20,6 +20,7 @@
   let streamingIndex = $state(-1)
   let pendingAgent = $state<string | null>(null)
   let input = $state('')
+  let attachments = $state<Attachment[]>([])
 
   let rstate: ReducerState = freshState()
   let loadedId: string | null = null
@@ -149,6 +150,17 @@
     }
   })
 
+  // ?draft=… pre-fills the composer WITHOUT sending (e.g. the "discuss" action
+  // on an Output card) — the user finishes the thought before it goes out.
+  let drafted = false
+  $effect(() => {
+    const d = router.route.query.get('draft')
+    if (d && !sessionId && !drafted && !input) {
+      drafted = true
+      input = d
+    }
+  })
+
   async function loadHistory(sid: string) {
     try {
       const { events } = await api.history(sid)
@@ -164,9 +176,24 @@
     }
   }
 
+  // PlanCard approve/revise: approve sends the canned reply immediately;
+  // revise just seeds the composer for the user to finish.
+  function onPlanAction(text: string, sendNow: boolean) {
+    if (streaming) return
+    input = text
+    if (sendNow) void send()
+  }
+
   async function send() {
-    const text = input.trim()
+    let text = input.trim()
     if (!text || streaming) return
+    // Fold attachments into the prompt as absolute paths the agent reads on
+    // demand — shown in the user bubble too, so what was sent is transparent.
+    if (attachments.length) {
+      const lines = attachments.map((a) => `- ${a.path}`).join('\n')
+      text += `\n\nAttached files (read with Read, or mcp__bran_docs__read_pdf for PDFs):\n${lines}`
+      attachments = []
+    }
     input = ''
     items.push({ kind: 'user', text })
     streaming = true
@@ -265,13 +292,14 @@
             <p class="cta">type a message below — try <code>/digest</code> or <code>@research</code></p>
           </div>
         {:else}
-          <ChatLog {items} {streamingIndex} />
+          <ChatLog {items} {streamingIndex} onaction={onPlanAction} />
         {/if}
       </div>
 
       <!-- Composer -->
       <div style="margin-top: 14px;">
-        <Composer bind:value={input} {catalog} hint="⏎ send · ⇧⏎ newline · / @"
+        <Composer bind:value={input} bind:attachments attach={true} {catalog}
+                  hint="⏎ send · ⇧⏎ newline · / @"
                   busy={streaming} placeholder="Message bran…" onsubmit={send}>
           {#snippet leading()}
             {#if activeChat}

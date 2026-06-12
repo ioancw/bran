@@ -66,8 +66,26 @@ export interface ProjectSummary {
   name: string
   description: string
   instructions: string
+  work_dir: string // optional real folder agents may read AND write ('' = none)
   n_chats: number
   updated_at: string
+}
+
+// A chat-composer attachment, saved server-side under bran_home/uploads and
+// referenced by absolute path in the prompt.
+export interface Attachment {
+  name: string
+  path: string
+  size_human: string
+}
+
+// A file a run produced (captured from its Write/Edit tool calls).
+export interface ArtifactEntry {
+  index: number
+  name: string
+  path: string
+  exists: boolean
+  size: number | null
 }
 
 export interface BriefingSummary {

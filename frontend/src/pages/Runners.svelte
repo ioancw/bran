@@ -8,13 +8,24 @@
   import { localDateTime } from '../lib/time'
   import Page from '../components/Page.svelte'
   import CronField from '../components/CronField.svelte'
-  import type { AgentInfo, ProjectSummary, ScheduleRecord } from '../lib/types'
+  import type { AgentInfo, ProjectSummary, RunRecord, ScheduleRecord } from '../lib/types'
 
   let runners = $state<ScheduleRecord[]>([])
   let agents = $state<AgentInfo[]>([])
   let projects = $state<ProjectSummary[]>([])
+  let recentRuns = $state<RunRecord[]>([])
   let loaded = $state(false)
   let error = $state<string | null>(null)
+
+  // Each runner's most recent run (runs come newest-first), to flag failures
+  // at a glance instead of burying them in the activity log.
+  const lastRun = $derived.by(() => {
+    const m: Record<string, RunRecord> = {}
+    for (const r of recentRuns) {
+      if (r.schedule_id && !(r.schedule_id in m)) m[r.schedule_id] = r
+    }
+    return m
+  })
 
   let showForm = $state(false)
   let fName = $state('')
@@ -27,7 +38,10 @@
 
   async function load() {
     try {
-      ;[runners, agents, projects] = await Promise.all([api.schedules(), api.agents(), api.projects()])
+      ;[runners, agents, projects, recentRuns] = await Promise.all([
+        api.schedules(), api.agents(), api.projects(),
+        api.runs({ limit: 200, exclude_chats: true }),
+      ])
     } catch (e) {
       error = String(e)
     } finally {
@@ -151,6 +165,9 @@
               <tr style="border-top: 1px solid var(--border);">
                 <td style="padding: 10px 14px;">
                   <a href={href('/runners/' + encodeURIComponent(r.name))} use:link class="text-bright" style="text-decoration: none; font-weight: 500;">{r.name}</a>
+                  {#if lastRun[r.id]?.status === 'failed'}
+                    <span class="fail-dot" title="last run failed: {lastRun[r.id].error ?? 'unknown error'}">●</span>
+                  {/if}
                 </td>
                 <td class="mono text-accent-soft">{r.agent}</td>
                 <td class="mono text-dim">{r.run_at ? 'once' : r.cron}</td>
@@ -184,4 +201,11 @@
   }
   .state-btn.on { color: var(--accent-soft); border-color: var(--accent-soft); background: var(--accent-glow); }
   .state-btn:hover { border-color: var(--muted); }
+  .fail-dot {
+    color: var(--red);
+    font-size: 9px;
+    margin-left: 6px;
+    vertical-align: middle;
+    cursor: help;
+  }
 </style>

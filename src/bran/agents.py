@@ -304,6 +304,12 @@ ORCHESTRATOR = Agent(
         "- To read a PDF (a filing, paper, or report — a local file path or an "
         "  http(s) URL the user gives you), use `mcp__bran_docs__read_pdf`; the "
         "  plain Read tool can't parse PDFs. Summarise/analyse the extracted text.\n"
+        "- Before significant or hard-to-reverse work — creating/changing/deleting "
+        "  runners, fanning out 3+ background runs, anything with meaningful cost "
+        "  or side effects — call `mcp__bran__propose_plan` (short title + concise "
+        "  numbered steps), then END your turn and wait for the user's approval "
+        "  before executing anything. Skip the gate for trivial or read-only "
+        "  requests; don't make the user approve everything.\n"
         "- Be concise. Reflect tool/agent results back to the user faithfully.\n"
         "- If the user asks 'what can you do?', list the available agents and "
         "  the surfaces (chat REPL, CLI, HTTP, schedules)."
@@ -315,6 +321,7 @@ ORCHESTRATOR = Agent(
         "mcp__bran__spawn_agent",
         "mcp__bran__get_run_result",
         "mcp__bran__list_recent_runs",
+        "mcp__bran__propose_plan",
         "mcp__bran_docs__read_pdf",
         "mcp__bran__save_project_memory",
         "mcp__bran__create_runner",
@@ -410,8 +417,18 @@ def build_options_for(
     `append_system` (when set) is concatenated onto the agent's system prompt.
     This is how project-scoped chats inject their always-on instructions —
     see web/routes.py::chat_stream.
+
+    The global "About the user" instructions (Settings → About me) are layered
+    in here because *every* surface — chat, runners, spawns, manual runs, CLI —
+    builds its options through this function. Lazy import so module load stays
+    free of DB access.
     """
     system_prompt = agent.system_prompt
+    from bran.persistence import get_setting
+
+    about = get_setting("user_instructions").strip()
+    if about:
+        system_prompt = f"{system_prompt}\n\n## About the user\n{about}"
     if append_system:
         system_prompt = f"{system_prompt}\n\n{append_system}"
     return ClaudeAgentOptions(

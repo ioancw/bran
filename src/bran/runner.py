@@ -25,6 +25,7 @@ from claude_agent_sdk import (
 from bran.agents import build_options_for, get_agent
 from bran.background import current_project_id, current_run_id
 from bran.config import SETTINGS
+from bran.live import close as live_close, publish as live_publish
 from bran.notify import notify_completion
 from bran.persistence import RunRecord, get_run, insert_run, update_run, utcnow_iso
 
@@ -77,12 +78,19 @@ async def _drive(
     # can inherit its project + parent. Reset in finally so it doesn't leak.
     proj_token = current_project_id.set(record.project_id)
     run_token = current_run_id.set(record.id)
+    # Live streaming: every run broadcasts its events under its run id so the
+    # SPA can watch it execute (/spa/runs/{id}/stream). events_from_message is
+    # imported lazily to keep core module load free of the web layer (it's a
+    # pure converter — no FastAPI/SDK imports).
+    from bran.web.events import events_from_message
+
     started = time.perf_counter()
     try:
         async for message in query(prompt=task, options=options):
             if on_message is not None:
                 on_message(message)
             _absorb_message(record, message)
+            live_publish(record.id, events_from_message(message))
             yield message
 
         # query() iterator finished. If we never saw a ResultMessage the SDK
@@ -114,6 +122,9 @@ async def _drive(
     finally:
         current_project_id.reset(proj_token)
         current_run_id.reset(run_token)
+        # End the live stream however the run finished — subscribers wake and
+        # refetch the canonical stored transcript.
+        live_close(record.id)
         # Fire notifications regardless of how the run ended. notify_completion
         # never raises, so this can't break an otherwise-fine exception path.
         await notify_completion(record)
@@ -257,6 +268,20 @@ def _absorb_message(record: RunRecord, message: Any) -> None:
                         "task": ((block.input or {}).get("task") or "")[:200],
                     })
                     update_run(record)
+            elif block.name in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+                # Artifacts: files this run produced/modified. Only record
+                # targets inside the sanctioned write roots (bran_home + the
+                # ambient project's work_dir) — a path outside them was denied
+                # by the confinement hook, so it never became a file.
+                from bran.permissions import allowed_write_target
+
+                raw = (block.input or {}).get("file_path") or (block.input or {}).get("notebook_path")
+                target_path = allowed_write_target(raw) if raw else None
+                if target_path is not None:
+                    artifacts = record.metadata.setdefault("artifacts", [])
+                    if str(target_path) not in artifacts:
+                        artifacts.append(str(target_path))
+                        update_run(record)
     elif isinstance(message, ResultMessage):
         record.session_id = message.session_id or record.session_id
         record.num_turns = message.num_turns

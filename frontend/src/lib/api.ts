@@ -2,6 +2,8 @@
 
 import type {
   AgentInfo,
+  ArtifactEntry,
+  Attachment,
   Catalog,
   ChatEvent,
   ChatSummary,
@@ -56,6 +58,7 @@ export const api = {
   },
   cancelRun: (id: string) =>
     form<{ run_id: string; cancelled: number }>(`/spa/runs/${encodeURIComponent(id)}/cancel`, {}),
+  runArtifacts: (id: string) => getJSON<ArtifactEntry[]>(`/spa/runs/${encodeURIComponent(id)}/artifacts`),
 
   schedules: () => getJSON<ScheduleRecord[]>('/spa/schedules'),
   parseSchedule: (expr: string) =>
@@ -67,9 +70,10 @@ export const api = {
   projectDetail: (id: string) => getJSON<ProjectDetail>(`/spa/projects/${encodeURIComponent(id)}`),
   newProject: (name: string, description = '') =>
     form<ProjectSummary>('/spa/projects', { name, description }),
-  saveProject: (id: string, fields: { name: string; description?: string; instructions?: string }) =>
+  saveProject: (id: string, fields: { name: string; description?: string; instructions?: string; work_dir?: string }) =>
     form<ProjectSummary>(`/spa/projects/${encodeURIComponent(id)}`, {
       name: fields.name, description: fields.description ?? '', instructions: fields.instructions ?? '',
+      work_dir: fields.work_dir ?? '',
     }),
   deleteProject: async (id: string): Promise<void> => {
     const r = await fetch(`/spa/projects/${encodeURIComponent(id)}`, { method: 'DELETE' })
@@ -135,6 +139,18 @@ export const api = {
       `/spa/chats/${encodeURIComponent(chatId)}/move`, { project_id: projectId },
     ),
 
+  uploadAttachments: async (files: File[]): Promise<Attachment[]> => {
+    const body = new FormData()
+    for (const f of files) body.append('files', f)
+    const r = await fetch('/spa/uploads', { method: 'POST', body })
+    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
+    return r.json() as Promise<Attachment[]>
+  },
+
+  settings: () => getJSON<{ user_instructions: string }>('/spa/settings'),
+  saveSettings: (fields: { user_instructions: string }) =>
+    form<{ user_instructions: string }>('/spa/settings', fields),
+
   chats: (projectId?: string | null) => {
     const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''
     return getJSON<ChatSummary[]>(`/spa/chats${qs}`)
@@ -164,8 +180,25 @@ export async function* streamChat(fields: Record<string, string>): AsyncGenerato
   if (!resp.ok || !resp.body) {
     throw new Error(`HTTP ${resp.status}: ${await resp.text()}`)
   }
+  yield* readSSE(resp)
+}
 
-  const reader = resp.body.getReader()
+/**
+ * Watch a background run execute: GET its live SSE stream (full replay first,
+ * then live). Ends with {type:'done'} — immediately if the run already
+ * finished, in which case the caller falls back to the stored transcript.
+ */
+export async function* streamRunEvents(runId: string, signal?: AbortSignal): AsyncGenerator<ChatEvent> {
+  const resp = await fetch(`/spa/runs/${encodeURIComponent(runId)}/stream`, { signal })
+  if (!resp.ok || !resp.body) {
+    throw new Error(`HTTP ${resp.status}: ${await resp.text()}`)
+  }
+  yield* readSSE(resp)
+}
+
+/** Parse `data: {...}\n\n` SSE frames off a streaming response body. */
+async function* readSSE(resp: Response): AsyncGenerator<ChatEvent> {
+  const reader = resp.body!.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
   while (true) {

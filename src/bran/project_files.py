@@ -121,6 +121,50 @@ def delete_file(project_id: str, filename: str) -> bool:
     return True
 
 
+def save_attachment(filename: str, data: bytes) -> dict[str, Any]:
+    """Save a chat-composer attachment under `bran_home/uploads/`.
+
+    Unlike project files (a stable per-project library), attachments are
+    one-off inputs to a conversation: each gets a short unique prefix so
+    same-named uploads never collide, and the chat references them by absolute
+    path in the prompt. They live under bran_home, which every agent can Read.
+    """
+    import uuid
+
+    safe = _safe_name(filename)
+    d = SETTINGS.bran_home / "uploads"
+    d.mkdir(parents=True, exist_ok=True)
+    dest = d / f"{uuid.uuid4().hex[:8]}_{safe}"
+    dest.write_bytes(data)
+    return {"name": safe, "path": str(dest), "size_human": _fmt_size(len(data))}
+
+
+def workdir_prompt(work_dir: str) -> str | None:
+    """The "## Working folder" system-prompt section for a project, or None.
+
+    Unlike the managed uploads folder, the working folder is a real directory
+    the *user* chose — agents may read AND write there (the confinement hook
+    admits it), so deliverables (reports, CSVs, edited copies) land where the
+    user actually works. Validation happens at save time and again in the
+    hook; here we just describe whatever is configured.
+    """
+    wd = (work_dir or "").strip()
+    if not wd:
+        return None
+    return "\n".join([
+        "## Working folder",
+        (
+            f"This project has a working folder at `{wd}` (use absolute paths). "
+            "You may read AND write files there: when a task produces a file — "
+            "a report, a spreadsheet, a cleaned-up copy — create it in this "
+            "folder rather than answering only in prose. Use `Read`/`Glob`/"
+            "`Grep` to consult what's already there, and `Write`/`Edit` to "
+            "produce or update files. Tell the user the full path of anything "
+            "you create."
+        ),
+    ])
+
+
 def files_prompt(project_id: str) -> str | None:
     """The "## Files" system-prompt section for a project, or None if empty.
 
