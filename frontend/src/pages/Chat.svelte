@@ -39,9 +39,23 @@
 
   // Breadcrumb scope switcher.
   let scopeMenuOpen = $state(false)
+  let scopeMenuEl = $state<HTMLElement | undefined>()
   function switchScope(id: string | null) {
     scopeMenuOpen = false
+    if (id === scopeId) return // already there — don't abandon the current chat
+    // Set the scope directly: the route effect below keys on sessionId, which
+    // doesn't change when hopping between fresh chats (/chat?project=A → ?project=B),
+    // so navigation alone would update the URL and nothing else.
+    setScope(id)
     navigate(id ? '/chat?project=' + encodeURIComponent(id) : '/chat')
+  }
+  function onWindowClick(e: MouseEvent) {
+    if (scopeMenuOpen && scopeMenuEl && !scopeMenuEl.contains(e.target as Node)) {
+      scopeMenuOpen = false
+    }
+  }
+  function onWindowKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') scopeMenuOpen = false
   }
 
   function scrollSoon() {
@@ -253,11 +267,14 @@
 
 </script>
 
+<!-- Close the scope menu on outside click / Escape. -->
+<svelte:window onclick={onWindowClick} onkeydown={onWindowKeydown} />
+
 <Page fill={true}>
   {#snippet head()}
     <!-- Cowork-style breadcrumb: <scope ▾> / conversation -->
     <div class="bc">
-      <span class="crumb-wrap">
+      <span class="crumb-wrap" bind:this={scopeMenuEl}>
         <button class="crumb crumb-scope" onclick={() => (scopeMenuOpen = !scopeMenuOpen)}>
           {scopeName}
           <svg width="11" height="11" viewBox="0 0 10 10" fill="none" aria-hidden="true" style="margin-left: 4px;">
