@@ -3,6 +3,8 @@
   import { navigate, href, link } from '../lib/router.svelte'
   import { errorText } from '../lib/errors'
   import Page from '../components/Page.svelte'
+  import Skeleton from '../components/Skeleton.svelte'
+  import EmptyState from '../components/EmptyState.svelte'
   import type { AgentInfo } from '../lib/types'
   let agents = $state<AgentInfo[]>([])
   let loaded = $state(false)
@@ -22,9 +24,9 @@
   {#snippet subtitle()}the fleet · {agents.length}{/snippet}
   {#if error}<div class="card" style="color: var(--red);">{errorText(error)}</div>{/if}
   {#if !loaded}
-    <div class="text-muted" style="padding: 24px; font-size: 13px; font-style: italic;">loading…</div>
+    <Skeleton rows={5} />
   {:else if !agents.length}
-    <div class="empty-state"><h3>no agents</h3></div>
+    <EmptyState title="no agents" hint="define one in src/bran/agents.py or drop a markdown file in .claude/agents/" />
   {:else}
     <!-- Agents are a capability catalog, not tabular records — cards surface
          the description, tools and delegates better than a table row. -->

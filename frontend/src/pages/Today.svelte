@@ -9,7 +9,10 @@
   import { relativeTime, localDateTime, localClock, countdown, fmtCost } from '../lib/time'
   import { errorText } from '../lib/errors'
   import { outputsSeen, isNewSince } from '../lib/seen.svelte'
+  import { isSuperseded, verifyBadge } from '../lib/verification'
   import Page from '../components/Page.svelte'
+  import Skeleton from '../components/Skeleton.svelte'
+  import EmptyState from '../components/EmptyState.svelte'
   import type { RunRecord, ScheduleRecord } from '../lib/types'
 
   let runs = $state<RunRecord[]>([])
@@ -35,7 +38,11 @@
   const titleFor = (r: RunRecord): string => runnerFor(r)?.name ?? r.agent
 
   // --- Sections -------------------------------------------------------------
-  const outputs = $derived(runs.filter((r) => r.status === 'completed' && (r.result ?? '').trim()))
+  // Superseded = a failed-review run whose corrected attempt is also in the
+  // list; show only the version worth reading.
+  const outputs = $derived(
+    runs.filter((r) => r.status === 'completed' && (r.result ?? '').trim() && !isSuperseded(r)),
+  )
   // Deliveries: today's outputs; quiet mornings fall back to the latest few so
   // the page never opens onto a void.
   const todays = $derived(outputs.filter((r) => isToday(r.started_at)))
@@ -116,19 +123,13 @@
 
   {#if error}<div class="card" style="color: var(--red);">{errorText(error)}</div>{/if}
   {#if !loaded}
-    <div class="text-muted" style="padding: 24px; font-size: 13px; font-style: italic;">loading…</div>
+    <Skeleton rows={5} />
   {:else if !runs.length && !schedules.length}
-    <div class="empty-state">
-      <h3>nothing yet</h3>
-      <p class="text-muted" style="font-size: 13px;">
-        Once your agents start working, this page becomes their morning report.
-      </p>
-      <p style="font-size: 13px;">
-        <a href={href('/runners')} use:link class="text-accent-soft" style="text-decoration: none;">create a runner →</a>
-        <span class="text-muted" style="margin: 0 8px;">·</span>
-        <a href={href('/chat')} use:link class="text-accent-soft" style="text-decoration: none;">start a chat →</a>
-      </p>
-    </div>
+    <EmptyState title="nothing yet" hint="once your agents start working, this page becomes their morning report">
+      <a href={href('/runners')} use:link class="text-accent-soft" style="text-decoration: none;">create a runner →</a>
+      <span class="text-muted" style="margin: 0 8px;">·</span>
+      <a href={href('/chat')} use:link class="text-accent-soft" style="text-decoration: none;">start a chat →</a>
+    </EmptyState>
   {:else}
     <div class="grid grid-cols-3 gap-6">
       <!-- Main column: attention + deliveries -->
@@ -157,11 +158,14 @@
           {#if deliveries.length}
             <div class="space-y-2">
               {#each deliveries as r (r.id)}
+                {@const badge = verifyBadge(r)}
                 <a href={href('/runs/' + r.id)} use:link class="dlv card">
                   <header style="display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px;">
                     {#if isNewSince(r.started_at, outputsSeen.at)}<span class="new-dot" title="unread"></span>{/if}
                     <span class="text-bright" style="font-size: 14px; font-weight: 500;">{titleFor(r)}</span>
                     <span class="src src-{r.source}">{r.source}</span>
+                    {#if runnerFor(r)?.delta}<span class="delta-tag" title="delta report — only what changed since the last run">Δ</span>{/if}
+                    {#if badge}<span class="pill {badge.tone === 'ok' ? 'ok' : 'warn'}" style="font-size: 10px;" title="reviewed by the verification evaluator">{badge.label}</span>{/if}
                     <span class="ml-auto text-dim" style="font-size: 11px; white-space: nowrap;" title={localDateTime(r.started_at)}>{relativeTime(r.started_at)}</span>
                   </header>
                   <p class="dlv-snippet">{snippet(r.result ?? '')}</p>
@@ -268,6 +272,16 @@
     background: var(--accent-soft);
     flex-shrink: 0;
     align-self: center;
+  }
+  .delta-tag {
+    display: inline-block;
+    padding: 0 6px;
+    border-radius: 4px;
+    background: var(--accent-glow);
+    color: var(--accent-soft);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    cursor: help;
   }
 
   .up-row {

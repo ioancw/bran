@@ -5,6 +5,7 @@
   import { api } from '../lib/api'
   import { errorText } from '../lib/errors'
   import Page from '../components/Page.svelte'
+  import Skeleton from '../components/Skeleton.svelte'
 
   let instructions = $state('')
   let loaded = $state(false)
@@ -53,7 +54,7 @@
         standing context. Every agent sees this on every run: chats, runners, background
         spawns. Project instructions layer on top for project-specific guidance.
       </p>
-      <textarea class="field" bind:value={instructions} rows="10"
+      <textarea class="field" bind:value={instructions} rows="10" aria-label="about me — global instructions applied to every agent run"
                 placeholder={'e.g. I\'m Ioan, a software engineer in London (Europe/London).\nKeep briefings terse — bullets over prose. Currency in GBP.\nI care about AI tooling, UK fintech, and the FTSE.'}
                 style="resize: vertical; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.55;"></textarea>
       <div style="display: flex; align-items: center; gap: 10px; margin-top: 10px;">
@@ -62,6 +63,6 @@
       </div>
     </div>
   {:else}
-    <div class="text-muted" style="padding: 24px; font-size: 13px; font-style: italic;">loading…</div>
+    <Skeleton rows={5} />
   {/if}
 </Page>

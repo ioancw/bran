@@ -43,11 +43,13 @@
     gap: 12px;
   }
 
-  /* Full-height pages (chat) let their own layout own the vertical space. */
+  /* Full-height pages (chat) let their own layout own the vertical space. Now
+     that <main> is a flex column (.app-main) and the header is flex-shrink:0,
+     this just fills the remaining height — no fragile calc(100vh - Npx). */
   .page-fill {
-    height: calc(100vh - 92px);
+    flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
-    min-height: 0;
   }
 </style>

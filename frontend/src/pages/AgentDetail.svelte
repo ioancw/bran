@@ -6,6 +6,8 @@
   import { fmtCost, relativeTime } from '../lib/time'
   import { errorText } from '../lib/errors'
   import Page from '../components/Page.svelte'
+  import Skeleton from '../components/Skeleton.svelte'
+  import EmptyState from '../components/EmptyState.svelte'
   import Composer from '../components/Composer.svelte'
   import StatusBadge from '../components/StatusBadge.svelte'
   import type { AgentInfo, RunRecord, ScheduleRecord } from '../lib/types'
@@ -61,9 +63,9 @@
 
   {#if error}<div class="card" style="color: var(--red);">{errorText(error)}</div>{/if}
   {#if !loaded}
-    <div class="text-muted" style="padding: 24px; font-size: 13px; font-style: italic;">loading…</div>
+    <Skeleton rows={5} />
   {:else if !agent}
-    <div class="empty-state"><h3>unknown agent</h3></div>
+    <EmptyState title="unknown agent" hint="check the agent library for the current roster" />
   {:else}
     <div class="grid grid-cols-3 gap-6">
       <!-- Main: run now + recent runs -->

@@ -13,6 +13,7 @@
 .shrink-0 { flex-shrink: 0; }
 .min-h-screen { min-height: 100vh; }
 .mt-auto { margin-top: auto; }
+.ml-auto { margin-left: auto; }
 
 /* grid */
 .grid { display: grid; }
@@ -35,9 +36,18 @@
 
 /* vertical rhythm (Tailwind's space-y-*) */
 .space-y-0\.5 > * + * { margin-top: 0.125rem; }
+.space-y-1 > * + * { margin-top: 0.25rem; }
 .space-y-2 > * + * { margin-top: 0.5rem; }
 .space-y-3 > * + * { margin-top: 0.75rem; }
+.space-y-4 > * + * { margin-top: 1rem; }
 .space-y-6 > * + * { margin-top: 1.5rem; }
 
 /* type */
 .text-sm { font-size: 0.875rem; line-height: 1.25rem; }
+/* `.mono` / `.num` were previously only defined scoped to `table.bran-table`,
+   so the ~18 standalone uses (crons, session ids, the chat-breadcrumb agent
+   name, file/artifact names, countdowns) silently fell back to the inherited
+   serif/sans font. Promote them to real utilities; the table-scoped rules stay
+   more specific (they add right-align + sizing) so tables are unaffected. */
+.mono { font-family: var(--font-mono); }
+.num { font-variant-numeric: tabular-nums lining-nums; }

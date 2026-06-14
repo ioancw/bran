@@ -15,9 +15,46 @@ import type {
   ScheduleRecord,
 } from './types'
 
+import { flagAuthError } from './auth.svelte'
+
+/** A failed API call, carrying the status and the server's actual message so
+ * the UI can tell the user what went wrong instead of a canned phrase. */
+export class ApiError extends Error {
+  status: number
+  detail: string
+  constructor(status: number, statusText: string, url: string, detail: string) {
+    // The message IS the human text — pages that stringify the error still
+    // show something useful.
+    super(detail || `${status} ${statusText} for ${url}`)
+    this.name = 'ApiError'
+    this.status = status
+    this.detail = detail
+  }
+}
+
+/** Read the response body and throw an ApiError carrying the server's
+ * `detail` (FastAPI's error shape) or raw text. Flags 401/403 globally so
+ * App.svelte can show one recovery banner instead of per-page dead ends. */
+async function raiseFor(r: Response, url: string): Promise<never> {
+  let detail = ''
+  try {
+    const text = await r.text()
+    try {
+      const parsed = JSON.parse(text) as { detail?: unknown }
+      detail = typeof parsed.detail === 'string' ? parsed.detail : ''
+    } catch {
+      detail = text.slice(0, 300)
+    }
+  } catch {
+    /* body unreadable — status alone will have to do */
+  }
+  if (r.status === 401 || r.status === 403) flagAuthError(detail)
+  throw new ApiError(r.status, r.statusText, url, detail)
+}
+
 async function getJSON<T>(url: string): Promise<T> {
   const r = await fetch(url, { headers: { Accept: 'application/json' } })
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText} for ${url}`)
+  if (!r.ok) await raiseFor(r, url)
   return r.json() as Promise<T>
 }
 
@@ -28,7 +65,7 @@ async function form<T>(url: string, fields: Record<string, string>, method = 'PO
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body,
   })
-  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
+  if (!r.ok) await raiseFor(r, url)
   return r.json() as Promise<T>
 }
 
@@ -76,55 +113,58 @@ export const api = {
       work_dir: fields.work_dir ?? '',
     }),
   deleteProject: async (id: string): Promise<void> => {
-    const r = await fetch(`/spa/projects/${encodeURIComponent(id)}`, { method: 'DELETE' })
-    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
+    const url = `/spa/projects/${encodeURIComponent(id)}`
+    const r = await fetch(url, { method: 'DELETE' })
+    if (!r.ok) await raiseFor(r, url)
   },
   addMemory: (projectId: string, text: string) =>
     form<ProjectMemory>(`/spa/projects/${encodeURIComponent(projectId)}/memory`, { text }),
   deleteMemory: async (projectId: string, entryId: string): Promise<void> => {
-    const r = await fetch(
-      `/spa/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(entryId)}`,
-      { method: 'DELETE' },
-    )
-    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
+    const url = `/spa/projects/${encodeURIComponent(projectId)}/memory/${encodeURIComponent(entryId)}`
+    const r = await fetch(url, { method: 'DELETE' })
+    if (!r.ok) await raiseFor(r, url)
   },
 
   uploadFiles: async (projectId: string, files: FileList | File[]): Promise<ProjectFile[]> => {
     const body = new FormData()
     for (const f of Array.from(files)) body.append('files', f)
-    const r = await fetch(`/spa/projects/${encodeURIComponent(projectId)}/files`, {
+    const url = `/spa/projects/${encodeURIComponent(projectId)}/files`
+    const r = await fetch(url, {
       method: 'POST',
       body, // browser sets multipart Content-Type + boundary
     })
-    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
+    if (!r.ok) await raiseFor(r, url)
     return r.json() as Promise<ProjectFile[]>
   },
   deleteFile: async (projectId: string, name: string): Promise<void> => {
-    const r = await fetch(
-      `/spa/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(name)}`,
-      { method: 'DELETE' },
-    )
-    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
+    const url = `/spa/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(name)}`
+    const r = await fetch(url, { method: 'DELETE' })
+    if (!r.ok) await raiseFor(r, url)
   },
 
-  newSchedule: (fields: { name: string; agent: string; cron?: string; task?: string; project_id?: string; run_at?: string }) => {
+  newSchedule: (fields: { name: string; agent: string; cron?: string; task?: string; project_id?: string; run_at?: string; verify?: boolean; delta?: boolean }) => {
     const body: Record<string, string> = {
       name: fields.name, agent: fields.agent, cron: fields.cron ?? '', task: fields.task ?? '',
+      verify: fields.verify ? 'true' : '', delta: fields.delta ? 'true' : '',
     }
     if (fields.project_id) body.project_id = fields.project_id // omit → standalone
     if (fields.run_at) body.run_at = fields.run_at // present → one-shot
     return form<ScheduleRecord>('/spa/schedules', body)
   },
-  updateSchedule: (name: string, fields: { agent: string; task?: string; cron?: string; run_at?: string }) => {
+  updateSchedule: (name: string, fields: { agent: string; task?: string; cron?: string; run_at?: string; verify?: boolean; delta?: boolean }) => {
     const body: Record<string, string> = {
       agent: fields.agent, task: fields.task ?? '', cron: fields.cron ?? '',
     }
     if (fields.run_at) body.run_at = fields.run_at // present → one-shot
+    // Only send the flags when the caller set them (absent = leave unchanged).
+    if (fields.verify !== undefined) body.verify = fields.verify ? 'true' : 'false'
+    if (fields.delta !== undefined) body.delta = fields.delta ? 'true' : 'false'
     return form<ScheduleRecord>(`/spa/schedules/${encodeURIComponent(name)}`, body)
   },
   deleteSchedule: async (name: string): Promise<void> => {
-    const r = await fetch(`/spa/schedules/${encodeURIComponent(name)}`, { method: 'DELETE' })
-    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
+    const url = `/spa/schedules/${encodeURIComponent(name)}`
+    const r = await fetch(url, { method: 'DELETE' })
+    if (!r.ok) await raiseFor(r, url)
   },
   setScheduleEnabled: (name: string, enabled: boolean) =>
     form<ScheduleRecord>(`/spa/schedules/${encodeURIComponent(name)}/enabled`, {
@@ -134,7 +174,7 @@ export const api = {
     const body = new FormData()
     for (const f of files) body.append('files', f)
     const r = await fetch('/spa/uploads', { method: 'POST', body })
-    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`)
+    if (!r.ok) await raiseFor(r, '/spa/uploads')
     return r.json() as Promise<Attachment[]>
   },
 
@@ -148,8 +188,9 @@ export const api = {
   },
   chat: (id: string) => getJSON<ChatSummary>(`/spa/chats/${encodeURIComponent(id)}`),
   deleteChat: async (id: string): Promise<void> => {
-    const r = await fetch(`/spa/chats/${encodeURIComponent(id)}`, { method: 'DELETE' })
-    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
+    const url = `/spa/chats/${encodeURIComponent(id)}`
+    const r = await fetch(url, { method: 'DELETE' })
+    if (!r.ok) await raiseFor(r, url)
   },
   history: (id: string) =>
     getJSON<{ session_id: string; events: ChatEvent[] }>(`/spa/chats/${encodeURIComponent(id)}/history`),
@@ -168,9 +209,8 @@ export async function* streamChat(fields: Record<string, string>): AsyncGenerato
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body,
   })
-  if (!resp.ok || !resp.body) {
-    throw new Error(`HTTP ${resp.status}: ${await resp.text()}`)
-  }
+  if (!resp.ok) await raiseFor(resp, '/spa/chat/stream')
+  if (!resp.body) throw new Error('Streaming unavailable (no response body)')
   yield* readSSE(resp)
 }
 
@@ -180,10 +220,10 @@ export async function* streamChat(fields: Record<string, string>): AsyncGenerato
  * finished, in which case the caller falls back to the stored transcript.
  */
 export async function* streamRunEvents(runId: string, signal?: AbortSignal): AsyncGenerator<ChatEvent> {
-  const resp = await fetch(`/spa/runs/${encodeURIComponent(runId)}/stream`, { signal })
-  if (!resp.ok || !resp.body) {
-    throw new Error(`HTTP ${resp.status}: ${await resp.text()}`)
-  }
+  const url = `/spa/runs/${encodeURIComponent(runId)}/stream`
+  const resp = await fetch(url, { signal })
+  if (!resp.ok) await raiseFor(resp, url)
+  if (!resp.body) throw new Error('Streaming unavailable (no response body)')
   yield* readSSE(resp)
 }
 

@@ -4,12 +4,18 @@
   import { fmtCost, fmtDuration, localDateTime, shortId } from '../lib/time'
   import { errorText } from '../lib/errors'
   import Page from '../components/Page.svelte'
+  import Skeleton from '../components/Skeleton.svelte'
+  import EmptyState from '../components/EmptyState.svelte'
   import StatusBadge from '../components/StatusBadge.svelte'
   import type { RunRecord } from '../lib/types'
 
   let runs = $state<RunRecord[]>([])
   let loaded = $state(false)
   let error = $state<string | null>(null)
+  // Page size grows via "load older" — no silent 200-row cliff.
+  let limit = $state(200)
+  let loadingMore = $state(false)
+  const maybeMore = $derived(runs.length >= limit)
 
   // The Runs page is the fleet activity log — autonomous/managed executions.
   // Interactive chat turns live in Chat/Recents, so they're excluded here.
@@ -37,11 +43,21 @@
 
   async function load() {
     try {
-      runs = await api.runs({ limit: 200, exclude_chats: true })
+      runs = await api.runs({ limit, exclude_chats: true })
     } catch (e) {
       error = String(e)
     } finally {
       loaded = true
+    }
+  }
+  async function loadMore() {
+    if (loadingMore) return
+    loadingMore = true
+    limit += 200
+    try {
+      await load()
+    } finally {
+      loadingMore = false
     }
   }
   $effect(() => {
@@ -65,9 +81,9 @@
   {#snippet subtitle()}{shown.length} of {runs.length}{/snippet}
   {#if error}<div class="card" style="color: var(--red);">{errorText(error)}</div>{/if}
   {#if !loaded}
-    <div class="text-muted" style="padding: 24px; font-size: 13px; font-style: italic;">loading…</div>
+    <Skeleton rows={5} />
   {:else if !runs.length}
-    <div class="empty-state"><h3>no runs yet</h3></div>
+    <EmptyState title="no runs yet" hint="run an agent — from chat, a runner, or the CLI — and it lands here" />
   {:else}
     <div style="display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; align-items: center;">
       {#each SOURCES as s}
@@ -82,27 +98,27 @@
         </button>
       {/each}
     </div>
-    <div class="card flush" style="overflow-x: auto;">
-      <table style="width: 100%; border-collapse: collapse; min-width: 720px;">
+    <div style="overflow-x: auto;">
+      <table class="bran-table" style="min-width: 720px;">
         <thead>
-          <tr class="label-cap" style="text-align: left;">
-            <th style="padding: 10px 14px;">ID</th><th>Agent</th><th>Source</th><th>Status</th><th>Started</th><th>Dur</th><th>Cost</th><th>Task</th>
+          <tr>
+            <th>ID</th><th>Agent</th><th>Source</th><th>Status</th><th>Started</th><th class="num">Dur</th><th class="num">Cost</th><th>Task</th>
           </tr>
         </thead>
         <tbody>
           {#each shown as r}
-            <tr style="border-top: 1px solid var(--border);">
-              <td style="padding: 8px 14px;">
+            <tr>
+              <td>
                 <a href={href('/runs/' + r.id)} use:link class="mono" style="color: var(--fg-dim); text-decoration: none;">{shortId(r.id)}</a>
                 {#if r.parent_run_id}<span class="text-muted" title="spawned by another run" style="font-size: 10px;"> ↳</span>{/if}
               </td>
-              <td class="text-bright">{r.agent}</td>
+              <td style="color: var(--fg-bright);">{r.agent}</td>
               <td><span class="src src-{r.source}">{r.source}</span></td>
               <td><StatusBadge status={r.status} /></td>
-              <td class="text-dim" style="font-size: 12px;">{localDateTime(r.started_at)}</td>
-              <td class="num text-dim">{fmtDuration(r.duration_ms)}</td>
-              <td class="num text-dim">{fmtCost(r.total_cost_usd)}</td>
-              <td class="text-dim" style="max-width: 320px;">
+              <td style="color: var(--fg-dim); white-space: nowrap;">{localDateTime(r.started_at)}</td>
+              <td class="num" style="color: var(--fg-dim);">{fmtDuration(r.duration_ms)}</td>
+              <td class="num" style="color: var(--fg-dim);">{fmtCost(r.total_cost_usd)}</td>
+              <td style="color: var(--fg-dim); max-width: 320px;">
                 <div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{r.task}</div>
                 {#if r.status === 'failed' && r.error}
                   <div title={r.error} style="color: var(--red); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{r.error}</div>
@@ -113,6 +129,13 @@
         </tbody>
       </table>
     </div>
+    {#if maybeMore}
+      <div style="text-align: center; margin-top: 12px;">
+        <button class="btn-outline" disabled={loadingMore} onclick={loadMore}>
+          {loadingMore ? 'loading…' : 'load older →'}
+        </button>
+      </div>
+    {/if}
   {/if}
 </Page>
 

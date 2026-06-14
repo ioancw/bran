@@ -40,7 +40,10 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 200;
+    /* Above the mobile sidebar drawer (230), nav-burger (240) and auth-banner
+       (250) — a confirm fired from the drawer (e.g. delete chat) was rendering
+       behind them. Stays below Toasts (300). */
+    z-index: 270;
   }
   .confirm-box {
     width: min(420px, calc(100vw - 32px));

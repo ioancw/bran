@@ -7,7 +7,7 @@
   import Prose from '../components/Prose.svelte'
   import ChatLog from '../chat/ChatLog.svelte'
   import { applyEvent, freshState, type ChatItem } from '../chat/events'
-  import type { ArtifactEntry, RunRecord } from '../lib/types'
+  import type { ArtifactEntry, RunRecord, Verification } from '../lib/types'
 
   let { runId }: { runId: string } = $props()
 
@@ -22,6 +22,12 @@
   // live (or result-less) run still shows the transcript as the main view.
   const finished = $derived(run != null && run.status !== 'running' && run.status !== 'pending')
   const resultFirst = $derived(finished && !!(run?.result ?? '').trim())
+
+  // Evaluator verdict for verify-mode runner fires (metadata.verification).
+  const verification = $derived.by((): Verification | null => {
+    const v = run?.metadata?.verification
+    return v && typeof v === 'object' ? (v as Verification) : null
+  })
 
   async function loadTranscript() {
     try {
@@ -52,18 +58,34 @@
       }
       if (run.status === 'running' || run.status === 'pending') {
         // Live: stream the run's events into the transcript as it executes
-        // (replay-then-live, see /spa/runs/{id}/stream). When the stream ends
-        // the run finished — refetch the canonical record + transcript.
+        // (replay-then-live, see /spa/runs/{id}/stream). A dropped connection
+        // mid-run reconnects with backoff — the server replays the buffer, so
+        // resetting the transcript per attempt stays gap-free. When the stream
+        // ends the run finished — refetch the canonical record + transcript.
         void (async () => {
-          transcript = []
-          const st = freshState()
-          try {
-            for await (const ev of streamRunEvents(runId, aborter.signal)) {
-              if (ev.type === 'done') break
-              applyEvent(transcript, st, ev)
+          let attempts = 0
+          while (!aborter.signal.aborted) {
+            transcript = []
+            const st = freshState()
+            try {
+              for await (const ev of streamRunEvents(runId, aborter.signal)) {
+                if (ev.type === 'done') break
+                attempts = 0 // healthy stream — reset the backoff
+                applyEvent(transcript, st, ev)
+              }
+              break // clean end: the run finished (or isn't live in this process)
+            } catch {
+              if (aborter.signal.aborted) break
+              // Transient drop. Reconnect only while the run is still going.
+              try {
+                run = await api.run(runId)
+              } catch {
+                break
+              }
+              if (run.status !== 'running' && run.status !== 'pending') break
+              if (++attempts > 5) break // the 3s poll still covers status
+              await new Promise((r) => setTimeout(r, Math.min(800 * 2 ** attempts, 8000)))
             }
-          } catch {
-            /* aborted on unmount, or stream unavailable — the poll covers status */
           }
           if (!aborter.signal.aborted) {
             run = await api.run(runId)
@@ -127,8 +149,38 @@
           <div><span class="label-cap">cost</span> {fmtCost(run.total_cost_usd)}</div>
           <div><span class="label-cap">duration</span> {fmtDuration(run.duration_ms)}</div>
           <div><span class="label-cap">started</span> {localDateTime(run.started_at)}</div>
+          {#if run.actor}
+            <div><span class="label-cap">triggered by</span> {run.actor}</div>
+          {/if}
           <div class="mono text-dim" style="word-break: break-all; margin-top: 6px;">session: {run.session_id ?? '—'}</div>
         </div>
+        {#if verification}
+          <div class="card-quiet meta-list" style="font-size: 12.5px;">
+            <div class="label-cap" style="margin-bottom: 8px;">verification</div>
+            {#if verification.status === 'skipped'}
+              <div class="text-muted">skipped — {verification.reason ?? 'critic unavailable'}</div>
+            {:else if verification.pass}
+              <div style="color: var(--green);">✓ passed review</div>
+            {:else}
+              <div style="color: var(--amber);">✗ reviewer found issues</div>
+              {#if verification.issues?.length}
+                <ul class="verif-issues">
+                  {#each verification.issues as issue}<li>{issue}</li>{/each}
+                </ul>
+              {/if}
+              {#if verification.retried_run_id}
+                <div style="margin-top: 6px;">
+                  <a href={href('/runs/' + verification.retried_run_id)} use:link class="text-accent-soft" style="text-decoration: none;">↳ corrected attempt</a>
+                </div>
+              {/if}
+            {/if}
+            {#if verification.retry_of}
+              <div style="margin-top: 6px;">
+                <a href={href('/runs/' + verification.retry_of)} use:link class="text-accent-soft" style="text-decoration: none;">↰ original attempt</a>
+              </div>
+            {/if}
+          </div>
+        {/if}
         {#if artifacts.length}
           <div class="card-quiet meta-list" style="font-size: 12.5px;">
             <div class="label-cap" style="margin-bottom: 8px;">files produced</div>
@@ -215,4 +267,11 @@
     min-width: 0;
   }
   a.art-name:hover { text-decoration: underline; }
+  .verif-issues {
+    margin: 6px 0 0;
+    padding-left: 18px;
+    color: var(--fg-dim);
+    font-size: 12px;
+    line-height: 1.6;
+  }
 </style>

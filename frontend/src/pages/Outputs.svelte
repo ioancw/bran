@@ -9,7 +9,11 @@
   import { relativeTime, localDateTime } from '../lib/time'
   import { errorText } from '../lib/errors'
   import { markOutputsSeen, isNewSince } from '../lib/seen.svelte'
+  import { isSuperseded, verifyBadge } from '../lib/verification'
+  import { toast } from '../lib/toast.svelte'
   import Page from '../components/Page.svelte'
+  import Skeleton from '../components/Skeleton.svelte'
+  import EmptyState from '../components/EmptyState.svelte'
   import Prose from '../components/Prose.svelte'
   import type { RunRecord, ScheduleRecord } from '../lib/types'
 
@@ -18,7 +22,6 @@
   let loaded = $state(false)
   let error = $state<string | null>(null)
   let expanded = $state<Record<string, boolean>>({})
-  let copiedId = $state<string | null>(null)
 
   // Opening this page is "reading your deliveries": advance the seen marker
   // (clears the sidebar badge) but keep the previous value so the cards that
@@ -36,8 +39,12 @@
     r.schedule_id ? (runners.find((s) => s.id === r.schedule_id) ?? null) : null
   const titleFor = (r: RunRecord): string => runnerFor(r)?.name ?? r.agent
 
-  // Only completed runs that actually produced text are "outputs".
-  const outputs = $derived(runs.filter((r) => r.status === 'completed' && (r.result ?? '').trim()))
+  // Only completed runs that actually produced text are "outputs". A run whose
+  // failed review triggered a corrected attempt is superseded — the corrected
+  // run appears instead, so you never read the rejected version by accident.
+  const outputs = $derived(
+    runs.filter((r) => r.status === 'completed' && (r.result ?? '').trim() && !isSuperseded(r)),
+  )
   const shown = $derived(filter === 'all' ? outputs : outputs.filter((r) => r.source === filter))
   const countFor = (s: Source) =>
     s === 'all' ? outputs.length : outputs.filter((r) => r.source === s).length
@@ -65,10 +72,15 @@
 
   const isLong = (text: string) => (text ?? '').length > 700
 
-  // Files the run produced (recorded in run metadata), as {index, name} for
-  // download chips. Index keys the download endpoint; name is the basename.
+  // A short report from a delta-mode runner is usually "nothing much changed" —
+  // render it as a quiet, compact card rather than a full delivery.
+  const isQuietDelta = (r: RunRecord) =>
+    !!runnerFor(r)?.delta && (r.result ?? '').trim().length < 280
+
+  // Files the run produced (the artifacts table, attached to list responses),
+  // as {index, name} for download chips. Index keys the download endpoint.
   function artifactsOf(r: RunRecord): { index: number; name: string }[] {
-    const raw = r.metadata?.artifacts
+    const raw = r.artifacts
     if (!Array.isArray(raw)) return []
     return raw.map((p, index) => ({ index, name: String(p).split(/[\\/]/).pop() ?? String(p) }))
   }
@@ -76,12 +88,9 @@
   async function copyResult(r: RunRecord) {
     try {
       await navigator.clipboard.writeText(r.result ?? '')
-      copiedId = r.id
-      setTimeout(() => {
-        if (copiedId === r.id) copiedId = null
-      }, 1500)
+      toast('copied to clipboard', 'ok')
     } catch {
-      /* clipboard unavailable (http, permissions) — silently no-op */
+      toast('clipboard unavailable', 'err')
     }
   }
 
@@ -129,15 +138,11 @@
 
   {#if error}<div class="card" style="color: var(--red);">{errorText(error)}</div>{/if}
   {#if !loaded}
-    <div class="text-muted" style="padding: 24px; font-size: 13px; font-style: italic;">loading…</div>
+    <Skeleton rows={5} />
   {:else if !outputs.length}
-    <div class="empty-state">
-      <h3>no outputs yet</h3>
-      <p class="text-muted" style="font-size: 13px;">
-        When a runner fires or a background agent finishes, its result shows up here to read.
-      </p>
-      <p style="font-size: 13px;"><a href={href('/runners')} use:link class="text-accent-soft" style="text-decoration: none;">create a runner →</a></p>
-    </div>
+    <EmptyState title="no outputs yet" hint="when a runner fires or a background agent finishes, its result lands here to read">
+      <a href={href('/runners')} use:link class="text-accent-soft" style="text-decoration: none;">create a runner →</a>
+    </EmptyState>
   {:else}
     <div style="display: flex; gap: 6px; margin-bottom: 18px; flex-wrap: wrap;">
       {#each SOURCES as s}
@@ -152,11 +157,14 @@
       <div class="space-y-3" style="margin-bottom: 26px;">
         {#each g.items as r (r.id)}
           {@const runner = runnerFor(r)}
-          <article class="card output" class:fresh={isNewSince(r.started_at, seenBefore)}>
+          {@const badge = verifyBadge(r)}
+          <article class="card output" class:fresh={isNewSince(r.started_at, seenBefore)} class:quiet={isQuietDelta(r)}>
             <header class="out-head">
               {#if isNewSince(r.started_at, seenBefore)}<span class="new-dot" title="new since your last visit"></span>{/if}
               <a href={href('/runs/' + r.id)} use:link class="out-agent text-bright">{titleFor(r)}</a>
               <span class="src src-{r.source}">{r.source}</span>
+              {#if runner?.delta}<span class="delta-tag" title="delta report — only what changed since the last run">Δ</span>{/if}
+              {#if badge}<span class="pill {badge.tone === 'ok' ? 'ok' : 'warn'}" style="font-size: 10px;" title="reviewed by the verification evaluator">{badge.label}</span>{/if}
               <span class="text-muted out-task" title={r.task}>{runner ? `${r.agent} · ${r.task}` : r.task}</span>
               <span class="ml-auto text-dim" style="font-size: 11px; white-space: nowrap;" title={localDateTime(r.started_at)}>{relativeTime(r.started_at)}</span>
             </header>
@@ -173,7 +181,7 @@
                 <a href={'/spa/runs/' + encodeURIComponent(r.id) + '/artifacts/' + a.index}
                    download class="art-chip mono" title="download file produced by this run">📄 {a.name}</a>
               {/each}
-              <button class="act" onclick={() => copyResult(r)}>{copiedId === r.id ? 'copied ✓' : 'copy'}</button>
+              <button class="act" onclick={() => copyResult(r)}>copy</button>
               <button class="act" onclick={() => discuss(r)}>discuss →</button>
               {#if runner}
                 <a href={href('/runners/' + encodeURIComponent(runner.name))} use:link class="act">runner →</a>
@@ -195,6 +203,19 @@
   }
   .output { padding: 16px 18px; }
   .output.fresh { border-color: color-mix(in srgb, var(--accent-soft) 45%, var(--border)); }
+  /* "Nothing much changed" delta reports: compact + visually quiet. */
+  .output.quiet { padding: 10px 18px; background: transparent; }
+  .output.quiet :global(.prose-md) { font-size: 14px; color: var(--fg-dim); }
+  .delta-tag {
+    display: inline-block;
+    padding: 0 6px;
+    border-radius: 4px;
+    background: var(--accent-glow);
+    color: var(--accent-soft);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    cursor: help;
+  }
   .new-dot {
     width: 7px;
     height: 7px;

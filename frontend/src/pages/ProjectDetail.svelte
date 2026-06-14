@@ -9,6 +9,7 @@
   import { errorText } from '../lib/errors'
   import { relativeTime } from '../lib/time'
   import Page from '../components/Page.svelte'
+  import Skeleton from '../components/Skeleton.svelte'
   import Composer from '../components/Composer.svelte'
   import ProjectRail from '../components/ProjectRail.svelte'
   import type { Catalog, ProjectDetail } from '../lib/types'
@@ -62,7 +63,7 @@
 
   {#if error}<div class="card" style="color: var(--red);">{errorText(error)}</div>{/if}
   {#if !data && !error}
-    <div class="text-muted" style="padding: 24px; font-size: 13px; font-style: italic;">loading…</div>
+    <Skeleton rows={5} />
   {/if}
   {#if data}
     <div class="ph-grid">

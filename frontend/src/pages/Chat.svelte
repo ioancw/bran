@@ -17,6 +17,9 @@
   let activeChat = $state<ChatSummary | null>(null)
   let items = $state<ChatItem[]>([])
   let streaming = $state(false)
+  // True from the moment a message is sent until the first event arrives —
+  // drives an immediate "thinking" row so a send never looks like a no-op.
+  let waitingFirst = $state(false)
   let streamingIndex = $state(-1)
   let pendingAgent = $state<string | null>(null)
   let input = $state('')
@@ -40,8 +43,10 @@
   // Breadcrumb scope switcher.
   let scopeMenuOpen = $state(false)
   let scopeMenuEl = $state<HTMLElement | undefined>()
+  let scopeBtnEl = $state<HTMLButtonElement | undefined>()
   function switchScope(id: string | null) {
     scopeMenuOpen = false
+    scopeBtnEl?.focus() // keyboard users land back on the trigger, not in a void
     if (id === scopeId) return // already there — don't abandon the current chat
     // Set the scope directly: the route effect below keys on sessionId, which
     // doesn't change when hopping between fresh chats (/chat?project=A → ?project=B),
@@ -55,7 +60,10 @@
     }
   }
   function onWindowKeydown(e: KeyboardEvent) {
-    if (e.key === 'Escape') scopeMenuOpen = false
+    if (e.key === 'Escape' && scopeMenuOpen) {
+      scopeMenuOpen = false
+      scopeBtnEl?.focus()
+    }
   }
 
   function scrollSoon() {
@@ -211,6 +219,7 @@
     input = ''
     items.push({ kind: 'user', text })
     streaming = true
+    waitingFirst = true
     setLive(true, 'thinking…')
     scrollSoon()
 
@@ -227,6 +236,7 @@
 
     try {
       for await (const ev of streamChat(fields)) {
+        waitingFirst = false
         if (ev.type === 'done') break
         // Reflect what the agent is doing into the rail's live Progress row.
         if (ev.type === 'tool_use') setLive(true, `using ${ev.name}`)
@@ -253,6 +263,7 @@
       items.push({ kind: 'error', message: errorText(e) })
     } finally {
       streaming = false
+      waitingFirst = false
       streamingIndex = -1
       setLive(false)
       void loadChats() // refresh the sidebar Recents
@@ -275,7 +286,9 @@
     <!-- Cowork-style breadcrumb: <scope ▾> / conversation -->
     <div class="bc">
       <span class="crumb-wrap" bind:this={scopeMenuEl}>
-        <button class="crumb crumb-scope" onclick={() => (scopeMenuOpen = !scopeMenuOpen)}>
+        <button class="crumb crumb-scope" bind:this={scopeBtnEl}
+                aria-haspopup="menu" aria-expanded={scopeMenuOpen}
+                onclick={() => (scopeMenuOpen = !scopeMenuOpen)}>
           {scopeName}
           <svg width="11" height="11" viewBox="0 0 10 10" fill="none" aria-hidden="true" style="margin-left: 4px;">
             <path d="M2 4l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
@@ -310,6 +323,12 @@
           </div>
         {:else}
           <ChatLog {items} {streamingIndex} onaction={onPlanAction} />
+          {#if waitingFirst}
+            <div class="pending-turn" aria-label="waiting for reply">
+              <span class="pending-dot"></span><span class="pending-dot"></span><span class="pending-dot"></span>
+              <span class="pending-label">thinking</span>
+            </div>
+          {/if}
         {/if}
       </div>
 
@@ -439,6 +458,35 @@
     flex-shrink: 0;
     overflow-y: auto;
     padding-left: 4px;
+  }
+
+  /* Instant feedback between hitting send and the first streamed token. */
+  .pending-turn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 10px 4px;
+  }
+  .pending-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent-soft);
+    animation: pending-bounce 1.1s ease-in-out infinite;
+  }
+  .pending-dot:nth-child(2) { animation-delay: 0.18s; }
+  .pending-dot:nth-child(3) { animation-delay: 0.36s; }
+  .pending-label {
+    margin-left: 6px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+  }
+  @keyframes pending-bounce {
+    0%, 100% { opacity: 0.25; }
+    50% { opacity: 1; }
   }
   /* .composer / .composer-* now live in global.css (shared input component). */
 </style>

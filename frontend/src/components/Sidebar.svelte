@@ -11,7 +11,7 @@
   import { confirmDialog } from '../lib/confirm.svelte'
   import OnboardingChecklist from './OnboardingChecklist.svelte'
 
-  let { counts, version }: { counts: Record<string, number | null>; version: string } = $props()
+  let { counts, version, open = false }: { counts: Record<string, number | null>; version: string; open?: boolean } = $props()
 
   let theme = $state(getTheme())
   function onTheme(e: Event) {
@@ -37,9 +37,10 @@
       ],
     },
     {
+      // Agents (definitions) intentionally aren't here — they're plumbing, not
+      // a daily surface. The library lives next to Settings at the bottom.
       label: 'Fleet',
       items: [
-        { key: 'agents', label: 'Agents', to: '/agents' },
         { key: 'runners', label: 'Runners', to: '/runners' },
         { key: 'outputs', label: 'Outputs', to: '/outputs' },
         { key: 'runs', label: 'Runs', to: '/runs' },
@@ -76,7 +77,7 @@
   )
 </script>
 
-<aside class="sidebar shrink-0 flex flex-col">
+<aside class="sidebar shrink-0 flex flex-col" class:open>
   <div class="px-5 py-5" style="border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px;">
     <a href={href('/')} use:link class="wordmark with-crow" style="text-decoration: none;">
       <svg class="wordmark-crow" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -138,6 +139,10 @@
           <option value={t.name}>{t.label}</option>
         {/each}
       </select>
+      <a href={href('/agents')} use:link class="nav-item" class:active={active === 'agents'} style="font-size: 13px;">
+        <span>Agent library</span>
+        {#if counts.agents != null}<span class="count">{counts.agents}</span>{/if}
+      </a>
       <a href={href('/settings')} use:link class="nav-item" class:active={active === 'settings'} style="font-size: 13px;">
         <span>Settings</span>
       </a>

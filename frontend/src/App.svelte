@@ -2,10 +2,14 @@
   import { router } from './lib/router.svelte'
   import { installCodeCopyHandler } from './lib/markdown'
   import { api } from './lib/api'
+  import { authState, clearAuthError } from './lib/auth.svelte'
   import { outputsSeen, isNewSince } from './lib/seen.svelte'
   import type { RunRecord } from './lib/types'
   import Sidebar from './components/Sidebar.svelte'
   import ConfirmHost from './components/ConfirmHost.svelte'
+  import CommandPalette from './components/CommandPalette.svelte'
+  import EmptyState from './components/EmptyState.svelte'
+  import Toasts from './components/Toasts.svelte'
   import Today from './pages/Today.svelte'
   import Chat from './pages/Chat.svelte'
   import Runs from './pages/Runs.svelte'
@@ -68,11 +72,45 @@
   })
 
   const seg = $derived(router.route.segments)
+
+  // Off-canvas sidebar on small screens; navigation closes the drawer.
+  let sidebarOpen = $state(false)
+  // <main> is the scroll container now (the body is fixed-height), so reset its
+  // scroll to the top on navigation — what window.scrollTo used to do for us.
+  let mainEl = $state<HTMLElement | undefined>()
+  $effect(() => {
+    void router.route.path
+    sidebarOpen = false
+    mainEl?.scrollTo(0, 0)
+  })
+
+  function retryAuth() {
+    clearAuthError()
+    void loadCounts()
+  }
 </script>
 
-<div class="min-h-screen flex">
-  <Sidebar counts={navCounts} version="v0.1.0" />
-  <main class="flex-1 min-w-0">
+<button class="nav-burger" aria-label="open navigation" onclick={() => (sidebarOpen = true)}>
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+    <path d="M4 7h16M4 12h16M4 17h16" />
+  </svg>
+</button>
+{#if sidebarOpen}
+  <button class="nav-overlay" aria-label="close navigation" onclick={() => (sidebarOpen = false)}></button>
+{/if}
+
+{#if authState.blocked}
+  <div class="auth-banner" role="alert">
+    <span>Not authorized — the server rejected a request{authState.message ? `: ${authState.message}` : '.'}</span>
+    <span class="auth-hint">If you put bran behind a proxy or changed its token, refresh your session.</span>
+    <button class="btn-outline" onclick={retryAuth}>retry</button>
+    <button class="btn-primary" onclick={() => location.reload()}>reload app</button>
+  </div>
+{/if}
+
+<div class="app-shell flex">
+  <Sidebar counts={navCounts} version="v0.1.0" open={sidebarOpen} />
+  <main class="flex-1 min-w-0 app-main" bind:this={mainEl}>
     {#if seg[0] === undefined}
       <Today />
     {:else if seg[0] === 'chat'}
@@ -98,8 +136,32 @@
     {:else if seg[0] === 'settings'}
       <Settings />
     {:else}
-      <div class="px-8 py-6"><div class="empty-state"><h3>not found</h3></div></div>
+      <div class="px-8 py-6"><EmptyState title="not found" hint="that page doesn't exist — try Ctrl+K" /></div>
     {/if}
   </main>
 </div>
 <ConfirmHost />
+<CommandPalette />
+<Toasts />
+
+<style>
+  .auth-banner {
+    position: sticky;
+    top: 0;
+    z-index: 250;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 10px 16px;
+    background: color-mix(in srgb, var(--red) 12%, var(--surface));
+    border-bottom: 1px solid color-mix(in srgb, var(--red) 40%, transparent);
+    color: var(--fg-bright);
+    font-size: 13px;
+  }
+  .auth-banner .auth-hint {
+    color: var(--fg-dim);
+    font-size: 12px;
+  }
+  .auth-banner button { margin-left: 0; }
+</style>

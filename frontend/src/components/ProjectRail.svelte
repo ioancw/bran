@@ -173,7 +173,7 @@
         <p class="text-muted" style="font-size: 11px; margin-bottom: 10px;">What the agent always knows here — applied to every chat & attached runner.</p>
 
         <div class="label-cap" style="margin-bottom: 6px;">Instructions · always on</div>
-        <textarea class="field" bind:value={instructions} rows="7"
+        <textarea class="field" bind:value={instructions} rows="7" aria-label="project instructions"
                   placeholder="How the agent should behave in this project…"
                   style="resize: vertical; font-family: var(--font-mono); font-size: 12px;"></textarea>
         <div style="display: flex; align-items: center; gap: 10px; margin-top: 8px;">
@@ -190,7 +190,7 @@
             {#each data.memories as m}
               <div style="display: flex; gap: 8px; align-items: flex-start; font-size: 12px;">
                 <span class="text-fg" style="flex: 1; line-height: 1.4;">{m.text}</span>
-                <button class="btn-ghost" onclick={() => removeMem(m.id)} title="forget">×</button>
+                <button class="btn-ghost" onclick={() => removeMem(m.id)} title="forget" aria-label="forget this fact">×</button>
               </div>
             {/each}
           </div>
@@ -198,7 +198,7 @@
           <div class="text-muted" style="font-size: 12px; font-style: italic; margin-bottom: 8px;">none yet</div>
         {/if}
         <div style="display: flex; gap: 6px;">
-          <input class="field" bind:value={newMemory} placeholder="pin a fact…"
+          <input class="field" bind:value={newMemory} placeholder="pin a fact…" aria-label="pin a fact"
                  onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addMem() } }} />
           <button class="btn-primary" onclick={addMem}>pin</button>
         </div>
@@ -234,12 +234,12 @@
         <p class="text-muted" style="font-size: 11px; margin-bottom: 8px;">Recurring runners for this project.</p>
         {#if showSchedForm}
           <div class="card-quiet" style="margin-bottom: 8px;">
-            <input class="field" bind:value={sName} placeholder="name (unique)" style="margin-bottom: 6px;" />
-            <select class="field" bind:value={sAgent} style="margin-bottom: 6px;">
+            <input class="field" bind:value={sName} placeholder="name (unique)" aria-label="runner name" style="margin-bottom: 6px;" />
+            <select class="field" bind:value={sAgent} aria-label="agent" style="margin-bottom: 6px;">
               {#each agents as a}<option value={a.name}>{a.name}</option>{/each}
             </select>
             <div style="margin-bottom: 6px;"><CronField bind:value={sCron} /></div>
-            <textarea class="field" bind:value={sTask} rows="4"
+            <textarea class="field" bind:value={sTask} rows="4" aria-label="runner task prompt"
               placeholder="prompt — what should the agent do each run?"
               style="resize: vertical; line-height: 1.5;"></textarea>
             <div style="display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px;">
@@ -254,7 +254,7 @@
               <div style="display: flex; gap: 8px; align-items: baseline; font-size: 12px;">
                 <span class="text-bright">{s.name}</span>
                 <span class="mono text-dim">{s.cron}</span>
-                <button class="btn-ghost ml-auto" onclick={() => removeSchedule(s.name)}>×</button>
+                <button class="btn-ghost ml-auto" onclick={() => removeSchedule(s.name)} aria-label="delete runner {s.name}">×</button>
               </div>
             {/each}
           </div>
@@ -288,7 +288,7 @@
               <span class="file-name mono" title={f.name}>{f.name}</span>
               <span class="text-dim" style="font-size: 10px; white-space: nowrap;">{f.size_human}</span>
               {#if mode === 'home'}
-                <button class="btn-ghost" title="remove" onclick={() => removeFile(f.name)}>×</button>
+                <button class="btn-ghost" title="remove" onclick={() => removeFile(f.name)} aria-label="remove {f.name}">×</button>
               {/if}
             </div>
           {/each}
@@ -307,7 +307,7 @@
           Agents create deliverables here (reports, CSVs, edited copies). Absolute path as the server sees it — WSL-style, e.g. <code>/mnt/c/Users/you/Documents/reports</code>.
         </p>
         <div style="display: flex; gap: 6px;">
-          <input class="field mono" bind:value={workDir} placeholder="no working folder"
+          <input class="field mono" bind:value={workDir} placeholder="no working folder" aria-label="working folder path"
                  style="font-size: 11px;"
                  onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); save() } }} />
           <button class="btn-primary" onclick={save}>save</button>
@@ -337,7 +337,7 @@
           style="display: none;"
           onchange={onPick}
         />
-        {#if fileError}<div style="color: var(--danger, #c33); font-size: 11px; margin-top: 6px;">{fileError}</div>{/if}
+        {#if fileError}<div style="color: var(--red); font-size: 11px; margin-top: 6px;">{fileError}</div>{/if}
       {:else if workDir.trim()}
         <!-- Beside a chat: just show where the agent can produce files. -->
         <div class="rail-divider"></div>
@@ -349,9 +349,9 @@
     {#if mode === 'home'}
     <Section label="Settings" open={false}>
       <div class="label-cap" style="margin-bottom: 6px;">Name</div>
-      <input class="field" bind:value={name} placeholder="name" style="margin-bottom: 10px;" />
+      <input class="field" bind:value={name} placeholder="name" aria-label="project name" style="margin-bottom: 10px;" />
       <div class="label-cap" style="margin-bottom: 6px;">Description</div>
-      <input class="field" bind:value={description} placeholder="description" style="margin-bottom: 10px;" />
+      <input class="field" bind:value={description} placeholder="description" aria-label="project description" style="margin-bottom: 10px;" />
       <div style="display: flex; align-items: center; gap: 10px;">
         <button class="btn-primary" onclick={save}>save</button>
         {#if savedFlash}<span class="label-cap" style="color: var(--accent-soft);">saved ✓</span>{/if}

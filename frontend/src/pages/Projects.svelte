@@ -48,8 +48,8 @@
     {#if showForm}
       <div class="card-quiet" style="max-width: 480px;">
         <span class="label-cap" style="display: block; margin-bottom: 6px;">New project</span>
-        <input class="field" bind:value={newName} placeholder="name" style="margin-bottom: 6px;" />
-        <input class="field" bind:value={newDesc} placeholder="description (optional)" />
+        <input class="field" bind:value={newName} placeholder="name" aria-label="project name" style="margin-bottom: 6px;" />
+        <input class="field" bind:value={newDesc} placeholder="description (optional)" aria-label="project description" />
         <div style="display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px;">
           <button class="btn-ghost" onclick={() => (showForm = false)}>cancel</button>
           <button class="btn-primary" onclick={create}>create</button>

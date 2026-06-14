@@ -37,6 +37,19 @@ export interface RunRecord {
   project_id: string | null // null = standalone (not attached to a project)
   source: 'chat' | 'runner' | 'spawn' | 'manual' // how the run was triggered
   schedule_id: string | null // the runner this run belongs to, if any
+  actor?: string | null // named API token that triggered the run, if any
+  artifacts?: string[] // file paths the run produced (list endpoints only)
+}
+
+// Evaluator verdict stored in run.metadata.verification for verify-mode runners.
+export interface Verification {
+  status: 'done' | 'skipped'
+  pass?: boolean
+  issues?: string[]
+  feedback?: string
+  reason?: string
+  retried_run_id?: string
+  retry_of?: string
 }
 
 export interface ScheduleRecord {
@@ -50,6 +63,8 @@ export interface ScheduleRecord {
   project_id: string | null // null = standalone Runner
   run_at?: string | null // one-shot fire time; null/absent = recurring (cron)
   next_run?: string | null // computed next fire time (null when paused/invalid)
+  verify?: boolean // evaluator reviews each output; failed verdicts re-run once
+  delta?: boolean // each run sees the previous report and reports only changes
 }
 
 export interface ChatSummary {

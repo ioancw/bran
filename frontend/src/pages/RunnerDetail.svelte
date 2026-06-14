@@ -6,8 +6,11 @@
   import { href, link, navigate } from '../lib/router.svelte'
   import { fmtCost, relativeTime, localDateTime } from '../lib/time'
   import { errorText } from '../lib/errors'
+  import { toast } from '../lib/toast.svelte'
   import { confirmDialog } from '../lib/confirm.svelte'
+  import EmptyState from '../components/EmptyState.svelte'
   import Page from '../components/Page.svelte'
+  import Skeleton from '../components/Skeleton.svelte'
   import StatusBadge from '../components/StatusBadge.svelte'
   import CronField from '../components/CronField.svelte'
   import type { AgentInfo, ProjectSummary, RunRecord, ScheduleRecord } from '../lib/types'
@@ -31,6 +34,8 @@
   let eKind = $state<'cron' | 'once'>('cron')
   let eCron = $state('')
   let eRunAt = $state('')
+  let eVerify = $state(false)
+  let eDelta = $state(false)
   let editError = $state('')
 
   const projName = (id: string | null) => (id ? projects.find((p) => p.id === id)?.name ?? id : null)
@@ -56,6 +61,8 @@
     eKind = runner.run_at ? 'once' : 'cron'
     eCron = runner.cron ?? ''
     eRunAt = runner.run_at ? runner.run_at.slice(0, 16) : '' // ISO → datetime-local
+    eVerify = !!runner.verify
+    eDelta = !!runner.delta
     editError = ''
     editing = true
   }
@@ -66,12 +73,13 @@
     try {
       const fields =
         eKind === 'once'
-          ? { agent: eAgent, task: eTask, run_at: eRunAt }
-          : { agent: eAgent, task: eTask, cron: eCron.trim() }
+          ? { agent: eAgent, task: eTask, run_at: eRunAt, verify: eVerify, delta: eDelta }
+          : { agent: eAgent, task: eTask, cron: eCron.trim(), verify: eVerify, delta: eDelta }
       runner = await api.updateSchedule(runner.name, fields)
       editing = false
+      toast('runner saved', 'ok')
     } catch (e) {
-      editError = e instanceof Error ? e.message : 'save failed'
+      editError = errorText(e)
     } finally {
       saving = false
     }
@@ -95,10 +103,15 @@
   async function toggleEnabled() {
     if (!runner || busy) return
     busy = true
+    // Optimistic flip; reconcile with the server, revert + toast on error.
+    const prev = runner
+    runner = { ...runner, enabled: !runner.enabled }
     try {
-      runner = await api.setScheduleEnabled(runner.name, !runner.enabled)
+      runner = await api.setScheduleEnabled(prev.name, !prev.enabled)
+      toast(`${runner.enabled ? 'resumed' : 'paused'} ${runner.name}`, 'ok')
     } catch (e) {
-      error = String(e)
+      runner = prev
+      toast(errorText(e), 'err')
     } finally {
       busy = false
     }
@@ -106,7 +119,13 @@
   async function remove() {
     if (!runner) return
     if (!(await confirmDialog(`Delete runner "${runner.name}"?`))) return
-    await api.deleteSchedule(runner.name)
+    try {
+      await api.deleteSchedule(runner.name)
+      toast(`deleted runner ${runner.name}`, 'ok')
+    } catch (e) {
+      toast(errorText(e), 'err')
+      return
+    }
     navigate('/runners')
   }
 </script>
@@ -122,9 +141,9 @@
 
   {#if error}<div class="card" style="color: var(--red);">{errorText(error)}</div>{/if}
   {#if !loaded}
-    <div class="text-muted" style="padding: 24px; font-size: 13px; font-style: italic;">loading…</div>
+    <Skeleton rows={5} />
   {:else if !runner}
-    <div class="empty-state"><h3>unknown runner</h3></div>
+    <EmptyState title="unknown runner" hint="it may have been deleted — check the runners list" />
   {:else}
     <div class="grid grid-cols-3 gap-6">
       <!-- Main: run now + run history -->
@@ -154,6 +173,16 @@
                     <CronField bind:value={eCron} />
                   {/if}
                 </div>
+              </div>
+              <div class="space-y-2">
+                <label class="mode-check" title="An evaluator reviews each output against the task; a failed verdict re-runs the agent once with the reviewer's feedback.">
+                  <input type="checkbox" bind:checked={eVerify} />
+                  <span><strong>verify</strong> — review each output, retry once on a bad one</span>
+                </label>
+                <label class="mode-check" title="Each run sees the previous run's report and reports only what's new or changed.">
+                  <input type="checkbox" bind:checked={eDelta} />
+                  <span><strong>delta</strong> — report only what changed since last run</span>
+                </label>
               </div>
               {#if editError}<div style="color: var(--red); font-size: 12px;">{editError}</div>{/if}
               <div style="display: flex; gap: 6px; justify-content: flex-end;">
@@ -224,6 +253,16 @@
                 <span class="text-muted">standalone</span>
               {/if}
             </div>
+            <div>
+              <span class="label-cap">modes</span>
+              {#if runner.verify || runner.delta}
+                <span class="text-dim">
+                  {[runner.verify ? 'verify' : null, runner.delta ? 'delta' : null].filter(Boolean).join(' · ')}
+                </span>
+              {:else}
+                <span class="text-muted">none</span>
+              {/if}
+            </div>
           </div>
         </div>
       </aside>
@@ -238,5 +277,15 @@
     transition: background 0.12s var(--transition);
   }
   .row-link:hover { background: var(--surface2); }
+  .mode-check {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--fg-dim);
+    cursor: pointer;
+  }
+  .mode-check input { cursor: pointer; }
+  .mode-check strong { color: var(--fg-bright); font-weight: 500; }
   /* .src lives in global.css (shared source-pill component). */
 </style>

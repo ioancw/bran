@@ -52,7 +52,7 @@
 </script>
 
 <div>
-  <input class="field" bind:value {placeholder} />
+  <input class="field" bind:value {placeholder} aria-label="schedule" />
   <div class="cron-meta">
     {#if error}
       <span class="cron-err">{error.split('\n')[0]}</span>

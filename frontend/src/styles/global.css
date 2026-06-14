@@ -17,7 +17,7 @@
 *, *::before, *::after { box-sizing: border-box; }
 
 html, body {
-  min-height: 100%;
+  height: 100%;
   overscroll-behavior-y: none;
 }
 
@@ -32,6 +32,10 @@ body {
   text-rendering: optimizeLegibility;
   font-feature-settings: 'kern' 1, 'liga' 1;
   position: relative;
+  /* The app is a fixed-height shell: the body never scrolls (so the page can't
+     be "slightly taller than the viewport" and bob up/down). Scrolling happens
+     inside <main>. See .app-shell / .app-main below. */
+  overflow: hidden;
 }
 
 /* Subtle grain overlay — gives the flat dark surface a paper-like texture
@@ -455,6 +459,9 @@ table.bran-table .mono { font-family: var(--font-mono); font-size: 12px; color: 
   column-gap: 24px;
   row-gap: 4px;
   align-items: end;
+  /* Inside the flex-column <main>, the header is fixed chrome — never let it
+     compress when the content area below grows to fill. */
+  flex-shrink: 0;
 }
 .page-header h1 {
   grid-area: title;
@@ -859,33 +866,23 @@ table.bran-table .mono { font-family: var(--font-mono); font-size: 12px; color: 
 }
 .live-dot.sm { width: 6px; height: 6px; }
 
-/* Chat-page viewport fill — when the chat page is active, override the
-   main element's normal flow so the chat layout fills the available
-   viewport height. Replaces the fragile `calc(100vh - 130px)` math that
-   broke when the page header wrapped. */
-body.chat-fill {
-  overflow: hidden;          /* no double-scrollbar; chat owns its scroll */
-}
-body.chat-fill main {
+/* App shell — a fixed full-viewport frame. The shell is exactly the viewport
+   height and <main> is the single scroll container, so the body never grows
+   past the viewport (no "slightly too tall" bob). The sidebar is a fixed-height
+   sibling; only main's content scrolls.
+
+   Note: .min-h-screen (min-height:100vh) is the old, looser version — kept as a
+   utility but the app root uses .app-shell so the height is *capped*, not just
+   floored. */
+.app-shell {
   height: 100vh;
+  height: 100dvh;            /* track the dynamic viewport on mobile browsers */
+}
+.app-main {
   display: flex;
   flex-direction: column;
-  min-height: 0;
-}
-body.chat-fill main > .page-header {
-  flex-shrink: 0;
-}
-body.chat-fill main > div.stagger-in {
-  flex: 1;
-  min-height: 0;
-  padding-top: 16px;
-  padding-bottom: 16px;
-  display: flex;
-  flex-direction: column;
-}
-body.chat-fill main > div.stagger-in > #chat-layout {
-  flex: 1;
-  min-height: 0;
+  min-height: 0;             /* a flex child that's allowed to scroll, not grow */
+  overflow-y: auto;
 }
 
 /* Per-agent stat row used on dashboard */
@@ -1446,5 +1443,71 @@ a:hover .editorial-arrow,
   max-width: var(--content-max-w);
   margin-left: auto;
   margin-right: auto;
+}
+
+/* ===========================================================================
+ * Responsive layout. Below 768px the fixed sidebar becomes an off-canvas
+ * drawer behind a hamburger, multi-column page grids stack, and the chat's
+ * project rail hides (it has its own page via the breadcrumb).
+ * ========================================================================= */
+
+/* Hamburger — hidden on desktop; fixed top-left on small screens. */
+.nav-burger {
+  display: none;
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 240;
+  width: 38px;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  color: var(--fg);
+  cursor: pointer;
+}
+.nav-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 225;
+  background: rgba(0, 0, 0, 0.45);
+  border: 0;
+  padding: 0;
+}
+
+@media (max-width: 768px) {
+  .nav-burger { display: inline-flex; }
+  .nav-overlay { display: block; }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    height: 100dvh;
+    z-index: 230;
+    transform: translateX(-105%);
+    transition: transform 0.22s var(--transition);
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.35);
+  }
+  .sidebar.open { transform: translateX(0); }
+
+  /* Clear the floating hamburger. */
+  .page-header { padding-left: 64px; }
+
+  /* Stack the multi-column page grids (Today, run/runner/project detail). */
+  .grid-cols-2, .grid-cols-3, .grid-cols-4 { grid-template-columns: 1fr; }
+  .col-span-2, .col-span-3 { grid-column: auto; }
+
+  /* The chat's project rail needs more width than a phone has — the project
+     page itself is one tap away via the breadcrumb. */
+  .chat-rail { display: none; }
+}
+
+@media (min-width: 769px) {
+  .sidebar.open { transform: none; } /* drawer class is inert on desktop */
 }
 
