@@ -22,17 +22,18 @@ from bran.tools.schedules import RUNNER_TOOLS
 @tool(
     "spawn_agent",
     (
-        "Launch a background, non-blocking run of another agent. Returns a "
-        "run_id you can hand back to the user; the run completes asynchronously "
-        "and its result is persisted to the bran SQLite DB. Use this when a "
-        "task is long-running, the user asked you to 'do X in the background', "
-        "or you want to fan out work in parallel. The `agent` argument must be "
-        "the name of a known agent (e.g. 'research', 'summariser', "
-        "'research-deep'). Do NOT use this for trivial questions you can answer "
-        "yourself or for sub-tasks of your current conversation — for those, "
-        "invoke a subagent directly via the Agent tool."
+        "Run another agent as a separate, persisted fleet run. ONE tool, two "
+        "modes via `wait`:\n"
+        "- wait=true — block until the run finishes and return its result here. "
+        "Use when you need the output to continue this turn.\n"
+        "- wait=false — return immediately with a run_id while the run executes "
+        "in the background. Use for long tasks the user shouldn't wait on, and "
+        "for fan-outs (call once per task, collect later with get_run_result).\n"
+        "`agent` must be a known agent name (e.g. 'research', 'summariser', "
+        "'finance-news'). Every spawn is persisted as its own run with a "
+        "transcript the user can open."
     ),
-    {"agent": str, "task": str},
+    {"agent": str, "task": str, "wait": bool},
 )
 async def spawn_agent(args: dict[str, Any]) -> dict[str, Any]:
     # Imported lazily to break the agents <-> runner <-> tools cycle.
@@ -41,6 +42,7 @@ async def spawn_agent(args: dict[str, Any]) -> dict[str, Any]:
 
     agent = args["agent"]
     task = args["task"]
+    wait = bool(args.get("wait"))
 
     # Pre-create the run row so we can hand its ID back to the caller before
     # the actual run starts. The runner will pick up this same record (not
@@ -55,6 +57,18 @@ async def spawn_agent(args: dict[str, Any]) -> dict[str, Any]:
     )
     insert_run(record)
 
+    if wait:
+        # Synchronous mode: run to completion and hand the result straight back.
+        try:
+            record = await run_agent(agent, task, record=record)
+        except Exception as exc:  # the runner persisted the failure already
+            return _err(f"run {record.id} failed: {type(exc).__name__}: {exc}")
+        if record.status == "completed":
+            return _ok(
+                f"[run {record.id} completed]\n{(record.result or '').strip() or '(no output)'}"
+            )
+        return _err(f"run {record.id} ended {record.status}: {(record.error or '')[:500]}")
+
     async def _go() -> None:
         try:
             await run_agent(agent, task, record=record)
@@ -67,18 +81,18 @@ async def spawn_agent(args: dict[str, Any]) -> dict[str, Any]:
     # spawn_background keeps a strong reference so it can't be GC'd mid-run.
     spawn_background(_go(), name=f"spawn:{record.id}")
 
-    return {
-        "content": [
-            {
-                "type": "text",
-                "text": (
-                    f"Spawned background run: agent={agent}, run_id={record.id}.\n"
-                    f"Check status with `bran runs show {record.id}` or "
-                    f"GET /runs/{record.id}."
-                ),
-            }
-        ]
-    }
+    return _ok(
+        f"Spawned background run: agent={agent}, run_id={record.id}.\n"
+        f"Check status with `bran runs show {record.id}` or GET /runs/{record.id}."
+    )
+
+
+def _ok(text: str) -> dict[str, Any]:
+    return {"content": [{"type": "text", "text": text}]}
+
+
+def _err(text: str) -> dict[str, Any]:
+    return {"content": [{"type": "text", "text": "Error: " + text}]}
 
 
 # ---------------------------------------------------------------------------

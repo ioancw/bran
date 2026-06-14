@@ -28,6 +28,20 @@ from bran.live import close as live_close, publish as live_publish
 from bran.notify import notify_completion
 from bran.persistence import RunRecord, get_run, insert_run, update_run, utcnow_iso
 
+# Cap what we store in runs.error — a tool that dumps a huge page into an
+# exception message shouldn't bloat the DB row (or slow every list query).
+_MAX_ERROR_CHARS = 16_000
+
+
+class RunTimeoutError(Exception):
+    """A run exceeded BRAN_RUN_TIMEOUT and was aborted."""
+
+
+def _truncate_error(text: str) -> str:
+    if len(text) <= _MAX_ERROR_CHARS:
+        return text
+    return text[:_MAX_ERROR_CHARS] + "\n[… error truncated …]"
+
 
 def _begin_run(
     agent: str,
@@ -37,6 +51,7 @@ def _begin_run(
     project_id: str | None = None,
     source: str = "manual",
     schedule_id: str | None = None,
+    actor: str | None = None,
 ) -> RunRecord:
     """Return a freshly-`running` record, persisted.
 
@@ -53,6 +68,7 @@ def _begin_run(
             project_id=project_id,  # None = standalone run
             source=source,
             schedule_id=schedule_id,
+            actor=actor,
         )
         record.status = "running"
         insert_run(record)
@@ -84,8 +100,37 @@ async def _drive(
     from bran.web.events import events_from_message
 
     started = time.perf_counter()
+    # Wall-clock ceiling: a hung SDK subprocess (stuck tool, network stall)
+    # would otherwise block this task forever — and with the scheduler's
+    # max_instances=1, every subsequent fire of that runner backs up behind it.
+    timeout_s = SETTINGS.run_timeout_s
+    deadline = (time.monotonic() + timeout_s) if timeout_s > 0 else None
     try:
-        async for message in query(prompt=task, options=options):
+        stream = query(prompt=task, options=options).__aiter__()
+        while True:
+            try:
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise asyncio.TimeoutError
+                    message = await asyncio.wait_for(stream.__anext__(), timeout=remaining)
+                else:
+                    message = await stream.__anext__()
+            except StopAsyncIteration:
+                break
+            except (asyncio.TimeoutError, TimeoutError):
+                # wait_for cancelled __anext__, which finalises the SDK stream
+                # (its own cleanup tears down the subprocess). aclose() makes
+                # that deterministic rather than left to GC.
+                try:
+                    await stream.aclose()
+                except Exception:
+                    pass
+                raise RunTimeoutError(
+                    f"Run timed out after {timeout_s}s (BRAN_RUN_TIMEOUT). The SDK "
+                    "subprocess may have hung, or the task genuinely needs longer — "
+                    "raise the limit or split the task."
+                )
             if on_message is not None:
                 on_message(message)
             _absorb_message(record, message)
@@ -111,9 +156,18 @@ async def _drive(
         record.ended_at = utcnow_iso()
         update_run(record)
         raise
+    except RunTimeoutError as exc:
+        record.status = "failed"
+        record.error = str(exc)  # clean message — the traceback adds nothing here
+        record.duration_ms = int((time.perf_counter() - started) * 1000)
+        record.ended_at = utcnow_iso()
+        update_run(record)
+        raise
     except Exception as exc:
         record.status = "failed"
-        record.error = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
+        record.error = _truncate_error(
+            f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
+        )
         record.duration_ms = int((time.perf_counter() - started) * 1000)
         record.ended_at = utcnow_iso()
         update_run(record)
@@ -143,6 +197,7 @@ async def run_agent(
     project_id: str | None = None,
     source: str = "manual",
     schedule_id: str | None = None,
+    actor: str | None = None,
 ) -> RunRecord:
     """Execute an agent run end-to-end, returning the persisted record.
 
@@ -158,7 +213,7 @@ async def run_agent(
     `record` is supplied — the caller already set the record's project).
     """
     agent_def = get_agent(agent)  # raises KeyError if unknown
-    record = _begin_run(agent, task, parent_run_id, record, project_id, source, schedule_id)
+    record = _begin_run(agent, task, parent_run_id, record, project_id, source, schedule_id, actor)
 
     options = build_options_for(
         agent_def, resume=resume_session, max_turns=max_turns,
@@ -271,16 +326,15 @@ def _absorb_message(record: RunRecord, message: Any) -> None:
                 # Artifacts: files this run produced/modified. Only record
                 # targets inside the sanctioned write roots (bran_home + the
                 # ambient project's work_dir) — a path outside them was denied
-                # by the confinement hook, so it never became a file.
+                # by the confinement hook, so it never became a file. Stored in
+                # the artifacts table (add_artifact is idempotent per path).
                 from bran.permissions import allowed_write_target
+                from bran.persistence import add_artifact
 
                 raw = (block.input or {}).get("file_path") or (block.input or {}).get("notebook_path")
                 target_path = allowed_write_target(raw) if raw else None
                 if target_path is not None:
-                    artifacts = record.metadata.setdefault("artifacts", [])
-                    if str(target_path) not in artifacts:
-                        artifacts.append(str(target_path))
-                        update_run(record)
+                    add_artifact(record.id, str(target_path))
     elif isinstance(message, ResultMessage):
         record.session_id = message.session_id or record.session_id
         record.num_turns = message.num_turns

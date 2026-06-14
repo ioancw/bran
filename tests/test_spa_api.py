@@ -96,3 +96,32 @@ def test_schedule_dict_aware_run_at():
 
 def test_schedule_dict_garbage_run_at_is_none():
     assert _schedule_dict(_one_shot("not-a-date"))["next_run"] is None
+
+
+# ---------------------------------------------------------------------------
+# Continue-a-run-as-a-chat: /spa/chats/{id} falls back to runs by session_id,
+# so the chat view can resume a runner/spawn session with the right agent
+# (previously the first message silently started a brand-new session).
+# ---------------------------------------------------------------------------
+
+def test_chat_detail_synthesized_from_run_session(client):
+    import uuid
+
+    from bran.persistence import RunRecord, insert_run
+
+    session_id = f"sess-{uuid.uuid4().hex}"
+    run = RunRecord.new(agent="finance-news", task="Morning briefing on FX markets", source="runner")
+    run.session_id = session_id
+    run.status = "completed"
+    insert_run(run)
+
+    r = client.get(f"/spa/chats/{session_id}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["id"] == session_id
+    assert body["agent"] == "finance-news"
+    assert body["title"].startswith("Morning briefing")
+
+
+def test_chat_detail_unknown_id_still_404(client):
+    assert client.get("/spa/chats/no-such-session").status_code == 404

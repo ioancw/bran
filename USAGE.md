@@ -145,6 +145,8 @@ The UI is HTMX + Tailwind, served from the same FastAPI process. Run rows live-r
 
 Server binds to `127.0.0.1:8765` by default; change with `BRAN_HOST` / `BRAN_PORT`. Refuses to start without `BRAN_API_TOKEN` configured.
 
+For small-team use, issue **named tokens** instead of sharing one secret: `BRAN_API_TOKENS="ioan:tok-abc,partner:tok-def"`. Each token authenticates the same API, and runs it triggers are attributed to its name (`runs.actor`, shown on the run detail page). The single `BRAN_API_TOKEN` still works and is attributed as `api`.
+
 Example API call:
 
 ```bash
@@ -167,6 +169,13 @@ bran serve   # in tmux or screen so it survives terminal close
 ```
 
 APScheduler inside the same `bran serve` process. Only fires while `bran serve` is up; on a laptop that means while the host is on and your terminal session is alive. Schedules persist in SQLite so they survive restarts.
+
+**Reliability:** a failed scheduled run is retried automatically with backoff (1m → 5m → 15m, up to `BRAN_RUNNER_RETRIES` times, default 2) — a flaky feed doesn't cost you the day's briefing. Every run is also bounded by `BRAN_RUN_TIMEOUT` (seconds, default 3600, 0 = off) so a hung SDK subprocess can't wedge the scheduler.
+
+**Output quality modes** (per runner — set in the UI form, the runner's edit page, or in chat via create_runner):
+
+- **verify** — after each run, a cheap evaluator reviews the output against the task (the cookbook evaluator-optimizer pattern). A failed verdict re-runs the agent ONCE with the reviewer's feedback; both verdicts are stored on the runs and shown on the run detail page. Verification fails open: a broken critic never blocks delivery.
+- **delta** — each fire sees the previous completed report and is told to report only what's NEW or CHANGED (dedupe, lead with deltas, say "nothing changed" when true). Turns a recurring news/research runner from a state dump into a signal feed.
 
 ### 2. systemd timers (if you want OS-level scheduling on Linux/WSL)
 

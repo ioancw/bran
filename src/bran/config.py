@@ -23,6 +23,11 @@ class Settings:
     db_path: Path
     briefings_dir: Path
     api_token: str | None
+    # Named bearer tokens for the /api surface: {token: name}. Set via
+    # BRAN_API_TOKENS="ioan:tok1,partner:tok2". BRAN_API_TOKEN (singular) is
+    # folded in under the name "api". Runs triggered over /api are attributed
+    # to the token's name (runs.actor) so a small team can share one server.
+    api_tokens: dict[str, str]
     host: str
     port: int
     default_model: str
@@ -33,6 +38,14 @@ class Settings:
     # the run mid-stream. The cookbooks bump this for web-research agents; we
     # default to 10MB. Override with BRAN_MAX_BUFFER_SIZE (bytes).
     max_buffer_size: int
+    # Wall-clock ceiling for a single agent run, in seconds. A hung SDK
+    # subprocess (stuck tool call, network stall) would otherwise block its
+    # asyncio task forever and back up the scheduler. 0 disables the limit.
+    # Override with BRAN_RUN_TIMEOUT (seconds).
+    run_timeout_s: int
+    # How many times a failed *scheduled* run is retried (with backoff) before
+    # giving up until the next regular fire. Override with BRAN_RUNNER_RETRIES.
+    runner_retries: int
 
     @property
     def claude_dir(self) -> Path:
@@ -46,6 +59,24 @@ class Settings:
         self.briefings_dir.mkdir(parents=True, exist_ok=True)
 
 
+def _parse_api_tokens() -> dict[str, str]:
+    """{token: name} from BRAN_API_TOKENS ('name:token,name2:token2'), plus the
+    legacy single BRAN_API_TOKEN under the name 'api'. Malformed entries are
+    skipped rather than crashing startup."""
+    out: dict[str, str] = {}
+    single = os.getenv("BRAN_API_TOKEN")
+    if single:
+        out[single] = "api"
+    for entry in (os.getenv("BRAN_API_TOKENS") or "").split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        name, _, token = entry.partition(":")
+        if name.strip() and token.strip():
+            out[token.strip()] = name.strip()
+    return out
+
+
 def load_settings() -> Settings:
     root = _project_root()
     bran_home = Path(os.getenv("BRAN_HOME", str(root / ".bran"))).resolve()
@@ -56,11 +87,14 @@ def load_settings() -> Settings:
         db_path=bran_home / "bran.sqlite",
         briefings_dir=briefings_dir,
         api_token=os.getenv("BRAN_API_TOKEN") or None,
+        api_tokens=_parse_api_tokens(),
         host=os.getenv("BRAN_HOST", "127.0.0.1"),
         port=int(os.getenv("BRAN_PORT", "8765")),
         default_model=os.getenv("BRAN_DEFAULT_MODEL", "sonnet"),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY") or None,
         max_buffer_size=int(os.getenv("BRAN_MAX_BUFFER_SIZE", str(10 * 1024 * 1024))),
+        run_timeout_s=int(os.getenv("BRAN_RUN_TIMEOUT", "3600")),
+        runner_retries=int(os.getenv("BRAN_RUNNER_RETRIES", "2")),
     )
 
 

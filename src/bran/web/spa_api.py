@@ -206,13 +206,19 @@ async def runs(
     project_id: str | None = None, schedule_id: str | None = None,
     exclude_chats: bool = False, limit: int = 200,
 ) -> list[dict[str, Any]]:
-    return [
-        asdict(r)
-        for r in list_runs(agent=agent or None, status=status_ or None,
-                           project_id=project_id or None,
-                           schedule_id=schedule_id or None,
-                           exclude_chats=exclude_chats, limit=limit)
-    ]
+    from bran.persistence import list_artifacts_for_runs
+
+    records = list_runs(agent=agent or None, status=status_ or None,
+                        project_id=project_id or None,
+                        schedule_id=schedule_id or None,
+                        exclude_chats=exclude_chats, limit=limit)
+    artifacts = list_artifacts_for_runs([r.id for r in records])
+    out = []
+    for r in records:
+        d = asdict(r)
+        d["artifacts"] = artifacts.get(r.id, [])
+        out.append(d)
+    return out
 
 
 @router.get("/runs/{run_id}")
@@ -306,8 +312,10 @@ async def run_stream(run_id: str) -> StreamingResponse:
 
 def _artifact_entries(rec: RunRecord) -> list[dict[str, Any]]:
     """Existence-checked listing of a run's recorded artifacts."""
+    from bran.persistence import list_artifacts
+
     out: list[dict[str, Any]] = []
-    for i, raw in enumerate(rec.metadata.get("artifacts") or []):
+    for i, raw in enumerate(list_artifacts(rec.id)):
         p = Path(raw)
         exists = p.is_file()
         out.append({
@@ -340,7 +348,9 @@ async def download_artifact(run_id: str, index: int) -> FileResponse:
     rec = get_run(run_id)
     if rec is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"No run {run_id}")
-    entries = rec.metadata.get("artifacts") or []
+    from bran.persistence import list_artifacts
+
+    entries = list_artifacts(run_id)
     if not (0 <= index < len(entries)):
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"No artifact #{index} on run {run_id}")
     from bran.permissions import write_roots_for_project
@@ -436,6 +446,10 @@ async def schedules(project_id: str | None = None) -> list[dict[str, Any]]:
     return [_schedule_dict(s) for s in list_schedules(project_id=project_id or None)]
 
 
+def _form_flag(value: str) -> bool:
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
 @router.post("/schedules")
 async def new_schedule(
     name: Annotated[str, Form()],
@@ -444,6 +458,8 @@ async def new_schedule(
     task: Annotated[str, Form()] = "",
     project_id: Annotated[str | None, Form()] = None,
     run_at: Annotated[str | None, Form()] = None,
+    verify: Annotated[str, Form()] = "",
+    delta: Annotated[str, Form()] = "",
 ) -> dict[str, Any]:
     try:
         get_agent(agent)
@@ -464,7 +480,8 @@ async def new_schedule(
     else:
         cron = _normalize_cron(cron)  # accept natural language too
     rec = ScheduleRecord.new(name=name, agent=agent, task=task, cron=cron,
-                             project_id=project_id or None, run_at=run_at)
+                             project_id=project_id or None, run_at=run_at,
+                             verify=_form_flag(verify), delta=_form_flag(delta))
     insert_schedule(rec)
     # Register with the live scheduler if one is running (lazy import so the
     # web module doesn't pull APScheduler in when --no-scheduler is used).
@@ -484,6 +501,8 @@ async def edit_schedule(
     cron: Annotated[str, Form()] = "",
     task: Annotated[str, Form()] = "",
     run_at: Annotated[str | None, Form()] = None,
+    verify: Annotated[str | None, Form()] = None,
+    delta: Annotated[str | None, Form()] = None,
 ) -> dict[str, Any]:
     """Edit a runner's agent / task / trigger in place and re-sync the live job.
 
@@ -511,7 +530,12 @@ async def edit_schedule(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "cron or run_at required")
     else:
         cron = _normalize_cron(cron)  # accept natural language too
-    rec = update_schedule(name, agent=agent, task=task, cron=cron, run_at=run_at)
+    rec = update_schedule(
+        name, agent=agent, task=task, cron=cron, run_at=run_at,
+        # None = field absent from the form = leave unchanged.
+        verify=_form_flag(verify) if verify is not None else None,
+        delta=_form_flag(delta) if delta is not None else None,
+    )
     # Re-sync the live scheduler: drop the old job, add the new one (register is a
     # no-op when the runner is paused, so paused stays paused).
     try:
@@ -768,12 +792,28 @@ async def chats(project_id: str | None = None) -> list[dict[str, Any]]:
 @router.get("/chats/{chat_id}")
 async def chat_detail(chat_id: str) -> dict[str, Any]:
     """A single chat's metadata — lets the chat view learn its project before
-    loading the (project-scoped) sidebar."""
+    loading the (project-scoped) sidebar.
+
+    Falls back to runs: a runner/spawn session has no chat row, but its SDK
+    session is perfectly resumable. Synthesizing chat metadata from the run
+    (same agent, same project) lets "continue this run as a conversation"
+    actually resume the session — previously the chat view displayed the
+    transcript but, with no chat row, sent the first message into a brand-new
+    session, so the agent had no idea what you were referring to.
+    """
     c = get_chat(chat_id)
-    if c is None:
+    if c is not None:
+        return {"id": c.id, "title": c.title, "agent": c.agent, "project_id": c.project_id,
+                "updated_at": c.updated_at, "created_at": c.created_at}
+    from bran.persistence import get_run_by_session
+
+    run = get_run_by_session(chat_id)
+    if run is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"No chat {chat_id}")
-    return {"id": c.id, "title": c.title, "agent": c.agent, "project_id": c.project_id,
-            "updated_at": c.updated_at, "created_at": c.created_at}
+    task = (run.task or "").strip()
+    title = task[:80].rstrip() + ("…" if len(task) > 80 else "") or f"run {run.id[:8]}"
+    return {"id": chat_id, "title": title, "agent": run.agent, "project_id": run.project_id,
+            "updated_at": run.ended_at or run.started_at, "created_at": run.started_at}
 
 
 @router.delete("/chats/{chat_id}")

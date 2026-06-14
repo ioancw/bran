@@ -174,7 +174,7 @@ def test_allowed_write_target_respects_ambient_roots(tmp_path):
 def test_absorb_message_records_sanctioned_writes_as_artifacts(tmp_path):
     from claude_agent_sdk import AssistantMessage, ToolUseBlock
 
-    from bran.persistence import RunRecord, get_run, insert_run
+    from bran.persistence import RunRecord, insert_run, list_artifacts
     from bran.runner import _absorb_message
 
     proj = _project_with_work_dir(str(tmp_path))
@@ -199,9 +199,8 @@ def test_absorb_message_records_sanctioned_writes_as_artifacts(tmp_path):
     finally:
         current_project_id.reset(token)
 
-    stored = get_run(record.id)
-    artifacts = stored.metadata.get("artifacts")
-    assert artifacts == [
+    artifacts = list_artifacts(record.id)
+    assert sorted(artifacts) == sorted([
         str((tmp_path / "summary.md").resolve()),
         str(Path(briefing).resolve()),
-    ]
+    ])

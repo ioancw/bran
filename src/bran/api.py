@@ -53,17 +53,25 @@ from bran.runner import run_agent
 
 async def _require_token(
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
-) -> None:
-    expected = SETTINGS.api_token
-    if not expected:
+) -> str:
+    """Validate the bearer token and return the caller's name (the actor).
+
+    Tokens come from BRAN_API_TOKENS ("name:token,...") and/or the legacy
+    single BRAN_API_TOKEN (named "api") — see config._parse_api_tokens. Runs
+    triggered over /api are attributed to the resolved name.
+    """
+    tokens = SETTINGS.api_tokens
+    if not tokens:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Server has no BRAN_API_TOKEN configured.",
+            "Server has no BRAN_API_TOKEN / BRAN_API_TOKENS configured.",
         )
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing bearer token")
-    if authorization.removeprefix("Bearer ").strip() != expected:
+    actor = tokens.get(authorization.removeprefix("Bearer ").strip())
+    if actor is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid bearer token")
+    return actor
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +119,7 @@ def _build_api_router(enable_scheduler: bool) -> APIRouter:
     async def run_agent_endpoint(
         name: Annotated[str, Path()],
         body: RunRequest,
+        actor: Annotated[str, Depends(_require_token)],
     ) -> dict[str, Any]:
         if body.background:
             from bran.agents import get_agent
@@ -123,7 +132,7 @@ def _build_api_router(enable_scheduler: bool) -> APIRouter:
             except KeyError as e:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, str(e))
 
-            record = RunRecord.new(agent=name, task=body.task)
+            record = RunRecord.new(agent=name, task=body.task, actor=actor)
             insert_run(record)
 
             async def _go():
@@ -154,6 +163,7 @@ def _build_api_router(enable_scheduler: bool) -> APIRouter:
                 body.task,
                 resume_session=body.resume,
                 max_turns=body.max_turns,
+                actor=actor,
             )
         except KeyError as e:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(e))

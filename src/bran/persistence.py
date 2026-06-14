@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS runs (
     metadata        TEXT,
     project_id      TEXT,
     source          TEXT,
-    schedule_id     TEXT
+    schedule_id     TEXT,
+    actor           TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_agent      ON runs(agent);
@@ -54,7 +55,19 @@ CREATE TABLE IF NOT EXISTS schedules (
     enabled     INTEGER NOT NULL DEFAULT 1,
     created_at  TEXT NOT NULL,
     project_id  TEXT,
-    run_at      TEXT
+    run_at      TEXT,
+    verify      INTEGER NOT NULL DEFAULT 0,
+    delta       INTEGER NOT NULL DEFAULT 0
+);
+
+-- Files a run produced (captured from its Write/Edit tool calls). First-class
+-- rows rather than a list inside runs.metadata, so the schema is explicit and
+-- queryable. (run_id, path) is naturally unique — re-recording is a no-op.
+CREATE TABLE IF NOT EXISTS artifacts (
+    run_id      TEXT NOT NULL,
+    path        TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    PRIMARY KEY (run_id, path)
 );
 
 -- Chat metadata. Each row corresponds to a single conversation in the web UI.
@@ -152,6 +165,10 @@ class RunRecord:
     # fires and for "run now" launched from a runner, so a runner's history is
     # exact rather than approximated by agent. None for chats/spawns/ad-hoc.
     schedule_id: str | None = None
+    # Who triggered the run, when known. Set for the bearer-token /api surface
+    # (the token's name, see BRAN_API_TOKENS); None for the local single-user
+    # surfaces (SPA, CLI, REPL, scheduler).
+    actor: str | None = None
 
     @staticmethod
     def new(
@@ -161,6 +178,7 @@ class RunRecord:
         project_id: str | None = None,
         source: str = "manual",
         schedule_id: str | None = None,
+        actor: str | None = None,
     ) -> "RunRecord":
         return RunRecord(
             id=str(uuid.uuid4()),
@@ -171,6 +189,7 @@ class RunRecord:
             project_id=project_id,
             source=source,
             schedule_id=schedule_id,
+            actor=actor,
         )
 
     def to_row(self) -> tuple:
@@ -192,6 +211,7 @@ class RunRecord:
             self.project_id,
             self.source,
             self.schedule_id,
+            self.actor,
         )
 
     @staticmethod
@@ -216,6 +236,7 @@ class RunRecord:
             project_id=(row["project_id"] if "project_id" in keys else None),
             source=(row["source"] if "source" in keys and row["source"] else "manual"),
             schedule_id=(row["schedule_id"] if "schedule_id" in keys else None),
+            actor=(row["actor"] if "actor" in keys else None),
         )
 
 
@@ -234,15 +255,24 @@ class ScheduleRecord:
     # One-shot trigger: an ISO-8601 datetime to fire once, then self-disable.
     # None = a recurring cron schedule (the `cron` field). Mutually exclusive.
     run_at: str | None = None
+    # Quality controls for the scheduled output (see scheduler._fire):
+    # verify — an evaluator pass reviews each completed run's output against the
+    #          task; on a failed verdict the run is retried ONCE with the
+    #          reviewer's feedback (cookbook evaluator-optimizer pattern).
+    # delta  — feed the previous completed run's report into the next fire so
+    #          the agent reports what's NEW/CHANGED rather than restating state.
+    verify: bool = False
+    delta: bool = False
 
     @staticmethod
     def new(
         name: str, agent: str, task: str, cron: str,
         project_id: str | None = None, run_at: str | None = None,
+        verify: bool = False, delta: bool = False,
     ) -> "ScheduleRecord":
         return ScheduleRecord(
             id=str(uuid.uuid4()), name=name, agent=agent, task=task, cron=cron,
-            project_id=project_id, run_at=run_at,
+            project_id=project_id, run_at=run_at, verify=verify, delta=delta,
         )
 
 
@@ -266,6 +296,7 @@ def _ensure_ready() -> None:
         _migrate_chats_add_project_id()
         _migrate_runs_schedules_add_project_id()
         _drop_inbox()
+        _migrate_artifacts_to_table()
     except Exception:
         _initialized = False
         raise
@@ -303,8 +334,8 @@ def insert_run(record: RunRecord) -> None:
             """INSERT INTO runs
             (id, agent, task, status, session_id, parent_run_id, result, error,
              total_cost_usd, num_turns, duration_ms, started_at, ended_at, metadata,
-             project_id, source, schedule_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+             project_id, source, schedule_id, actor)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             record.to_row(),
         )
 
@@ -335,6 +366,17 @@ def update_run(record: RunRecord) -> None:
 def get_run(run_id: str) -> RunRecord | None:
     with _lock, _conn() as conn:
         row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+    return RunRecord.from_row(row) if row else None
+
+
+def get_run_by_session(session_id: str) -> RunRecord | None:
+    """The earliest run that produced this SDK session — used to let a run's
+    session be continued as a chat even though no chat row exists for it."""
+    with _lock, _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM runs WHERE session_id = ? ORDER BY started_at LIMIT 1",
+            (session_id,),
+        ).fetchone()
     return RunRecord.from_row(row) if row else None
 
 
@@ -402,6 +444,8 @@ def _row_to_schedule(r: sqlite3.Row) -> ScheduleRecord:
         created_at=r["created_at"],
         project_id=(r["project_id"] if "project_id" in keys else None),
         run_at=(r["run_at"] if "run_at" in keys else None),
+        verify=bool(r["verify"]) if "verify" in keys else False,
+        delta=bool(r["delta"]) if "delta" in keys else False,
     )
 
 
@@ -409,8 +453,9 @@ def insert_schedule(record: ScheduleRecord) -> None:
     with _lock, _conn() as conn:
         conn.execute(
             """INSERT INTO schedules
-               (id, name, agent, task, cron, enabled, created_at, project_id, run_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (id, name, agent, task, cron, enabled, created_at, project_id, run_at,
+                verify, delta)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 record.id,
                 record.name,
@@ -421,6 +466,8 @@ def insert_schedule(record: ScheduleRecord) -> None:
                 record.created_at,
                 record.project_id,
                 record.run_at,
+                1 if record.verify else 0,
+                1 if record.delta else 0,
             ),
         )
 
@@ -453,18 +500,28 @@ def get_schedule(name: str) -> ScheduleRecord | None:
 
 def update_schedule(
     name: str, *, agent: str, task: str, cron: str, run_at: str | None,
+    verify: bool | None = None, delta: bool | None = None,
 ) -> ScheduleRecord | None:
     """Edit an existing runner's agent/task/trigger in place (keyed by name).
 
     `name`, `project_id`, and `enabled` are preserved — name is the stable
     identifier (the APScheduler job id + how the user refers to it), and pausing
-    is a separate action. Returns the fresh record, or None if no such runner.
-    Callers running `bran serve` should re-register the live job afterwards.
+    is a separate action. `verify`/`delta` None = leave unchanged. Returns the
+    fresh record, or None if no such runner. Callers running `bran serve`
+    should re-register the live job afterwards.
     """
+    sets = ["agent = ?", "task = ?", "cron = ?", "run_at = ?"]
+    params: list[Any] = [agent, task, cron, run_at]
+    if verify is not None:
+        sets.append("verify = ?")
+        params.append(1 if verify else 0)
+    if delta is not None:
+        sets.append("delta = ?")
+        params.append(1 if delta else 0)
+    params.append(name)
     with _lock, _conn() as conn:
         cur = conn.execute(
-            "UPDATE schedules SET agent = ?, task = ?, cron = ?, run_at = ? WHERE name = ?",
-            (agent, task, cron, run_at, name),
+            f"UPDATE schedules SET {', '.join(sets)} WHERE name = ?", params
         )
         if cur.rowcount == 0:
             return None
@@ -487,6 +544,47 @@ def set_schedule_enabled(name: str, enabled: bool) -> ScheduleRecord | None:
 
 def run_to_dict(r: RunRecord) -> dict[str, Any]:
     return asdict(r)
+
+
+# ---------------------------------------------------------------------------
+# Artifacts — files a run produced. First-class table (not runs.metadata).
+# ---------------------------------------------------------------------------
+
+def add_artifact(run_id: str, path: str) -> None:
+    """Record a file a run wrote. Idempotent — (run_id, path) is the PK."""
+    with _lock, _conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO artifacts (run_id, path, created_at) VALUES (?, ?, ?)",
+            (run_id, path, utcnow_iso()),
+        )
+
+
+def list_artifacts(run_id: str) -> list[str]:
+    """Paths this run wrote, in the order they were first recorded."""
+    with _lock, _conn() as conn:
+        rows = conn.execute(
+            "SELECT path FROM artifacts WHERE run_id = ? ORDER BY created_at, path",
+            (run_id,),
+        ).fetchall()
+    return [r["path"] for r in rows]
+
+
+def list_artifacts_for_runs(run_ids: list[str]) -> dict[str, list[str]]:
+    """{run_id: [paths]} for a batch of runs in one query — lets list views
+    show artifacts without an N+1 per row."""
+    if not run_ids:
+        return {}
+    placeholders = ",".join("?" for _ in run_ids)
+    with _lock, _conn() as conn:
+        rows = conn.execute(
+            f"SELECT run_id, path FROM artifacts WHERE run_id IN ({placeholders}) "
+            "ORDER BY created_at, path",
+            run_ids,
+        ).fetchall()
+    out: dict[str, list[str]] = {}
+    for r in rows:
+        out.setdefault(r["run_id"], []).append(r["path"])
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -768,8 +866,44 @@ def _migrate_runs_schedules_add_project_id() -> None:
         _add_column_if_missing(conn, "schedules", "run_at", "TEXT")
         # work_dir: optional read+write working folder for a project's agents.
         _add_column_if_missing(conn, "projects", "work_dir", "TEXT")
+        # actor: which named API token triggered the run (None for local surfaces).
+        _add_column_if_missing(conn, "runs", "actor", "TEXT")
+        # verify/delta: per-runner output quality controls (see ScheduleRecord).
+        _add_column_if_missing(conn, "schedules", "verify", "INTEGER NOT NULL DEFAULT 0")
+        _add_column_if_missing(conn, "schedules", "delta", "INTEGER NOT NULL DEFAULT 0")
         # Safe to index now that the column exists on both fresh and legacy DBs.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id)")
+
+
+def _migrate_artifacts_to_table() -> None:
+    """One-time backfill: copy legacy runs.metadata['artifacts'] lists into the
+    artifacts table. Old metadata is left in place (harmless); all readers and
+    writers use the table from now on. Guarded by an app_settings flag so the
+    scan doesn't re-run on every startup."""
+    with _lock, _conn() as conn:
+        done = conn.execute(
+            "SELECT value FROM app_settings WHERE key = 'artifacts_migrated'"
+        ).fetchone()
+        if done:
+            return
+        rows = conn.execute(
+            "SELECT id, metadata FROM runs WHERE metadata LIKE '%\"artifacts\"%'"
+        ).fetchall()
+        now = utcnow_iso()
+        for r in rows:
+            try:
+                paths = json.loads(r["metadata"] or "{}").get("artifacts") or []
+            except (ValueError, TypeError):
+                continue
+            for p in paths:
+                if isinstance(p, str) and p:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO artifacts (run_id, path, created_at) VALUES (?, ?, ?)",
+                        (r["id"], p, now),
+                    )
+        conn.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('artifacts_migrated', '1')"
+        )
 
 
 def _drop_inbox() -> None:
