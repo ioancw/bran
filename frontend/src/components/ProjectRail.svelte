@@ -11,19 +11,24 @@
   import Section from './Section.svelte'
   import StatusBadge from './StatusBadge.svelte'
   import CronField from './CronField.svelte'
-  import type { AgentInfo, ProjectDetail } from '../lib/types'
+  import type { AgentInfo, ProjectDetail, RunRecord } from '../lib/types'
 
   // `home` = the project page (configure: editable Knowledge + Scheduled open,
   // no live Progress). `chat` = beside a conversation (work: Progress on top,
   // config collapsed to reference).
-  let { projectId, onrenamed, mode = 'home' }: {
+  let { projectId, onrenamed, mode = 'home', sessionId = null }: {
     projectId: string
     onrenamed?: (name: string) => void
     mode?: 'home' | 'chat'
+    // The chat this rail sits beside (chat mode). Scopes Progress to *this*
+    // conversation's background runs rather than the whole project's.
+    sessionId?: string | null
   } = $props()
 
   let data = $state<ProjectDetail | null>(null)
   let agents = $state<AgentInfo[]>([])
+  // Background runs spawned by the current chat (chat mode only).
+  let chatRuns = $state<RunRecord[]>([])
 
   let name = $state('')
   let description = $state('')
@@ -57,6 +62,19 @@
   })
   $effect(() => {
     void api.agents().then((a) => (agents = a)).catch(() => {})
+  })
+  // Chat-scoped Progress: this conversation's background runs only (reloads when
+  // a turn finishes via activityTick). Empty for a brand-new, unsaved chat.
+  $effect(() => {
+    void workspace.activityTick
+    const sid = sessionId
+    if (mode !== 'chat' || !sid) {
+      chatRuns = []
+      return
+    }
+    void api.runs({ session_id: sid, exclude_chats: true, limit: 8 })
+      .then((r) => (chatRuns = r))
+      .catch(() => {})
   })
 
   async function save() {
@@ -141,16 +159,16 @@
          setup, so it leads with editable config instead. -->
     {#if mode === 'chat'}
       <Section label="Progress">
-        <p class="text-muted" style="font-size: 11px; margin-bottom: 8px;">Background runs in this project — chats, spawned agents, and scheduled runners.</p>
+        <p class="text-muted" style="font-size: 11px; margin-bottom: 8px;">Background runs from this conversation.</p>
         {#if workspace.streaming}
           <div class="prog-live">
             <span class="live-dot sm"></span>
             <span class="text-bright" style="font-size: 12px;">{workspace.liveLabel || 'working…'}</span>
           </div>
         {/if}
-        {#if data.runs.length}
+        {#if chatRuns.length}
           <div class="space-y-2">
-            {#each data.runs.slice(0, 8) as r}
+            {#each chatRuns.slice(0, 8) as r}
               <a href={href('/runs/' + r.id)} use:link class="prog-row" style="text-decoration: none;">
                 <span class="text-bright" style="font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{r.agent}</span>
                 <StatusBadge status={r.status} />

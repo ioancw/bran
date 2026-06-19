@@ -39,6 +39,8 @@ export interface RunRecord {
   schedule_id: string | null // the runner this run belongs to, if any
   actor?: string | null // named API token that triggered the run, if any
   artifacts?: string[] // file paths the run produced (list endpoints only)
+  starred?: boolean // you starred this output (list endpoints only)
+  read_at?: string | null // when you last read it; null/absent = unread
 }
 
 // Evaluator verdict stored in run.metadata.verification for verify-mode runners.

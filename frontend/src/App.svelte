@@ -3,7 +3,7 @@
   import { installCodeCopyHandler } from './lib/markdown'
   import { api } from './lib/api'
   import { authState, clearAuthError } from './lib/auth.svelte'
-  import { outputsSeen, isNewSince } from './lib/seen.svelte'
+  import { workspace } from './lib/workspace.svelte'
   import type { RunRecord } from './lib/types'
   import Sidebar from './components/Sidebar.svelte'
   import ConfirmHost from './components/ConfirmHost.svelte'
@@ -46,6 +46,7 @@
     }
   }
   $effect(() => {
+    void workspace.activityTick // re-count when a turn finishes / Outputs marks read
     void loadCounts()
   })
   // Keep the badge honest when a runner fires while the tab is backgrounded.
@@ -65,8 +66,9 @@
   // them* — not a total-ever. Hidden when there's nothing new; visiting
   // /outputs advances the seen marker and clears it reactively.
   const navCounts = $derived.by(() => {
+    // Unread = a completed output you haven't opened yet (server read state).
     const fresh = fleetRuns.filter(
-      (r) => r.status === 'completed' && (r.result ?? '').trim() && isNewSince(r.started_at, outputsSeen.at),
+      (r) => r.status === 'completed' && (r.result ?? '').trim() && !r.read_at,
     ).length
     return { ...counts, outputs: fresh > 0 ? fresh : null }
   })

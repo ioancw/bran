@@ -38,6 +38,82 @@ def test_spa_allows_direct_navigation(client):
     assert r.status_code == 200
 
 
+# ---------------------------------------------------------------------------
+# Output reading state: durable star + read markers, and free-text search.
+# ---------------------------------------------------------------------------
+
+def test_output_star_read_and_search(client):
+    from bran.persistence import RunRecord, insert_run
+
+    rec = RunRecord.new(agent="research", task="weekly fintech digest", source="runner")
+    rec.status = "completed"
+    rec.result = "Acme raised a Series B; Globex launched a new card."
+    insert_run(rec)
+
+    def row():
+        return next(r for r in client.get("/spa/runs").json() if r["id"] == rec.id)
+
+    # A fresh output is unstarred + unread.
+    assert row()["starred"] is False
+    assert row()["read_at"] is None
+
+    # Star, then mark read — both persist and survive a re-fetch.
+    r = client.post(f"/spa/outputs/{rec.id}/star", data={"starred": "true"})
+    assert r.status_code == 200 and r.json()["starred"] is True
+    assert row()["starred"] is True
+
+    r = client.post("/spa/outputs/read", data={"ids": rec.id})
+    assert r.status_code == 200 and r.json()["read"] == 1
+    assert row()["read_at"] is not None
+    assert row()["starred"] is True  # marking read preserves the star
+
+    # Search matches the result text; a non-match excludes it.
+    hit = client.get("/spa/runs", params={"q": "Globex"}).json()
+    assert any(r["id"] == rec.id for r in hit)
+    miss = client.get("/spa/runs", params={"q": "zzz-no-such-term-zzz"}).json()
+    assert all(r["id"] != rec.id for r in miss)
+
+    # Unstarring restores the unstarred state (read_at untouched).
+    client.post(f"/spa/outputs/{rec.id}/star", data={"starred": "false"})
+    assert row()["starred"] is False
+    assert row()["read_at"] is not None
+
+
+def test_star_unknown_run_404s(client):
+    assert client.post("/spa/outputs/nope/star", data={"starred": "true"}).status_code == 404
+
+
+def test_runs_scoped_to_session(client):
+    """The chat-side Progress rail asks for runs by session_id — it must return
+    this chat's spawned background runs and exclude other conversations'."""
+    from bran.persistence import RunRecord, insert_run
+
+    chat = RunRecord.new(agent="orchestrator", task="t", source="chat")
+    chat.session_id = "sess-scope-test"
+    chat.status = "completed"
+    insert_run(chat)
+
+    child = RunRecord.new(agent="research", task="dig", source="spawn", parent_run_id=chat.id)
+    child.status = "completed"
+    child.result = "found things"
+    insert_run(child)
+
+    other = RunRecord.new(agent="research", task="unrelated", source="spawn")
+    other.status = "completed"
+    other.result = "elsewhere"
+    insert_run(other)
+
+    ids = {
+        r["id"]
+        for r in client.get(
+            "/spa/runs", params={"session_id": "sess-scope-test", "exclude_chats": "true"}
+        ).json()
+    }
+    assert child.id in ids        # spawned by this chat
+    assert other.id not in ids    # a different conversation's run
+    assert chat.id not in ids     # the chat turn itself (exclude_chats)
+
+
 def test_spa_rejects_cross_site_fetch(client):
     r = client.post(
         "/spa/schedules",

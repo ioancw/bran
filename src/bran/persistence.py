@@ -125,6 +125,16 @@ CREATE TABLE IF NOT EXISTS app_settings (
     key    TEXT PRIMARY KEY,
     value  TEXT NOT NULL DEFAULT ''
 );
+
+-- Per-output reading state (single-user): whether you starred a run's result
+-- and when you last read it. Keyed by run id; a missing row means
+-- unread + unstarred. Kept out of the runs table so the hot write path
+-- (insert/update_run) is untouched and this stays purely a UI concern.
+CREATE TABLE IF NOT EXISTS output_state (
+    run_id   TEXT PRIMARY KEY,
+    starred  INTEGER NOT NULL DEFAULT 0,
+    read_at  TEXT
+);
 """
 
 # Reentrant so the lazy bootstrap (_ensure_ready -> init_db -> _conn) can take
@@ -400,7 +410,8 @@ def reconcile_interrupted_runs() -> int:
 def list_runs(
     agent: str | None = None, limit: int = 50, status: str | None = None,
     project_id: str | None = None, exclude_chats: bool = False,
-    schedule_id: str | None = None,
+    schedule_id: str | None = None, q: str | None = None,
+    session_id: str | None = None,
 ) -> list[RunRecord]:
     sql = "SELECT * FROM runs"
     clauses: list[str] = []
@@ -408,6 +419,13 @@ def list_runs(
     if agent:
         clauses.append("agent = ?")
         params.append(agent)
+    if q and q.strip():
+        # Free-text search over the readable fields. LIKE (case-insensitive for
+        # ASCII) is ample at single-user scale; revisit FTS5 only if the run
+        # table ever grows large enough for it to matter.
+        like = f"%{q.strip()}%"
+        clauses.append("(result LIKE ? OR task LIKE ? OR agent LIKE ?)")
+        params.extend([like, like, like])
     if status:
         clauses.append("status = ?")
         params.append(status)
@@ -417,6 +435,15 @@ def list_runs(
     if schedule_id:
         clauses.append("schedule_id = ?")
         params.append(schedule_id)
+    if session_id:
+        # Runs belonging to one chat: the chat's own turns plus the background
+        # runs those turns spawned (parent chain, one level — the fan-out case).
+        # Lets the chat-side Progress rail show *this* conversation's work rather
+        # than every run in the project.
+        clauses.append(
+            "(session_id = ? OR parent_run_id IN (SELECT id FROM runs WHERE session_id = ?))"
+        )
+        params.extend([session_id, session_id])
     if exclude_chats:
         # Activity = autonomous/background runs (runner fires, spawns, manual) —
         # never interactive chat turns. Keyed on the explicit `source`, so it's
@@ -585,6 +612,52 @@ def list_artifacts_for_runs(run_ids: list[str]) -> dict[str, list[str]]:
     for r in rows:
         out.setdefault(r["run_id"], []).append(r["path"])
     return out
+
+
+# ---------------------------------------------------------------------------
+# Output state — per-run starred / read markers (durable, cross-browser).
+# Replaces the old localStorage "seen" timestamp so reading state follows you
+# between devices and the Outputs inbox can be trusted.
+# ---------------------------------------------------------------------------
+
+def set_output_starred(run_id: str, starred: bool) -> None:
+    """Star/unstar a run's output. Upsert that preserves any existing read_at."""
+    with _lock, _conn() as conn:
+        conn.execute(
+            "INSERT INTO output_state (run_id, starred) VALUES (?, ?) "
+            "ON CONFLICT(run_id) DO UPDATE SET starred = excluded.starred",
+            (run_id, 1 if starred else 0),
+        )
+
+
+def mark_outputs_read(run_ids: list[str]) -> None:
+    """Stamp read_at=now on a batch of runs (upsert; preserves `starred`)."""
+    if not run_ids:
+        return
+    now = utcnow_iso()
+    with _lock, _conn() as conn:
+        conn.executemany(
+            "INSERT INTO output_state (run_id, read_at) VALUES (?, ?) "
+            "ON CONFLICT(run_id) DO UPDATE SET read_at = excluded.read_at",
+            [(rid, now) for rid in run_ids],
+        )
+
+
+def get_output_states(run_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """{run_id: {starred, read_at}} for a batch — attached to list responses so
+    the Outputs surface renders star/read state without an N+1 per row."""
+    if not run_ids:
+        return {}
+    placeholders = ",".join("?" for _ in run_ids)
+    with _lock, _conn() as conn:
+        rows = conn.execute(
+            f"SELECT run_id, starred, read_at FROM output_state WHERE run_id IN ({placeholders})",
+            run_ids,
+        ).fetchall()
+    return {
+        r["run_id"]: {"starred": bool(r["starred"]), "read_at": r["read_at"]}
+        for r in rows
+    }
 
 
 # ---------------------------------------------------------------------------

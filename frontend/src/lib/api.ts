@@ -73,17 +73,25 @@ export const api = {
   catalog: () => getJSON<Catalog>('/spa/catalog'),
   agents: () => getJSON<AgentInfo[]>('/spa/agents'),
 
-  runs: (q: { agent?: string; status?: string; project_id?: string; schedule_id?: string; exclude_chats?: boolean; limit?: number } = {}) => {
+  runs: (q: { agent?: string; status?: string; project_id?: string; schedule_id?: string; session_id?: string; exclude_chats?: boolean; limit?: number; q?: string } = {}) => {
     const p = new URLSearchParams()
     if (q.agent) p.set('agent', q.agent)
     if (q.status) p.set('status', q.status)
     if (q.project_id) p.set('project_id', q.project_id)
     if (q.schedule_id) p.set('schedule_id', q.schedule_id)
+    if (q.session_id) p.set('session_id', q.session_id)
     if (q.exclude_chats) p.set('exclude_chats', 'true')
     if (q.limit) p.set('limit', String(q.limit))
+    if (q.q && q.q.trim()) p.set('q', q.q.trim())
     const qs = p.toString()
     return getJSON<RunRecord[]>(`/spa/runs${qs ? `?${qs}` : ''}`)
   },
+  starOutput: (id: string, starred: boolean) =>
+    form<{ run_id: string; starred: boolean }>(`/spa/outputs/${encodeURIComponent(id)}/star`, {
+      starred: starred ? 'true' : 'false',
+    }),
+  markOutputsRead: (ids: string[]) =>
+    form<{ read: number }>('/spa/outputs/read', { ids: ids.join(',') }),
   run: (id: string) => getJSON<RunRecord>(`/spa/runs/${encodeURIComponent(id)}`),
   runTranscript: (id: string) =>
     getJSON<{ run: RunRecord; events: ChatEvent[] }>(`/spa/runs/${encodeURIComponent(id)}/transcript`),

@@ -8,7 +8,6 @@
   import { href, link } from '../lib/router.svelte'
   import { relativeTime, localDateTime, localClock, countdown, fmtCost } from '../lib/time'
   import { errorText } from '../lib/errors'
-  import { outputsSeen, isNewSince } from '../lib/seen.svelte'
   import { isSuperseded, verifyBadge } from '../lib/verification'
   import Page from '../components/Page.svelte'
   import Skeleton from '../components/Skeleton.svelte'
@@ -161,7 +160,7 @@
                 {@const badge = verifyBadge(r)}
                 <a href={href('/runs/' + r.id)} use:link class="dlv card">
                   <header style="display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px;">
-                    {#if isNewSince(r.started_at, outputsSeen.at)}<span class="new-dot" title="unread"></span>{/if}
+                    {#if !r.read_at}<span class="new-dot" title="unread"></span>{/if}
                     <span class="text-bright" style="font-size: 14px; font-weight: 500;">{titleFor(r)}</span>
                     <span class="src src-{r.source}">{r.source}</span>
                     {#if runnerFor(r)?.delta}<span class="delta-tag" title="delta report — only what changed since the last run">Δ</span>{/if}

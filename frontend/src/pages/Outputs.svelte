@@ -8,7 +8,7 @@
   import { href, link, navigate } from '../lib/router.svelte'
   import { relativeTime, localDateTime } from '../lib/time'
   import { errorText } from '../lib/errors'
-  import { markOutputsSeen, isNewSince } from '../lib/seen.svelte'
+  import { bumpActivity } from '../lib/workspace.svelte'
   import { isSuperseded, verifyBadge } from '../lib/verification'
   import { toast } from '../lib/toast.svelte'
   import Page from '../components/Page.svelte'
@@ -23,10 +23,15 @@
   let error = $state<string | null>(null)
   let expanded = $state<Record<string, boolean>>({})
 
-  // Opening this page is "reading your deliveries": advance the seen marker
-  // (clears the sidebar badge) but keep the previous value so the cards that
-  // were new at that moment stay highlighted for this visit.
-  const seenBefore = markOutputsSeen()
+  // Free-text search (server-side, over every completed output) + a starred-only
+  // view. Read/star state is durable + cross-browser (server output_state).
+  let q = $state('')
+  let starredOnly = $state(false)
+
+  // Which outputs were unread when this view loaded — kept so the cards that
+  // were new at that moment stay highlighted for the visit, even though we mark
+  // them read on the server straight away (which clears the sidebar badge).
+  let freshIds = $state<Set<string>>(new Set())
 
   // Outputs come from autonomous/managed runs, never interactive chat turns.
   const SOURCES = ['all', 'runner', 'spawn', 'manual'] as const
@@ -45,9 +50,24 @@
   const outputs = $derived(
     runs.filter((r) => r.status === 'completed' && (r.result ?? '').trim() && !isSuperseded(r)),
   )
-  const shown = $derived(filter === 'all' ? outputs : outputs.filter((r) => r.source === filter))
+  // Starred-only narrows the pool; source chips + their counts then describe it.
+  const base = $derived(starredOnly ? outputs.filter((r) => r.starred) : outputs)
+  const shown = $derived(filter === 'all' ? base : base.filter((r) => r.source === filter))
   const countFor = (s: Source) =>
-    s === 'all' ? outputs.length : outputs.filter((r) => r.source === s).length
+    s === 'all' ? base.length : base.filter((r) => r.source === s).length
+
+  async function toggleStar(r: RunRecord, e: Event) {
+    e.preventDefault()
+    e.stopPropagation()
+    const want = !r.starred
+    runs = runs.map((x) => (x.id === r.id ? { ...x, starred: want } : x)) // optimistic
+    try {
+      await api.starOutput(r.id, want)
+    } catch {
+      runs = runs.map((x) => (x.id === r.id ? { ...x, starred: !want } : x)) // revert
+      toast('could not update star', 'err')
+    }
+  }
 
   // Group by local day with friendly bucket labels (Today / Yesterday / date).
   function dayLabel(iso: string): string {
@@ -107,7 +127,7 @@
   async function load() {
     try {
       ;[runs, runners] = await Promise.all([
-        api.runs({ limit: 200, exclude_chats: true, status: 'completed' }),
+        api.runs({ limit: 200, exclude_chats: true, status: 'completed', q }),
         api.schedules(),
       ])
     } catch (e) {
@@ -115,9 +135,27 @@
     } finally {
       loaded = true
     }
+    // Reading your deliveries: when not searching, highlight what was unread and
+    // mark it read on the server (durable + clears the sidebar badge). Search is
+    // exploration, so it doesn't touch read state.
+    if (!q.trim()) {
+      const unread = outputs.filter((r) => !r.read_at).map((r) => r.id)
+      if (unread.length) {
+        freshIds = new Set(unread)
+        try {
+          await api.markOutputsRead(unread)
+          bumpActivity() // nudge the sidebar badge to recount
+        } catch {
+          /* leave them unread — the badge just won't clear yet */
+        }
+      }
+    }
   }
+  // Debounced: initial load (q='') and every search keystroke run through here.
   $effect(() => {
-    void load()
+    void q
+    const t = setTimeout(() => void load(), 220)
+    return () => clearTimeout(t)
   })
   // Stay fresh: a runner may fire while the tab sits in the background.
   $effect(() => {
@@ -139,34 +177,53 @@
   {#if error}<div class="card" style="color: var(--red);">{errorText(error)}</div>{/if}
   {#if !loaded}
     <Skeleton rows={5} />
-  {:else if !outputs.length}
-    <EmptyState title="no outputs yet" hint="when a runner fires or a background agent finishes, its result lands here to read">
-      <a href={href('/runners')} use:link class="text-accent-soft" style="text-decoration: none;">create a runner →</a>
-    </EmptyState>
   {:else}
-    <div style="display: flex; gap: 6px; margin-bottom: 18px; flex-wrap: wrap;">
-      {#each SOURCES as s}
-        <button class="chip" class:on={filter === s} onclick={() => (filter = s)}>
-          {s} <span class="chip-n">{countFor(s)}</span>
-        </button>
-      {/each}
-    </div>
+    {#if outputs.length || q.trim() || starredOnly}
+      <div class="out-controls">
+        <input class="field out-search" type="search" bind:value={q}
+               placeholder="search outputs…" aria-label="search outputs" />
+        <div class="out-chips">
+          {#each SOURCES as s}
+            <button class="chip" class:on={filter === s} onclick={() => (filter = s)}>
+              {s} <span class="chip-n">{countFor(s)}</span>
+            </button>
+          {/each}
+          <button class="chip star-chip" class:on={starredOnly}
+                  onclick={() => (starredOnly = !starredOnly)}
+                  aria-pressed={starredOnly} title="show starred only">★ starred</button>
+        </div>
+      </div>
+    {/if}
 
+    {#if !shown.length}
+      {#if q.trim()}
+        <EmptyState title="no matches" hint={`nothing in your outputs matches “${q.trim()}”`} />
+      {:else if starredOnly}
+        <EmptyState title="no starred outputs" hint="star an output (☆) to keep it here" />
+      {:else}
+        <EmptyState title="no outputs yet" hint="when a runner fires or a background agent finishes, its result lands here to read">
+          <a href={href('/runners')} use:link class="text-accent-soft" style="text-decoration: none;">create a runner →</a>
+        </EmptyState>
+      {/if}
+    {:else}
     {#each groups as g}
       <div class="day-label label-cap">{g.label}</div>
       <div class="space-y-3" style="margin-bottom: 26px;">
         {#each g.items as r (r.id)}
           {@const runner = runnerFor(r)}
           {@const badge = verifyBadge(r)}
-          <article class="card output" class:fresh={isNewSince(r.started_at, seenBefore)} class:quiet={isQuietDelta(r)}>
+          <article class="card output" class:fresh={freshIds.has(r.id)} class:quiet={isQuietDelta(r)}>
             <header class="out-head">
-              {#if isNewSince(r.started_at, seenBefore)}<span class="new-dot" title="new since your last visit"></span>{/if}
+              {#if freshIds.has(r.id)}<span class="new-dot" title="new since your last visit"></span>{/if}
               <a href={href('/runs/' + r.id)} use:link class="out-agent text-bright">{titleFor(r)}</a>
               <span class="src src-{r.source}">{r.source}</span>
               {#if runner?.delta}<span class="delta-tag" title="delta report — only what changed since the last run">Δ</span>{/if}
               {#if badge}<span class="pill {badge.tone === 'ok' ? 'ok' : 'warn'}" style="font-size: 10px;" title="reviewed by the verification evaluator">{badge.label}</span>{/if}
               <span class="text-muted out-task" title={r.task}>{runner ? `${r.agent} · ${r.task}` : r.task}</span>
               <span class="ml-auto text-dim" style="font-size: 11px; white-space: nowrap;" title={localDateTime(r.started_at)}>{relativeTime(r.started_at)}</span>
+              <button class="star-btn" class:on={r.starred} aria-pressed={r.starred}
+                      title={r.starred ? 'unstar' : 'star'} aria-label={r.starred ? 'unstar output' : 'star output'}
+                      onclick={(e) => toggleStar(r, e)}>{r.starred ? '★' : '☆'}</button>
             </header>
             <div class="out-body" class:clamp={isLong(r.result ?? '') && !expanded[r.id]}>
               <div class="msg-prose"><Prose text={r.result ?? ''} /></div>
@@ -191,6 +248,7 @@
         {/each}
       </div>
     {/each}
+    {/if}
   {/if}
 </Page>
 
@@ -304,4 +362,33 @@
   .chip:hover { color: var(--fg-bright); border-color: var(--muted); }
   .chip.on { background: var(--accent-glow); border-color: var(--accent-soft); color: var(--accent-soft); }
   .chip-n { opacity: 0.6; font-family: var(--font-mono); font-size: 10px; }
+
+  /* Controls row: search on the left, source + starred chips on the right. */
+  .out-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+  }
+  .out-search { max-width: 280px; }
+  .out-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+  .star-chip.on { color: var(--accent-soft); }
+
+  /* Per-card star toggle (far right of the header). */
+  .star-btn {
+    background: transparent;
+    border: 0;
+    padding: 0 2px;
+    margin-left: 2px;
+    font-size: 15px;
+    line-height: 1;
+    color: var(--muted);
+    cursor: pointer;
+    align-self: center;
+    transition: color 0.12s var(--transition), transform 0.1s var(--transition);
+  }
+  .star-btn:hover { color: var(--accent-soft); }
+  .star-btn:active { transform: scale(0.88); }
+  .star-btn.on { color: var(--accent-soft); }
 </style>

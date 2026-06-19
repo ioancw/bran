@@ -358,7 +358,7 @@
           <a href={href('/projects/' + encodeURIComponent(scopeId))} use:link class="text-bright" style="font-weight: 600; text-decoration: none;">{scopeName}</a>
           <span class="label-cap">project</span>
         </div>
-        <ProjectRail projectId={scopeId} mode="chat" />
+        <ProjectRail projectId={scopeId} mode="chat" sessionId={activeChat?.id ?? null} />
       </aside>
     {/if}
   </div>

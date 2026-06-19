@@ -43,8 +43,11 @@ from bran.persistence import (
     list_project_memories,
     get_chat,
     get_project,
+    get_output_states,
     get_run,
     get_setting,
+    mark_outputs_read,
+    set_output_starred,
     set_setting,
     insert_project,
     insert_run,
@@ -204,19 +207,26 @@ async def agents() -> list[dict[str, Any]]:
 async def runs(
     agent: str | None = None, status_: str | None = None,
     project_id: str | None = None, schedule_id: str | None = None,
-    exclude_chats: bool = False, limit: int = 200,
+    exclude_chats: bool = False, limit: int = 200, q: str | None = None,
+    session_id: str | None = None,
 ) -> list[dict[str, Any]]:
     from bran.persistence import list_artifacts_for_runs
 
     records = list_runs(agent=agent or None, status=status_ or None,
                         project_id=project_id or None,
                         schedule_id=schedule_id or None,
-                        exclude_chats=exclude_chats, limit=limit)
-    artifacts = list_artifacts_for_runs([r.id for r in records])
+                        exclude_chats=exclude_chats, limit=limit, q=q or None,
+                        session_id=session_id or None)
+    ids = [r.id for r in records]
+    artifacts = list_artifacts_for_runs(ids)
+    states = get_output_states(ids)
     out = []
     for r in records:
         d = asdict(r)
         d["artifacts"] = artifacts.get(r.id, [])
+        st = states.get(r.id)
+        d["starred"] = bool(st["starred"]) if st else False
+        d["read_at"] = st["read_at"] if st else None
         out.append(d)
     return out
 
@@ -227,6 +237,31 @@ async def run_detail(run_id: str) -> dict[str, Any]:
     if rec is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"No run {run_id}")
     return asdict(rec)
+
+
+# --- Output reading state (star / read) — durable, cross-browser ----------
+
+def _truthy(v: str) -> bool:
+    return v.strip().lower() in ("1", "true", "yes", "on")
+
+
+@router.post("/outputs/{run_id}/star")
+async def star_output(
+    run_id: str, starred: Annotated[str, Form()] = "true",
+) -> dict[str, Any]:
+    if get_run(run_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No run {run_id}")
+    want = _truthy(starred)
+    set_output_starred(run_id, want)
+    return {"run_id": run_id, "starred": want}
+
+
+@router.post("/outputs/read")
+async def mark_read(ids: Annotated[str, Form()] = "") -> dict[str, Any]:
+    """Mark a comma-separated batch of runs read (opening the Outputs inbox)."""
+    run_ids = [x for x in (s.strip() for s in ids.split(",")) if x]
+    mark_outputs_read(run_ids)
+    return {"read": len(run_ids)}
 
 
 @router.post("/runs")
