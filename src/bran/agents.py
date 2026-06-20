@@ -81,6 +81,56 @@ def _maybe_tavily_tools() -> list[str]:
     return TAVILY_TOOLS if os.getenv("TAVILY_API_KEY") else []
 
 
+# Tools the SerpApi MCP server exposes that are useful to a headless agent. The
+# server also offers `search_table` / `search_dashboard`, but those render
+# interactive UI via the MCP Apps extension, which bran's agents can't drive, so
+# we only opt into `search`.
+SERPAPI_TOOLS = ["mcp__serpapi__search"]
+
+
+def _serpapi_server() -> dict[str, Any] | None:
+    """Return an HTTP MCP server config for SerpApi, or None if no key is set.
+
+    SerpApi ships an official *hosted* MCP server: unlike Tavily there's no local
+    process to spawn — the SDK talks to it over HTTP, with the API key embedded
+    in the URL path (https://mcp.serpapi.com/<key>/mcp). It exposes Google (and
+    other engines') search results, including Google's AI Overviews.
+    """
+    key = os.getenv("SERPAPI_API_KEY")
+    if not key:
+        return None
+    return {
+        "type": "http",
+        "url": f"https://mcp.serpapi.com/{key}/mcp",
+    }
+
+
+def _maybe_serpapi_servers() -> dict[str, Any]:
+    """Return {'serpapi': <config>} if the key is set, else {}."""
+    server = _serpapi_server()
+    return {"serpapi": server} if server else {}
+
+
+def _maybe_serpapi_tools() -> list[str]:
+    """Return the SerpApi tool list if the key is set, else []."""
+    return SERPAPI_TOOLS if os.getenv("SERPAPI_API_KEY") else []
+
+
+def _external_search_server_names() -> list[str]:
+    """Names of enabled external search MCP servers, for AgentDefinition.mcpServers.
+
+    AgentDefinition (SDK subagents) takes a list of *server names* whose configs
+    are inherited from the parent options, whereas top-level Agents carry the
+    configs themselves. This keeps both kinds in sync as keys come and go.
+    """
+    names: list[str] = []
+    if os.getenv("TAVILY_API_KEY"):
+        names.append("tavily")
+    if os.getenv("SERPAPI_API_KEY"):
+        names.append("serpapi")
+    return names
+
+
 # Appended to every agent's system prompt so math expressions in their replies
 # get rendered by the web UI's KaTeX integration. Without this, models default
 # to plain text (e.g. `x^2` or `A = P(1+r/n)^(nt)`), which doesn't trigger
@@ -133,8 +183,10 @@ RESEARCH_AGENT = AgentDefinition(
     prompt=(
         "You are a careful web research analyst. For every task:\n"
         "1. Prefer `mcp__tavily__tavily_search` over `WebSearch` when available — "
-        "it returns cleaner, more relevant results. Fall back to `WebSearch` only "
-        "if Tavily isn't listed in your tools.\n"
+        "it returns cleaner, more relevant results. Use `mcp__serpapi__search` when "
+        "you specifically want Google results (it returns Google's organic results "
+        "and AI Overviews). Fall back to `WebSearch` only if neither is listed in "
+        "your tools.\n"
         "2. Find at least three independent sources.\n"
         "3. Read the most promising ones in full with `mcp__tavily__tavily_extract` "
         "(preferred) or `WebFetch`. If a source is a PDF (a URL ending `.pdf` or a "
@@ -147,8 +199,8 @@ RESEARCH_AGENT = AgentDefinition(
         + _MATH_NOTATION_NOTE
     ),
     tools=["WebSearch", "WebFetch", "Read", "Write", "Glob", "Grep",
-           "mcp__bran_docs__read_pdf", *TAVILY_TOOLS],
-    mcpServers=["bran_docs", "tavily"] if os.getenv("TAVILY_API_KEY") else ["bran_docs"],
+           "mcp__bran_docs__read_pdf", *TAVILY_TOOLS, *SERPAPI_TOOLS],
+    mcpServers=["bran_docs", *_external_search_server_names()],
     model="sonnet",
 )
 
@@ -252,8 +304,8 @@ FINANCE_NEWS_AGENT = AgentDefinition(
     ),
     prompt=FINANCE_NEWS_PROMPT,
     tools=["WebFetch", "Write", "Read", "mcp__bran_docs__read_pdf",
-           "mcp__bran_docs__fetch_url", *TAVILY_TOOLS],
-    mcpServers=["bran_docs", "tavily"] if os.getenv("TAVILY_API_KEY") else ["bran_docs"],
+           "mcp__bran_docs__fetch_url", *TAVILY_TOOLS, *SERPAPI_TOOLS],
+    mcpServers=["bran_docs", *_external_search_server_names()],
     model="sonnet",
 )
 
@@ -328,6 +380,7 @@ ORCHESTRATOR = Agent(
         "mcp__bran__resume_runner",
         "mcp__bran__delete_runner",
         *_maybe_tavily_tools(),
+        *_maybe_serpapi_tools(),
     ],
     model=SETTINGS.default_model,
     subagents={
@@ -335,7 +388,8 @@ ORCHESTRATOR = Agent(
         "summariser": SUMMARISER_AGENT,
         "finance-news": FINANCE_NEWS_AGENT,
     },
-    mcp_servers={"bran": spawn_agent_server, "bran_docs": documents_server, **_maybe_tavily_servers()},
+    mcp_servers={"bran": spawn_agent_server, "bran_docs": documents_server,
+                 **_maybe_tavily_servers(), **_maybe_serpapi_servers()},
     # Gate writes by delegated research/finance-news sub-agents (they fetch
     # untrusted web content). The orchestrator itself holds no Write tool.
     hooks=_WRITE_CONFINEMENT_HOOKS,
@@ -347,8 +401,9 @@ RESEARCH = Agent(
     description="One-shot web research agent. Same skill set as the sub-agent, callable directly.",
     system_prompt=RESEARCH_AGENT.prompt,
     tools=["WebSearch", "WebFetch", "Read", "Write", "Glob", "Grep",
-           "mcp__bran_docs__read_pdf", *_maybe_tavily_tools()],
-    mcp_servers={"bran_docs": documents_server, **_maybe_tavily_servers()},
+           "mcp__bran_docs__read_pdf", *_maybe_tavily_tools(), *_maybe_serpapi_tools()],
+    mcp_servers={"bran_docs": documents_server,
+                 **_maybe_tavily_servers(), **_maybe_serpapi_servers()},
     model="sonnet",
     hooks=_WRITE_CONFINEMENT_HOOKS,
 )
@@ -374,8 +429,9 @@ FINANCE_NEWS = Agent(
     ),
     system_prompt=FINANCE_NEWS_PROMPT,
     tools=["WebFetch", "Write", "Read", "mcp__bran_docs__read_pdf",
-           "mcp__bran_docs__fetch_url", *_maybe_tavily_tools()],
-    mcp_servers={"bran_docs": documents_server, **_maybe_tavily_servers()},
+           "mcp__bran_docs__fetch_url", *_maybe_tavily_tools(), *_maybe_serpapi_tools()],
+    mcp_servers={"bran_docs": documents_server,
+                 **_maybe_tavily_servers(), **_maybe_serpapi_servers()},
     model="sonnet",
     hooks=_WRITE_CONFINEMENT_HOOKS,
 )

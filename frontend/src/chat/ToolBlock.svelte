@@ -13,7 +13,7 @@
     if (['read', 'glob', 'grep', 'ls'].includes(n)) return 'search'
     if (['edit', 'write', 'multiedit', 'notebookedit'].includes(n)) return 'write'
     if (['bash', 'powershell'].includes(n)) return 'shell'
-    if (n.startsWith('web') || n.startsWith('mcp__tavily')) return 'web'
+    if (n.startsWith('web') || n.startsWith('mcp__tavily') || n.startsWith('mcp__serpapi')) return 'web'
     if (n === 'agent' || n === 'task' || n.startsWith('mcp__bran__spawn')) return 'agent'
     return 'misc'
   }
@@ -38,6 +38,12 @@
       return `${sub}${desc}`
     }
     if (n === 'websearch' || n === 'mcp__tavily__tavily_search') return i.query ? truncate(i.query, 60) : ''
+    if (n === 'mcp__serpapi__search') {
+      // SerpApi takes the query under params.q (falling back to a top-level q/query).
+      const p = (i.params as Record<string, unknown>) || {}
+      const q = p.q ?? i.q ?? i.query
+      return q ? truncate(q, 60) : ''
+    }
     if (n === 'webfetch' || n === 'mcp__tavily__tavily_extract') return i.url ? truncate(i.url, 60) : ''
     return ''
   }
