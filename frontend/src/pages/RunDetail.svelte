@@ -1,5 +1,7 @@
 <script lang="ts">
   import { api, streamRunEvents } from '../lib/api'
+  import { toast } from '../lib/toast.svelte'
+  import { errorText } from '../lib/errors'
   import { navigate, href, link } from '../lib/router.svelte'
   import { fmtBytes, fmtCost, fmtDuration, localDateTime } from '../lib/time'
   import Page from '../components/Page.svelte'
@@ -93,9 +95,18 @@
           }
         })()
         // Status/cost poll — also the fallback when the live stream isn't
-        // available (e.g. the run predates a server restart).
+        // available (e.g. the run predates a server restart). Tolerate transient
+        // fetch failures (server restart mid-run); give up after several so a
+        // dead server doesn't throw every 3s forever.
+        let pollFails = 0
         timer = setInterval(async () => {
-          run = await api.run(runId)
+          try {
+            run = await api.run(runId)
+            pollFails = 0
+          } catch {
+            if (++pollFails > 5) clearInterval(timer)
+            return
+          }
           if (run.status !== 'running' && run.status !== 'pending') {
             clearInterval(timer)
             await loadTranscript()
@@ -112,13 +123,21 @@
   })
 
   async function cancel() {
-    await api.cancelRun(runId)
-    run = await api.run(runId)
+    try {
+      await api.cancelRun(runId)
+      run = await api.run(runId)
+    } catch (e) {
+      toast(errorText(e), 'err')
+    }
   }
   async function rerun() {
     if (!run) return
-    const fresh = await api.newRun(run.agent, run.task)
-    navigate('/runs/' + fresh.id)
+    try {
+      const fresh = await api.newRun(run.agent, run.task)
+      navigate('/runs/' + fresh.id)
+    } catch (e) {
+      toast(errorText(e), 'err')
+    }
   }
 </script>
 

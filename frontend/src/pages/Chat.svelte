@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
+  import { fly } from 'svelte/transition'
   import { api, streamChat } from '../lib/api'
   import { router, navigate, href, link } from '../lib/router.svelte'
   import { workspace, setScope, loadChats, loadProjects, projectName, bumpActivity, setLive } from '../lib/workspace.svelte'
@@ -7,8 +8,9 @@
   import Page from '../components/Page.svelte'
   import Composer from '../components/Composer.svelte'
   import ProjectRail from '../components/ProjectRail.svelte'
+  import Skeleton from '../components/Skeleton.svelte'
   import ChatLog from '../chat/ChatLog.svelte'
-  import { applyEvent, freshState, type ChatItem, type ReducerState } from '../chat/events'
+  import { applyEvent, freshState, toolDisplayName, type ChatItem, type ReducerState } from '../chat/events'
   import type { Attachment, Catalog, ChatSummary, RunRecord } from '../lib/types'
 
   let { sessionId }: { sessionId: string | null } = $props()
@@ -17,9 +19,6 @@
   let activeChat = $state<ChatSummary | null>(null)
   let items = $state<ChatItem[]>([])
   let streaming = $state(false)
-  // True from the moment a message is sent until the first event arrives —
-  // drives an immediate "thinking" row so a send never looks like a no-op.
-  let waitingFirst = $state(false)
   let streamingIndex = $state(-1)
   let pendingAgent = $state<string | null>(null)
   let input = $state('')
@@ -29,6 +28,9 @@
   let loadedId: string | null = null
   let autoSent = false
   let messagesEl: HTMLDivElement | undefined = $state()
+  let historyLoading = $state(false)
+  // Abort handle for the in-flight stream — the "stop" button's lever.
+  let streamAbort: AbortController | null = null
 
   // Scope = the project whose conversations the rail + sidebar show (null =
   // loose). It lives in the shared workspace store now; a chat is viewed inside
@@ -39,6 +41,19 @@
   const scopeName = $derived(projectName(scopeId) ?? 'Recents')
 
   const currentAgent = $derived(activeChat?.agent ?? pendingAgent ?? 'orchestrator')
+
+  // The activity indicator lives in every silent gap of a turn, not just
+  // before the first byte: the model's longest quiet stretch is its *initial*
+  // thinking, which arrives only as a completed block. Hide the dots only
+  // while something visible is already moving — streaming text, or a tool row
+  // with its own pulsing status dot.
+  const lastItem = $derived(items.length ? items[items.length - 1] : null)
+  const showPending = $derived(
+    streaming &&
+    streamingIndex < 0 &&
+    !(lastItem?.kind === 'tool' && lastItem.status === 'running') &&
+    lastItem?.kind !== 'footer'
+  )
 
   // Breadcrumb scope switcher.
   let scopeMenuOpen = $state(false)
@@ -66,8 +81,23 @@
     }
   }
 
-  function scrollSoon() {
+  // Autoscroll only while the reader is pinned to the bottom — scrolling up to
+  // re-read during a stream must never be fought. `force` (send, history load)
+  // re-pins. When unpinned mid-stream, a "↓ latest" pill offers the way back.
+  let pinned = $state(true)
+  function onMessagesScroll() {
+    const el = messagesEl
+    if (!el) return
+    pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 48
+  }
+  function scrollSoon(force = false) {
+    if (force) pinned = true
+    if (!pinned) return
     requestAnimationFrame(() => messagesEl?.scrollTo(0, messagesEl.scrollHeight))
+  }
+  function jumpToLatest() {
+    pinned = true
+    messagesEl?.scrollTo({ top: messagesEl.scrollHeight, behavior: 'smooth' })
   }
 
   // --- Auto fan-in -----------------------------------------------------------
@@ -88,6 +118,10 @@
     }
     return ids
   }
+  // Guards work that must not run after the component leaves the DOM — a stream
+  // in flight when you navigate away would otherwise navigate() you back and
+  // keep mutating global state from a dead instance.
+  let mounted = true
   function clearFanoutWatchers() {
     fanoutTimers.forEach(clearInterval)
     fanoutTimers = []
@@ -116,7 +150,11 @@
     }, 3000)
     fanoutTimers.push(timer)
   }
-  onDestroy(clearFanoutWatchers)
+  onDestroy(() => {
+    mounted = false
+    clearFanoutWatchers()
+    streamAbort?.abort() // stop the in-flight turn; the server sees the disconnect
+  })
 
   $effect(() => {
     void api.catalog().then((c) => (catalog = c)).catch(() => {})
@@ -135,12 +173,15 @@
     rstate = freshState()
     pendingAgent = null
     if (sid) {
+      historyLoading = true // before the first await, so no empty-state flash
       void (async () => {
         try {
           const c = await api.chat(sid)
+          if (loadedId !== sid) return // navigated on while awaiting — drop stale result
           activeChat = c
           setScope(c.project_id) // a chat is scoped to its project (null = loose)
         } catch {
+          if (loadedId !== sid) return
           activeChat = null
         }
         await loadHistory(sid)
@@ -184,17 +225,21 @@
   })
 
   async function loadHistory(sid: string) {
+    historyLoading = true
     try {
       const { events } = await api.history(sid)
+      if (loadedId !== sid) return // a newer navigation owns the view now
       const next: ChatItem[] = []
       const st = freshState()
       for (const ev of events) applyEvent(next, st, ev)
       items = next
       // Seed already-spawned ids so loading a historical fan-out never auto-fires.
       spawnRunIds().forEach((id) => watchedSpawnIds.add(id))
-      scrollSoon()
+      scrollSoon(true)
     } catch {
       /* ignore */
+    } finally {
+      historyLoading = false
     }
   }
 
@@ -209,6 +254,10 @@
   async function send() {
     let text = input.trim()
     if (!text || streaming) return
+    // Remember the raw input so a failed send can hand it back (see catch) —
+    // losing a paragraph-long prompt to a dropped connection is unacceptable.
+    const priorInput = input
+    const priorAttachments = attachments
     // Fold attachments into the prompt as absolute paths the agent reads on
     // demand — shown in the user bubble too, so what was sent is transparent.
     if (attachments.length) {
@@ -219,9 +268,8 @@
     input = ''
     items.push({ kind: 'user', text })
     streaming = true
-    waitingFirst = true
     setLive(true, 'thinking…')
-    scrollSoon()
+    scrollSoon(true)
 
     const fields: Record<string, string> = { prompt: text }
     if (activeChat) {
@@ -234,12 +282,12 @@
       if (proj) fields.project_id = proj // else loose
     }
 
+    streamAbort = new AbortController()
     try {
-      for await (const ev of streamChat(fields)) {
-        waitingFirst = false
+      for await (const ev of streamChat(fields, streamAbort.signal)) {
         if (ev.type === 'done') break
         // Reflect what the agent is doing into the rail's live Progress row.
-        if (ev.type === 'tool_use') setLive(true, `using ${ev.name}`)
+        if (ev.type === 'tool_use') setLive(true, `using ${toolDisplayName(ev.name)}`)
         else if (ev.type === 'thinking') setLive(true, 'thinking…')
         else if (ev.type === 'text') setLive(true, 'responding…')
         const r = applyEvent(items, rstate, ev)
@@ -254,26 +302,43 @@
           setScope(proj)
           try { localStorage.setItem('bran.didChat', '1') } catch { /* ignore */ }
           loadedId = id // pre-set so the route effect won't reload + wipe
-          navigate('/chat/' + id)
+          if (mounted) navigate('/chat/' + id) // don't yank a user who already left
         }
         streamingIndex = rstate.openAssistant
         scrollSoon()
       }
     } catch (e) {
-      items.push({ kind: 'error', message: errorText(e) })
+      if (streamAbort?.signal.aborted) {
+        // User pressed stop (or navigated away) — a quiet note, not an error.
+        items.push({ kind: 'footer', numTurns: null, cost: null, stopped: true })
+      } else {
+        items.push({ kind: 'error', message: errorText(e) })
+        // Send failed before reaching the server — give the text back so it can
+        // be retried instead of retyped.
+        input = priorInput
+        attachments = priorAttachments
+      }
     } finally {
+      streamAbort = null
       streaming = false
-      waitingFirst = false
       streamingIndex = -1
-      setLive(false)
-      void loadChats() // refresh the sidebar Recents
-      bumpActivity() // refresh the rail's Progress (new run recorded)
-      // Auto fan-in: if this turn fanned out >=2 new background runs, watch them
-      // and synthesise automatically once they all finish.
-      const fresh = spawnRunIds().filter((id) => !watchedSpawnIds.has(id))
-      fresh.forEach((id) => watchedSpawnIds.add(id))
-      if (fresh.length >= 2) watchFanout(fresh)
+      setLive(false) // global indicator — clear it even if we've unmounted
+      if (mounted) {
+        void loadChats() // refresh the sidebar Recents
+        bumpActivity() // refresh the rail's Progress (new run recorded)
+        // Auto fan-in: if this turn fanned out >=2 new background runs, watch them
+        // and synthesise automatically once they all finish.
+        const fresh = spawnRunIds().filter((id) => !watchedSpawnIds.has(id))
+        fresh.forEach((id) => watchedSpawnIds.add(id))
+        if (fresh.length >= 2) watchFanout(fresh)
+      }
     }
+  }
+
+  // Stop generating: abort the SSE fetch — the server sees the disconnect and
+  // cancels the agent turn. What already streamed in stays in the transcript.
+  function stop() {
+    streamAbort?.abort()
   }
 
 </script>
@@ -295,7 +360,7 @@
           </svg>
         </button>
         {#if scopeMenuOpen}
-          <div class="crumb-menu card">
+          <div class="crumb-menu card elev-md" transition:fly={{ y: -4, duration: 120 }}>
             <button class="crumb-opt" class:on={!scopeId} onclick={() => switchScope(null)}>Recents (loose chats)</button>
             {#each workspace.projects as p}
               <button class="crumb-opt" class:on={scopeId === p.id} onclick={() => switchScope(p.id)}>{p.name}</button>
@@ -312,31 +377,57 @@
 
   <div style="display: flex; gap: 16px; flex: 1; min-height: 0;">
     <!-- Center: conversation + composer -->
-    <div style="flex: 1; min-width: 0; display: flex; flex-direction: column;">
-      <div bind:this={messagesEl} class="space-y-3" class:chat-empty={!items.length}
+    <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative;">
+      <div bind:this={messagesEl} class="space-y-3 chat-scroll" class:chat-empty={!items.length}
+           onscroll={onMessagesScroll}
            style="flex: 1; overflow-y: auto; padding-right: 6px;">
-        {#if !items.length}
+        {#if historyLoading && !items.length}
+          <Skeleton rows={6} />
+        {:else if !items.length}
           <div class="empty-state">
-            <div class="brackets">[       ]</div>
+            <span class="glyph" style="font-size: 26px;" aria-hidden="true"></span>
             <h3>{currentAgent !== 'orchestrator' ? `chat with ${currentAgent}` : 'start a conversation'}</h3>
             <p class="cta">type a message below — try <code>/digest</code> or <code>@research</code></p>
+            <div class="starters">
+              <button class="starter" onclick={() => (input = 'What did my runners deliver today?')}>What did my runners deliver today?</button>
+              <button class="starter" onclick={() => (input = 'Summarise the latest finance briefing for me.')}>Summarise the latest briefing</button>
+              <button class="starter" onclick={() => (input = '/digest ')}>/digest a topic</button>
+            </div>
           </div>
         {:else}
           <ChatLog {items} {streamingIndex} onaction={onPlanAction} />
-          {#if waitingFirst}
-            <div class="pending-turn" aria-label="waiting for reply">
+          {#if showPending}
+            <div class="pending-turn" aria-label="working on a reply">
               <span class="pending-dot"></span><span class="pending-dot"></span><span class="pending-dot"></span>
-              <span class="pending-label">thinking</span>
+              <span class="pending-label">{workspace.liveLabel || 'thinking…'}</span>
             </div>
           {/if}
         {/if}
       </div>
 
+      <!-- Screen-reader narration of stream state; the token stream itself is
+           too chatty to announce. -->
+      <div class="sr-only" role="status" aria-live="polite">
+        {streaming ? 'bran is responding' : items.length ? 'response complete' : ''}
+      </div>
+
+      {#if !pinned && streaming}
+        <!-- Only while a reply is streaming — an idle reader scrolling old
+             messages doesn't need chrome floating over the page. -->
+        <div class="jump-wrap">
+          <button class="jump-latest elev-md" transition:fly={{ y: 6, duration: 160 }}
+                  onclick={jumpToLatest} aria-label="Jump to latest" title="jump to latest">
+            <svg width="13" height="13" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M6 2.5v7M2.8 6.5L6 9.7l3.2-3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+      {/if}
+
       <!-- Composer -->
-      <div style="margin-top: 14px;">
+      <div class="composer-col">
         <Composer bind:value={input} bind:attachments attach={true} {catalog}
                   hint="⏎ send · ⇧⏎ newline · / @"
-                  busy={streaming} placeholder="Message bran…" onsubmit={send}>
+                  busy={streaming} placeholder="Message bran…" onsubmit={send}
+                  onstop={stop}>
           {#snippet leading()}
             {#if activeChat}
               <span class="composer-agent">{activeChat.agent}</span>
@@ -365,12 +456,51 @@
 </Page>
 
 <style>
+  /* The conversation is a reading column, not a full-bleed dump: every turn
+     (and the composer below) caps at --chat-col and centres, exactly like a
+     typeset page. On narrow panes the cap is inert and rows fill naturally. */
+  .chat-scroll > :global(*) {
+    max-width: var(--chat-col);
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .composer-col {
+    margin: 14px auto 4px;
+    width: 100%;
+    max-width: var(--chat-col);
+  }
+
   /* New/empty chat: centre the invitation vertically so it doesn't sit top-heavy
      above a void (the composer stays pinned at the bottom). */
   .chat-empty {
     display: flex;
     flex-direction: column;
     justify-content: center;
+  }
+  .starters {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 22px;
+  }
+  .starter {
+    background: transparent;
+    border: 1px solid var(--border2);
+    border-radius: 999px;
+    padding: 7px 16px;
+    font-family: var(--font-prose);
+    font-style: italic;
+    font-size: 13px;
+    color: var(--fg-dim);
+    cursor: pointer;
+    transition: color var(--dur-1) var(--transition), border-color var(--dur-1) var(--transition),
+                background var(--dur-1) var(--transition);
+  }
+  .starter:hover {
+    color: var(--accent-soft);
+    border-color: var(--accent-soft);
+    background: var(--accent-glow);
   }
   /* Agent picker living in the composer footer (new chats only) — styled to read
      like the inline agent label, with a dropdown affordance. */
@@ -458,6 +588,48 @@
     flex-shrink: 0;
     overflow-y: auto;
     padding-left: 4px;
+  }
+
+  /* Floating "back to the live edge" pill — appears when the reader scrolls
+     up during a stream, sits just above the composer. The wrapper centres it
+     so Svelte's fly transition can own the button's transform. */
+  .jump-wrap {
+    position: absolute;
+    bottom: 96px;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
+    z-index: 5;
+  }
+  .jump-latest {
+    pointer-events: auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--surface2);
+    border: 1px solid var(--border2);
+    color: var(--fg);
+    cursor: pointer;
+    transition: color var(--dur-1) var(--transition), border-color var(--dur-1) var(--transition);
+  }
+  .jump-latest:hover { color: var(--accent-soft); border-color: var(--accent-soft); }
+
+  /* Visually hidden, still announced. */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   /* Instant feedback between hitting send and the first streamed token. */

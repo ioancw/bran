@@ -9,6 +9,8 @@
   import { relativeTime } from '../lib/time'
   import { api } from '../lib/api'
   import { confirmDialog } from '../lib/confirm.svelte'
+  import { toast } from '../lib/toast.svelte'
+  import { errorText } from '../lib/errors'
   import OnboardingChecklist from './OnboardingChecklist.svelte'
 
   let { counts, version, open = false }: { counts: Record<string, number | null>; version: string; open?: boolean } = $props()
@@ -65,7 +67,12 @@
     e.preventDefault()
     e.stopPropagation()
     if (!(await confirmDialog('Delete this chat? The SDK transcript stays on disk.'))) return
-    await api.deleteChat(id)
+    try {
+      await api.deleteChat(id)
+    } catch (err) {
+      toast(errorText(err), 'err')
+      return
+    }
     await loadChats()
     if (activeChatId === id) newChat()
   }
@@ -198,9 +205,14 @@
     line-height: 1;
     padding: 0 2px;
     opacity: 0;
-    transition: opacity 0.12s var(--transition);
+    transition: opacity var(--dur-1) var(--transition);
   }
-  .recent-row:hover .recent-x { opacity: 1; }
+  .recent-x:hover { color: var(--red); }
+  /* Reveal on hover AND on keyboard focus — a control you can't see when
+     you Tab to it may as well not exist. */
+  .recent-row:hover .recent-x,
+  .recent-row:focus-within .recent-x,
+  .recent-x:focus-visible { opacity: 1; }
   .recent-meta {
     grid-column: 1 / -1;
     font-family: var(--font-mono);

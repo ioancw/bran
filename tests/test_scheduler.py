@@ -7,7 +7,7 @@ import uuid
 import pytest
 from apscheduler.triggers.cron import CronTrigger
 
-from bran.persistence import ProjectRecord, insert_project, update_project
+from bran.persistence import ProjectRecord, insert_project
 from bran.scheduler import _project_append_system, _translate_dow, _trigger_from_cron
 
 
@@ -76,7 +76,14 @@ def test_attached_runner_injects_brief_and_memory():
     assert "## Memory\n- Prefer Bloomberg over Reuters." in out
 
 
-def test_attached_runner_with_empty_memory_is_none():
+def test_attached_runner_empty_still_describes_files_folder():
+    # A project always exposes its files folder as a read+write workspace, so an
+    # attached runner with no instructions/memory still gets the Files section
+    # (so it can save its output there) but no Instructions/Memory sections.
     p = ProjectRecord.new(name=f"proj-{uuid.uuid4().hex[:6]}", instructions="   ")
     insert_project(p)
-    assert _project_append_system(p.id) is None
+    out = _project_append_system(p.id)
+    assert out is not None
+    assert "## Files" in out
+    assert "## Instructions" not in out
+    assert "## Memory" not in out

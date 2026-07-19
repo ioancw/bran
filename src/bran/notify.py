@@ -18,14 +18,14 @@ import inspect
 import logging
 import os
 import sys
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict
-from typing import Awaitable, Callable, Union
 
 from bran.persistence import RunRecord
 
 log = logging.getLogger("bran.notify")
 
-Notifier = Callable[[RunRecord], Union[None, Awaitable[None]]]
+Notifier = Callable[[RunRecord], None | Awaitable[None]]
 
 _notifiers: list[Notifier] = []
 

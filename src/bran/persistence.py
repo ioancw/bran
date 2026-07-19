@@ -11,10 +11,11 @@ import json
 import sqlite3
 import threading
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Iterator
+from typing import Any
 
 from bran.config import SETTINGS
 
@@ -189,7 +190,7 @@ class RunRecord:
         source: str = "manual",
         schedule_id: str | None = None,
         actor: str | None = None,
-    ) -> "RunRecord":
+    ) -> RunRecord:
         return RunRecord(
             id=str(uuid.uuid4()),
             agent=agent,
@@ -225,7 +226,7 @@ class RunRecord:
         )
 
     @staticmethod
-    def from_row(row: sqlite3.Row) -> "RunRecord":
+    def from_row(row: sqlite3.Row) -> RunRecord:
         keys = row.keys()
         return RunRecord(
             id=row["id"],
@@ -279,7 +280,7 @@ class ScheduleRecord:
         name: str, agent: str, task: str, cron: str,
         project_id: str | None = None, run_at: str | None = None,
         verify: bool = False, delta: bool = False,
-    ) -> "ScheduleRecord":
+    ) -> ScheduleRecord:
         return ScheduleRecord(
             id=str(uuid.uuid4()), name=name, agent=agent, task=task, cron=cron,
             project_id=project_id, run_at=run_at, verify=verify, delta=delta,
@@ -764,7 +765,7 @@ class ProjectRecord:
     updated_at: str = field(default_factory=utcnow_iso)
 
     @staticmethod
-    def new(name: str, description: str = "", instructions: str = "") -> "ProjectRecord":
+    def new(name: str, description: str = "", instructions: str = "") -> ProjectRecord:
         return ProjectRecord(
             id=str(uuid.uuid4()),
             name=name, description=description, instructions=instructions,
@@ -840,7 +841,7 @@ class ProjectMemory:
     created_at: str = field(default_factory=utcnow_iso)
 
     @staticmethod
-    def new(project_id: str, text: str) -> "ProjectMemory":
+    def new(project_id: str, text: str) -> ProjectMemory:
         return ProjectMemory(id=str(uuid.uuid4()), project_id=project_id, text=text)
 
 

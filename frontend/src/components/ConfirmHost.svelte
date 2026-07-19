@@ -1,16 +1,48 @@
 <script lang="ts">
-  // Renders the app's single confirm modal. Mount once (in App). Esc cancels,
-  // Enter confirms; clicking the backdrop cancels.
+  // Renders the app's single confirm modal. Mount once (in App). Esc cancels;
+  // clicking the backdrop cancels. Enter is NOT globally bound — these dialogs
+  // guard destructive actions, so activation goes through the focused button
+  // (initial focus lands on Cancel; the destructive path takes a deliberate
+  // Tab/click). Focus is trapped inside while open and restored on close.
   import { fade, scale } from 'svelte/transition'
   import { confirmState, settleConfirm } from '../lib/confirm.svelte'
 
+  let cancelBtn = $state<HTMLButtonElement | undefined>()
+  let boxEl = $state<HTMLElement | undefined>()
+  let restoreEl: HTMLElement | null = null
+
+  $effect(() => {
+    if (confirmState.open) {
+      restoreEl = document.activeElement instanceof HTMLElement ? document.activeElement : null
+      requestAnimationFrame(() => cancelBtn?.focus())
+    } else if (restoreEl) {
+      // Refocus the trigger if it survived the action (a deleted row's × won't).
+      if (restoreEl.isConnected) restoreEl.focus()
+      restoreEl = null
+    }
+  })
+
   function onKeydown(e: KeyboardEvent) {
     if (!confirmState.open) return
-    if (e.key === 'Escape') { e.preventDefault(); settleConfirm(false) }
-    if (e.key === 'Enter') { e.preventDefault(); settleConfirm(true) }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      settleConfirm(false)
+    } else if (e.key === 'Tab' && boxEl) {
+      // Two-button trap: keep Tab cycling inside the dialog.
+      const focusables = boxEl.querySelectorAll<HTMLElement>('button')
+      if (!focusables.length) return
+      const first = focusables[0]
+      const last = focusables[focusables.length - 1]
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
   }
-  // Close only when the backdrop itself (not the dialog) is clicked. Keyboard
-  // dismissal (Esc/Enter) is handled globally above.
+  // Close only when the backdrop itself (not the dialog) is clicked.
   function onBackdrop(e: MouseEvent) {
     if (e.target === e.currentTarget) settleConfirm(false)
   }
@@ -20,12 +52,14 @@
 
 {#if confirmState.open}
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-  <div class="confirm-backdrop" transition:fade={{ duration: 120 }} onclick={onBackdrop}>
-    <div class="confirm-box card" transition:scale={{ duration: 140, start: 0.96 }}
-         role="dialog" aria-modal="true" tabindex="-1">
-      <p class="confirm-msg">{confirmState.message}</p>
+  <div class="confirm-backdrop overlay-backdrop" role="presentation"
+       transition:fade={{ duration: 120 }} onclick={onBackdrop}>
+    <div class="confirm-box card elev-lg" bind:this={boxEl}
+         transition:scale={{ duration: 140, start: 0.96 }}
+         role="dialog" aria-modal="true" aria-labelledby="confirm-msg" tabindex="-1">
+      <p class="confirm-msg" id="confirm-msg">{confirmState.message}</p>
       <div class="confirm-actions">
-        <button class="btn-ghost" onclick={() => settleConfirm(false)}>cancel</button>
+        <button class="btn-outline" bind:this={cancelBtn} onclick={() => settleConfirm(false)}>cancel</button>
         <button class="btn-danger" onclick={() => settleConfirm(true)}>{confirmState.confirmLabel}</button>
       </div>
     </div>
@@ -34,9 +68,6 @@
 
 <style>
   .confirm-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.45);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -60,14 +91,4 @@
     justify-content: flex-end;
     gap: 8px;
   }
-  .btn-danger {
-    background: var(--red, #c0392b);
-    color: #fff;
-    border: 1px solid transparent;
-    padding: 5px 14px;
-    border-radius: var(--radius);
-    font-family: var(--font-ui);
-    cursor: pointer;
-  }
-  .btn-danger:hover { filter: brightness(1.08); }
 </style>

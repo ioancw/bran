@@ -10,7 +10,8 @@ from __future__ import annotations
 import asyncio
 import time
 import traceback
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -24,9 +25,10 @@ from claude_agent_sdk import (
 from bran.agents import build_options_for, get_agent
 from bran.background import current_project_id, current_run_id
 from bran.config import SETTINGS
-from bran.live import close as live_close, publish as live_publish
+from bran.live import close as live_close
+from bran.live import publish as live_publish
 from bran.notify import notify_completion
-from bran.persistence import RunRecord, get_run, insert_run, update_run, utcnow_iso
+from bran.persistence import RunRecord, insert_run, update_run, utcnow_iso
 
 # Cap what we store in runs.error — a tool that dumps a huge page into an
 # exception message shouldn't bloat the DB row (or slow every list query).
@@ -156,6 +158,23 @@ async def _drive(
         record.ended_at = utcnow_iso()
         update_run(record)
         raise
+    except GeneratorExit:
+        # The consumer abandoned this generator without cancelling us — e.g. the
+        # browser dropped the chat SSE mid-run and the handler's `async for`
+        # never resumed. Finalization raises GeneratorExit at the `yield`; it's
+        # a BaseException, so without this arm the run row would sit "running"
+        # until the next restart's reconciliation and the SDK subprocess would
+        # be left to GC.
+        record.status = "cancelled"
+        record.error = "Run abandoned by client (stream consumer went away)"
+        record.duration_ms = int((time.perf_counter() - started) * 1000)
+        record.ended_at = utcnow_iso()
+        update_run(record)
+        try:
+            await stream.aclose()
+        except Exception:
+            pass
+        raise
     except RunTimeoutError as exc:
         record.status = "failed"
         record.error = str(exc)  # clean message — the traceback adds nothing here
@@ -284,8 +303,17 @@ async def stream_agent(
         agent_def, resume=resume_session, max_turns=max_turns,
         append_system=append_system,
     )
-    async for message in _drive(record, task, options, on_message):
-        yield message
+    gen = _drive(record, task, options, on_message)
+    try:
+        async for message in gen:
+            yield message
+    finally:
+        # `async for` does NOT close an abandoned iterator — if our consumer
+        # walks away (GeneratorExit lands at the yield above), _drive would be
+        # left to nondeterministic GC finalization with the run still
+        # "running". Close it explicitly so its GeneratorExit arm finalizes
+        # the record now. No-op when the stream already finished normally.
+        await gen.aclose()
 
 
 def _absorb_message(record: RunRecord, message: Any) -> None:

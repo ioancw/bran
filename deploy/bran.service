@@ -1,0 +1,31 @@
+# systemd user unit for the long-running bran server (scheduler + API + UI).
+#
+# Install (from WSL, as your normal user — NOT root):
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/bran.service ~/.config/systemd/user/bran.service
+#   # edit the paths below if your checkout/venv differ
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now bran
+#   loginctl enable-linger $USER      # keep it running after you log out
+#   systemctl --user status bran
+#   journalctl --user -u bran -f      # follow logs
+#
+# WSL note: systemd must be enabled — put this in /etc/wsl.conf then `wsl --shutdown`:
+#   [boot]
+#   systemd=true
+
+[Unit]
+Description=bran fleet-orchestration server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/github/bran
+EnvironmentFile=%h/github/bran/.env
+ExecStart=%h/github/bran/.venv-linux/bin/bran serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

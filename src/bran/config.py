@@ -46,6 +46,12 @@ class Settings:
     # How many times a failed *scheduled* run is retried (with backoff) before
     # giving up until the next regular fire. Override with BRAN_RUNNER_RETRIES.
     runner_retries: int
+    # Host headers the server will answer to. Anything else is rejected with a
+    # 400 — this is the DNS-rebinding defence for the token-free /spa surface
+    # (a page on evil.com whose DNS is rebound to 127.0.0.1 would otherwise
+    # pass the same-origin check). Extend with BRAN_ALLOWED_HOSTS="lanbox,..."
+    # when binding beyond localhost.
+    allowed_hosts: tuple[str, ...]
 
     @property
     def claude_dir(self) -> Path:
@@ -77,9 +83,37 @@ def _parse_api_tokens() -> dict[str, str]:
     return out
 
 
+def _parse_allowed_hosts(bind_host: str) -> tuple[str, ...]:
+    """Hostnames (no port) accepted in the Host header. Loopback names are
+    always allowed; the bind host is included so a LAN bind works out of the
+    box once BRAN_HOST is set to a concrete address."""
+    hosts = {"127.0.0.1", "localhost", "::1", bind_host}
+    hosts.discard("0.0.0.0")  # never a real Host header — don't allowlist it
+    for entry in (os.getenv("BRAN_ALLOWED_HOSTS") or "").split(","):
+        entry = entry.strip()
+        if entry:
+            hosts.add(entry)
+    return tuple(sorted(hosts))
+
+
+def _warn_if_windows_mount(bran_home: Path) -> None:
+    """SQLite WAL over WSL's /mnt/* (9p/drvfs) is a documented corruption and
+    latency hazard — the DB belongs on Linux-native ext4."""
+    if os.name == "posix" and str(bran_home).startswith("/mnt/"):
+        import logging
+
+        logging.getLogger("bran.config").warning(
+            "BRAN_HOME (%s) is on a Windows-mounted filesystem. SQLite in WAL "
+            "mode is unreliable and slow over /mnt/*: set BRAN_HOME to a "
+            "Linux-native path (e.g. ~/.bran) and copy the data over.",
+            bran_home,
+        )
+
+
 def load_settings() -> Settings:
     root = _project_root()
     bran_home = Path(os.getenv("BRAN_HOME", str(root / ".bran"))).resolve()
+    _warn_if_windows_mount(bran_home)
     briefings_dir = bran_home / "briefings"
     return Settings(
         project_root=root,
@@ -95,6 +129,7 @@ def load_settings() -> Settings:
         max_buffer_size=int(os.getenv("BRAN_MAX_BUFFER_SIZE", str(10 * 1024 * 1024))),
         run_timeout_s=int(os.getenv("BRAN_RUN_TIMEOUT", "3600")),
         runner_retries=int(os.getenv("BRAN_RUNNER_RETRIES", "2")),
+        allowed_hosts=_parse_allowed_hosts(os.getenv("BRAN_HOST", "127.0.0.1")),
     )
 
 

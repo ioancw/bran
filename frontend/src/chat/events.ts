@@ -22,7 +22,7 @@ export type ChatItem =
   | { kind: 'assistant'; text: string }
   | { kind: 'thinking'; text: string }
   | { kind: 'routed'; agent: string }
-  | { kind: 'footer'; numTurns: number | null; cost: number | null }
+  | { kind: 'footer'; numTurns: number | null; cost: number | null; stopped?: boolean }
   | { kind: 'error'; message: string }
   | ToolItem
 
@@ -35,6 +35,15 @@ export interface ReducerState {
 
 export function freshState(): ReducerState {
   return { openAssistant: -1, tools: {} }
+}
+
+/** Human-readable tool name for chat rows: strip the MCP plumbing prefix
+ * ("mcp__bran_docs__fetch_url" → "fetch_url"). The raw name stays available
+ * in the expanded params view. */
+export function toolDisplayName(name: string): string {
+  if (!name.startsWith('mcp__')) return name
+  const parts = name.split('__')
+  return parts.length >= 3 ? parts.slice(2).join('__') : name
 }
 
 function close(st: ReducerState): void {

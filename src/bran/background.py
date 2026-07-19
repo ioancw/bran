@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-from typing import Any, Coroutine
+from collections.abc import Coroutine
+from typing import Any
 
 # Strong references to in-flight background tasks. The done-callback removes
 # each task once it finishes, so this set only ever holds live work.

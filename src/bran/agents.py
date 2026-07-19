@@ -29,7 +29,6 @@ from bran.permissions import WRITE_TOOL_MATCHER, confine_writes_hook
 from bran.tools.documents import documents_server
 from bran.tools.spawn import spawn_agent_server
 
-
 # PreToolUse hook set that confines file writes to bran's home dir. Attached to
 # every agent that can write (directly or via a delegated sub-agent) so a
 # prompt-injection in fetched web content can't write outside the sandbox.
@@ -147,7 +146,7 @@ RESEARCH_AGENT = AgentDefinition(
         + _MATH_NOTATION_NOTE
     ),
     tools=["WebSearch", "WebFetch", "Read", "Write", "Glob", "Grep",
-           "mcp__bran_docs__read_pdf", *TAVILY_TOOLS],
+           "mcp__bran_docs__read_pdf", "mcp__bran_docs__save_document", *TAVILY_TOOLS],
     mcpServers=["bran_docs", "tavily"] if os.getenv("TAVILY_API_KEY") else ["bran_docs"],
     model="sonnet",
 )
@@ -166,7 +165,7 @@ SUMMARISER_AGENT = AgentDefinition(
         "Preserve every concrete number, name, and date. Never invent facts."
         + _MATH_NOTATION_NOTE
     ),
-    tools=["Read", "Glob", "Grep", "mcp__bran_docs__read_pdf"],
+    tools=["Read", "Glob", "Grep", "mcp__bran_docs__read_pdf", "mcp__bran_docs__save_document"],
     mcpServers=["bran_docs"],
     model="haiku",
 )
@@ -251,7 +250,7 @@ FINANCE_NEWS_AGENT = AgentDefinition(
         "or 'what happened overnight in finance' style request."
     ),
     prompt=FINANCE_NEWS_PROMPT,
-    tools=["WebFetch", "Write", "Read", "mcp__bran_docs__read_pdf",
+    tools=["WebFetch", "Write", "Read", "mcp__bran_docs__read_pdf", "mcp__bran_docs__save_document",
            "mcp__bran_docs__fetch_url", *TAVILY_TOOLS],
     mcpServers=["bran_docs", "tavily"] if os.getenv("TAVILY_API_KEY") else ["bran_docs"],
     model="sonnet",
@@ -319,7 +318,7 @@ ORCHESTRATOR = Agent(
         "mcp__bran__get_run_result",
         "mcp__bran__list_recent_runs",
         "mcp__bran__propose_plan",
-        "mcp__bran_docs__read_pdf",
+        "mcp__bran_docs__read_pdf", "mcp__bran_docs__save_document",
         "mcp__bran__save_project_memory",
         "mcp__bran__create_runner",
         "mcp__bran__list_runners",
@@ -347,7 +346,7 @@ RESEARCH = Agent(
     description="One-shot web research agent. Same skill set as the sub-agent, callable directly.",
     system_prompt=RESEARCH_AGENT.prompt,
     tools=["WebSearch", "WebFetch", "Read", "Write", "Glob", "Grep",
-           "mcp__bran_docs__read_pdf", *_maybe_tavily_tools()],
+           "mcp__bran_docs__read_pdf", "mcp__bran_docs__save_document", *_maybe_tavily_tools()],
     mcp_servers={"bran_docs": documents_server, **_maybe_tavily_servers()},
     model="sonnet",
     hooks=_WRITE_CONFINEMENT_HOOKS,
@@ -358,7 +357,7 @@ SUMMARISER = Agent(
     name="summariser",
     description="One-shot text summariser.",
     system_prompt=SUMMARISER_AGENT.prompt,
-    tools=["Read", "Glob", "Grep", "mcp__bran_docs__read_pdf"],
+    tools=["Read", "Glob", "Grep", "mcp__bran_docs__read_pdf", "mcp__bran_docs__save_document"],
     mcp_servers={"bran_docs": documents_server},
     model="haiku",
 )
@@ -373,7 +372,7 @@ FINANCE_NEWS = Agent(
         "scheduling with `bran schedule add morning-finance finance-news ... --cron '0 7 * * *'`."
     ),
     system_prompt=FINANCE_NEWS_PROMPT,
-    tools=["WebFetch", "Write", "Read", "mcp__bran_docs__read_pdf",
+    tools=["WebFetch", "Write", "Read", "mcp__bran_docs__read_pdf", "mcp__bran_docs__save_document",
            "mcp__bran_docs__fetch_url", *_maybe_tavily_tools()],
     mcp_servers={"bran_docs": documents_server, **_maybe_tavily_servers()},
     model="sonnet",

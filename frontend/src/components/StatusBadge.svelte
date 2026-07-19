@@ -12,6 +12,18 @@
 </script>
 
 <span class="pill {p[0]}">
-  <span style="font-size: 9px;">{p[1]}</span>
+  <!-- A live run breathes; a frozen glyph reads as a hung process. -->
+  <span style="font-size: 9px;" class:spin-glyph={status === 'running'}>{p[1]}</span>
   <span>{p[2]}</span>
 </span>
+
+<style>
+  .spin-glyph {
+    display: inline-block;
+    animation: badge-pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes badge-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+</style>

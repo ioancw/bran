@@ -38,8 +38,12 @@ export function setLive(streaming: boolean, label = ''): void {
 
 /** Reload the conversation list for the current scope (null = loose). */
 export async function loadChats(): Promise<void> {
+  // Capture the scope at call time: a rapid scope hop (A→B) could otherwise let
+  // A's slower response land last and show A's chats under scope B.
+  const scope = workspace.scopeProjectId
   try {
-    workspace.chats = await api.chats(workspace.scopeProjectId)
+    const chats = await api.chats(scope)
+    if (scope === workspace.scopeProjectId) workspace.chats = chats
   } catch {
     /* leave the previous list in place */
   }

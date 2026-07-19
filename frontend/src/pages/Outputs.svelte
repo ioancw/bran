@@ -125,6 +125,7 @@
   }
 
   async function load() {
+    error = null // clear a stale banner so a recovered search/refresh shows clean
     try {
       ;[runs, runners] = await Promise.all([
         api.runs({ limit: 200, exclude_chats: true, status: 'completed', q }),

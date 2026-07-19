@@ -14,6 +14,7 @@
   let newDesc = $state('')
 
   async function load() {
+    error = null
     try {
       projects = await api.projects()
     } catch (e) {
@@ -28,7 +29,13 @@
 
   async function create() {
     if (!newName.trim()) return
-    const p = await api.newProject(newName.trim(), newDesc.trim())
+    let p
+    try {
+      p = await api.newProject(newName.trim(), newDesc.trim())
+    } catch (e) {
+      error = errorText(e)
+      return
+    }
     newName = ''
     newDesc = ''
     showForm = false

@@ -42,6 +42,7 @@
   let fDelta = $state(false) // each run sees the previous report, reports only changes
 
   async function load() {
+    error = null // clear a stale banner so a recovered refresh shows clean
     try {
       ;[runners, agents, projects, recentRuns] = await Promise.all([
         api.schedules(), api.agents(), api.projects(),

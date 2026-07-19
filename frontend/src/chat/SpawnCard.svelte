@@ -47,7 +47,10 @@
 
 <div class="card spawn-card">
   <div style="display: flex; align-items: center; gap: 8px;">
-    <span class="label-cap" style="color: var(--amber);">⤳ background run</span>
+    <span class="label-cap spawn-label" style="color: var(--amber);">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3v12a3 3 0 0 0 3 3h11"/><path d="M16 14l4 4-4 4"/><circle cx="6" cy="3" r="0.5" fill="currentColor"/></svg>
+      background run
+    </span>
     <span class="mono text-accent-soft" style="font-size: 11px;">{agentName}</span>
     <span class="ml-auto"><StatusBadge {status} /></span>
   </div>
@@ -57,7 +60,7 @@
 
   <div style="display: flex; align-items: center; gap: 12px; margin-top: 8px;">
     {#if hasOutput}
-      <button class="spawn-toggle" onclick={() => (expanded = !expanded)}>
+      <button class="btn-text" onclick={() => (expanded = !expanded)}>
         {expanded ? 'hide result ▴' : 'show result ▾'}
       </button>
     {/if}
@@ -86,16 +89,11 @@
   .spawn-card {
     border-color: color-mix(in srgb, var(--amber) 35%, var(--border));
   }
-  .spawn-toggle {
-    background: transparent;
-    border: 0;
-    padding: 0;
-    cursor: pointer;
-    font-family: var(--font-mono);
-    font-size: 11px;
-    color: var(--accent-soft);
+  .spawn-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
   }
-  .spawn-toggle:hover { text-decoration: underline; }
   .spawn-result {
     margin-top: 10px;
     padding-top: 10px;

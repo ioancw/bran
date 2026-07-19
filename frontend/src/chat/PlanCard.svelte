@@ -18,7 +18,10 @@
 
 <div class="card plan-card">
   <header style="display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px;">
-    <span class="label-cap" style="color: var(--accent-soft);">🗒 plan · needs your approval</span>
+    <span class="label-cap plan-label" style="color: var(--accent-soft);">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12h6M9 16h4"/></svg>
+      plan · needs your approval
+    </span>
     <span class="text-bright" style="font-size: 14px; font-weight: 500;">{title}</span>
   </header>
   <div class="msg-prose plan-body"><Prose text={plan} /></div>
@@ -35,6 +38,11 @@
 <style>
   .plan-card {
     border-left: 2px solid var(--accent-soft);
+  }
+  .plan-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
   }
   .plan-body {
     font-size: 14px;

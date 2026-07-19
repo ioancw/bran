@@ -1,6 +1,7 @@
 """bran — a multi-agent fleet built on the Claude Agent SDK."""
 
-from importlib.metadata import PackageNotFoundError, version as _pkg_version
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 
 from bran.agents import Agent, get_agent, list_agents, register_agent
 from bran.notify import install_default_notifiers, register_notifier

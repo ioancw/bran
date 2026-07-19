@@ -71,7 +71,8 @@
   })
 
   // First lines of real prose for the delivery cards — skip markdown chrome
-  // (headers, lists, tables) so the snippet reads like a sentence.
+  // (headers, lists, tables) and strip inline markup so the snippet reads
+  // like a sentence, not raw source (**asterisks** in a preview scream demo).
   function snippet(text: string, limit = 220): string {
     const parts: string[] = []
     for (const raw of text.split('\n')) {
@@ -81,6 +82,11 @@
       if (parts.join(' ').length > limit + 20) break
     }
     let s = parts.join(' ')
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/\*([^*]+)\*/g, '$1')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+      .replace(/__([^_]+)__/g, '$1')
     if (s.length > limit) s = s.slice(0, limit - 1).replace(/\s+\S*$/, '') + '…'
     return s || text.slice(0, limit)
   }
@@ -90,6 +96,7 @@
   )
 
   async function load() {
+    error = null // clear a stale banner so a recovered refresh shows clean
     try {
       ;[runs, schedules] = await Promise.all([
         api.runs({ limit: 200, exclude_chats: true }),

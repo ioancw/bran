@@ -27,6 +27,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "ruff>=0.6",
 ]
 
 [project.scripts]
@@ -38,3 +39,19 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# E/F pyflakes+pycodestyle, I import-sorting, UP pyupgrade, B bugbear.
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+    "E501",   # line length — long strings/URLs are fine, not worth wrapping
+    "B008",   # call-in-default — Typer *requires* `= typer.Option(...)` params
+    "B904",   # raise-without-from — bran raises clean user-facing messages by design
+    "E402",   # deliberate late imports (after env/guard setup) in a few modules
+    "E702",   # compact multi-statement lines in test stand-ins
+]

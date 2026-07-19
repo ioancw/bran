@@ -23,8 +23,8 @@ from fastapi import (
     APIRouter,
     Depends,
     FastAPI,
-    HTTPException,
     Header,
+    HTTPException,
     Path,
     Query,
     status,
@@ -33,6 +33,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from bran import __version__
+from bran.agents import list_agents
+from bran.background import spawn_background
 from bran.config import SETTINGS
 from bran.persistence import (
     ScheduleRecord,
@@ -42,10 +44,7 @@ from bran.persistence import (
     list_runs,
     list_schedules,
 )
-from bran.agents import list_agents
-from bran.background import spawn_background
 from bran.runner import run_agent
-
 
 # ---------------------------------------------------------------------------
 # Auth
@@ -258,6 +257,13 @@ def build_app(enable_scheduler: bool = True) -> FastAPI:
         description="Fleet-orchestration API + web UI for Claude Agent SDK agents.",
         lifespan=lifespan,
     )
+
+    # DNS-rebinding defence for the token-free /spa surface: the same-origin
+    # guard compares Origin against Host, so it's only sound if Host is
+    # actually one of ours. Reject anything else outright (400).
+    from starlette.middleware.trustedhost import TrustedHostMiddleware
+
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(SETTINGS.allowed_hosts))
 
     @app.get("/healthz", tags=["meta"])
     async def healthz() -> dict[str, str]:

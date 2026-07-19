@@ -12,12 +12,14 @@ Subcommands:
 from __future__ import annotations
 
 import json
-from typing import Optional
+import os
+from pathlib import Path
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
+from bran.agents import list_agents
 from bran.config import SETTINGS
 from bran.persistence import (
     RunRecord,
@@ -28,7 +30,6 @@ from bran.persistence import (
     list_runs,
     list_schedules,
 )
-from bran.agents import list_agents
 from bran.repl import run_chat
 from bran.runner import run_agent_sync
 
@@ -84,10 +85,10 @@ def _print_run_result(record: RunRecord, as_json: bool = False) -> None:
 def run(
     agent: str = typer.Argument(..., help="Agent name (e.g. research, summariser)."),
     task: str = typer.Option(..., "--task", "-t", help="The task/prompt to run."),
-    resume: Optional[str] = typer.Option(
+    resume: str | None = typer.Option(
         None, "--resume", help="Resume a previous session by its session_id."
     ),
-    max_turns: Optional[int] = typer.Option(
+    max_turns: int | None = typer.Option(
         None, "--max-turns", help="Cap agentic turns."
     ),
     as_json: bool = typer.Option(
@@ -107,8 +108,8 @@ def ask(
     task: list[str] = typer.Argument(
         ..., help="The prompt. Wrap in quotes or let the shell split words."
     ),
-    resume: Optional[str] = typer.Option(None, "--resume"),
-    max_turns: Optional[int] = typer.Option(None, "--max-turns"),
+    resume: str | None = typer.Option(None, "--resume"),
+    max_turns: int | None = typer.Option(None, "--max-turns"),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Ergonomic shortcut for `run`: `bran ask research "what is MCP?"`.
@@ -143,15 +144,19 @@ def agents() -> None:
 
 @app.command()
 def serve(
-    host: Optional[str] = typer.Option(None, "--host", help="Override BRAN_HOST."),
-    port: Optional[int] = typer.Option(None, "--port", help="Override BRAN_PORT."),
+    host: str | None = typer.Option(None, "--host", help="Override BRAN_HOST."),
+    port: int | None = typer.Option(None, "--port", help="Override BRAN_PORT."),
     no_scheduler: bool = typer.Option(
         False, "--no-scheduler", help="Run the HTTP API without the cron scheduler."
     ),
 ) -> None:
     """Start the FastAPI HTTP server (and APScheduler unless --no-scheduler)."""
     import uvicorn
+
     from bran.api import build_app
+    from bran.logging_setup import configure_logging
+
+    configure_logging()
 
     if SETTINGS.api_token is None:
         console.print(
@@ -159,6 +164,13 @@ def serve(
             "Set it in your .env or environment first."
         )
         raise typer.Exit(code=2)
+
+    if getattr(os, "geteuid", lambda: -1)() == 0:
+        console.print(
+            "[yellow]Warning: running as root.[/] Session transcripts live under "
+            "the launching user's ~/.claude/projects, and files created now will "
+            "be root-owned. Start bran from your normal user instead."
+        )
 
     app_obj = build_app(enable_scheduler=not no_scheduler)
     h, p = host or SETTINGS.host, port or SETTINGS.port
@@ -169,14 +181,66 @@ def serve(
     uvicorn.run(app_obj, host=h, port=p, log_level="info")
 
 
+@app.command()
+def backup(
+    dest: str | None = typer.Argument(
+        None, help="Output file. Default: $BRAN_HOME/backups/bran-<timestamp>.sqlite"
+    ),
+    keep: int = typer.Option(
+        10, "--keep", help="How many backups to retain in the default dir (0 = keep all)."
+    ),
+) -> None:
+    """Make a consistent copy of the SQLite database (safe while the server runs).
+
+    Uses SQLite's online backup API, which produces an intact snapshot even
+    under WAL and concurrent writers — unlike a naive file copy, which can be
+    torn. With no DEST, writes a timestamped file under $BRAN_HOME/backups/ and
+    prunes older ones to --keep.
+    """
+    import sqlite3
+    from datetime import datetime, timezone
+
+    src_path = SETTINGS.db_path
+    if not src_path.exists():
+        console.print(f"[red]No database at {src_path}[/] — nothing to back up.")
+        raise typer.Exit(code=1)
+
+    if dest:
+        out = Path(dest)
+        out.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        backup_dir = SETTINGS.bran_home / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        out = backup_dir / f"bran-{stamp}.sqlite"
+
+    src = sqlite3.connect(str(src_path))
+    dst = sqlite3.connect(str(out))
+    try:
+        with dst:
+            src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
+
+    size = out.stat().st_size
+    console.print(f"[green]Backed up[/] → {out} ({size:,} bytes)")
+
+    if not dest and keep > 0:
+        backups = sorted((SETTINGS.bran_home / "backups").glob("bran-*.sqlite"))
+        for stale in backups[:-keep]:
+            stale.unlink(missing_ok=True)
+            console.print(f"  pruned {stale.name}")
+
+
 # ---------------------------------------------------------------------------
 # bran runs
 # ---------------------------------------------------------------------------
 
 @runs_app.command("list")
 def runs_list(
-    agent: Optional[str] = typer.Option(None, "--agent", "-a"),
-    status: Optional[str] = typer.Option(None, "--status", "-s"),
+    agent: str | None = typer.Option(None, "--agent", "-a"),
+    status: str | None = typer.Option(None, "--status", "-s"),
     limit: int = typer.Option(25, "--limit", "-n"),
 ) -> None:
     """List recent runs."""
@@ -347,7 +411,7 @@ def schedule_rm(name: str = typer.Argument(...)) -> None:
 # Subcommand names registered above. Used by `main()` to distinguish a real
 # subcommand from a free-form prompt the user wants the orchestrator to handle.
 # Update this set if you add a new top-level command.
-_SUBCOMMANDS = {"chat", "run", "ask", "agents", "serve", "schedule", "runs"}
+_SUBCOMMANDS = {"chat", "run", "ask", "agents", "serve", "backup", "schedule", "runs"}
 
 
 def main() -> None:

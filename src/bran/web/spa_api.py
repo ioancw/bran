@@ -21,14 +21,6 @@ from fastapi.responses import FileResponse, StreamingResponse
 from bran.agents import get_agent, list_agents
 from bran.background import spawn_background
 from bran.config import SETTINGS
-from bran.project_files import (
-    delete_file as delete_project_file,
-    files_prompt,
-    list_files as list_project_files,
-    save_attachment,
-    save_upload as save_project_file,
-    workdir_prompt,
-)
 from bran.persistence import (
     ChatRecord,
     ProjectRecord,
@@ -40,31 +32,46 @@ from bran.persistence import (
     delete_project,
     delete_project_memory,
     delete_schedule,
-    list_project_memories,
     get_chat,
-    get_project,
     get_output_states,
+    get_project,
     get_run,
     get_setting,
-    mark_outputs_read,
-    set_output_starred,
-    set_setting,
     insert_project,
     insert_run,
     insert_schedule,
     list_chats,
+    list_project_memories,
     list_projects,
     list_runs,
     list_schedules,
+    mark_outputs_read,
     move_chat_to_project,
+    set_output_starred,
     set_schedule_enabled,
+    set_setting,
     touch_chat,
     update_project,
     upsert_chat,
 )
+from bran.project_files import (
+    delete_file as delete_project_file,
+)
+from bran.project_files import (
+    files_prompt,
+    save_attachment,
+    workdir_prompt,
+)
+from bran.project_files import (
+    list_files as list_project_files,
+)
+from bran.project_files import (
+    save_upload as save_project_file,
+)
 from bran.runner import run_agent, stream_agent
 from bran.transcript import find_session_file, parse_transcript
 from bran.web.events import events_from_message, events_from_transcript_entry
+
 
 async def _require_same_origin(request: Request) -> None:
     """CSRF guard for the unauthenticated SPA surface.
@@ -798,6 +805,35 @@ async def upload_attachments(files: Annotated[list[UploadFile], File()]) -> list
         except ValueError as e:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
     return saved
+
+
+@router.get("/projects/{project_id}/files/{filename}")
+async def get_project_file(
+    project_id: str, filename: str, download: bool = False
+) -> FileResponse:
+    """Serve one file from the project's folder.
+
+    HTML documents (from `save_document`) open **inline** so the browser renders
+    them for print-to-PDF; `?download=1` forces a save-to-disk instead. The name
+    is sanitised to a single component and the resolved path re-checked to sit
+    inside the folder (defence in depth over `_safe_name`).
+    """
+    if get_project(project_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No project {project_id}")
+    from bran.project_files import _safe_name, files_dir
+
+    try:
+        safe = _safe_name(filename)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+    root = files_dir(project_id).resolve()
+    p = (root / safe).resolve()
+    if not (p == root or root in p.parents) or not p.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No file {filename!r}")
+    return FileResponse(
+        p, filename=safe,
+        content_disposition_type="attachment" if download else "inline",
+    )
 
 
 @router.delete("/projects/{project_id}/files/{filename}")

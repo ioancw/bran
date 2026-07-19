@@ -6,6 +6,7 @@
   //
   // The parent owns the value (bind:value) and what happens on submit
   // (onsubmit) — e.g. send a message, start a chat, fire a run.
+  import { fly } from 'svelte/transition'
   import type { Snippet } from 'svelte'
   import { api } from '../lib/api'
   import type { Attachment, Catalog } from '../lib/types'
@@ -19,6 +20,7 @@
     rows = 2,
     leading,
     onsubmit,
+    onstop,
     attach = false,
     attachments = $bindable([]),
   }: {
@@ -30,6 +32,9 @@
     rows?: number
     leading?: Snippet
     onsubmit?: () => void
+    // When provided, the send button becomes a stop button while busy —
+    // surfaces that can cancel their stream (the chat) pass this.
+    onstop?: () => void
     // Attachments (opt-in): paperclip / drag-drop / paste files. Uploaded
     // immediately; the parent reads `attachments` on submit and clears it.
     attach?: boolean
@@ -126,7 +131,9 @@
       if (e.key === 'ArrowUp') { e.preventDefault(); acIndex = Math.max(0, acIndex - 1); return }
       if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickAc(acIndex); return }
     }
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // `isComposing` guards against submitting mid-IME: pressing Enter to
+    // confirm a Japanese/Chinese conversion must not also send the message.
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault()
       submit()
     }
@@ -135,7 +142,7 @@
 
 <div class="composer-wrap">
   {#if acOpen}
-    <div class="ac-pop card">
+    <div class="ac-pop card elev-md" transition:fly={{ y: 4, duration: 120 }}>
       {#each acItems as it, i}
         <button type="button" class="ac-item" class:on={i === acIndex}
                 onmousedown={(e) => { e.preventDefault(); pickAc(i) }}>
@@ -154,8 +161,11 @@
       <div class="att-row">
         {#each attachments as a, i (a.path)}
           <span class="att-chip mono" title={a.path}>
-            📎 {a.name} <span class="text-muted">{a.size_human}</span>
-            <button class="att-x" onclick={() => removeAtt(i)} title="remove">×</button>
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            {a.name} <span class="text-muted">{a.size_human}</span>
+            <button class="att-x" onclick={() => removeAtt(i)} aria-label="remove {a.name}">
+              <svg width="9" height="9" viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+            </button>
           </span>
         {/each}
         {#if attError}<span style="color: var(--red); font-size: 11px;">{attError}</span>{/if}
@@ -168,18 +178,27 @@
       {#if attach}
         <button class="att-btn" disabled={attBusy} onclick={() => attInput?.click()}
                 title="attach files (or drag/paste them)" aria-label="Attach files">
-          {attBusy ? '…' : '📎'}
+          {#if attBusy}…{:else}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+          {/if}
         </button>
         <input bind:this={attInput} type="file" multiple style="display: none;" onchange={onAttPick} />
       {/if}
       {#if hint}<span class="composer-hint">{hint}</span>{/if}
-      <button class="composer-send" disabled={busy} onclick={submit} aria-label="Send">
-        {#if busy}
-          <span class="composer-spin"></span>
-        {:else}
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
-        {/if}
-      </button>
+      {#if busy && onstop}
+        <!-- Streaming and cancellable: the send button becomes Stop. -->
+        <button class="composer-send stop" onclick={onstop} aria-label="Stop generating" title="stop generating">
+          <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="1.5" y="1.5" width="9" height="9" rx="1.5" fill="currentColor"/></svg>
+        </button>
+      {:else}
+        <button class="composer-send" disabled={busy} onclick={submit} aria-label="Send">
+          {#if busy}
+            <span class="composer-spin"></span>
+          {:else}
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+          {/if}
+        </button>
+      {/if}
     </div>
   </div>
 </div>
@@ -205,6 +224,8 @@
     padding: 2px 8px;
   }
   .att-x {
+    display: inline-flex;
+    align-items: center;
     background: transparent;
     border: 0;
     color: var(--muted);
@@ -214,15 +235,17 @@
   }
   .att-x:hover { color: var(--red); }
   .att-btn {
+    display: inline-flex;
+    align-items: center;
     background: transparent;
     border: 0;
     cursor: pointer;
+    color: var(--muted);
     font-size: 14px;
     padding: 2px 4px;
-    opacity: 0.7;
-    transition: opacity 0.12s var(--transition);
+    transition: color var(--dur-1) var(--transition);
   }
-  .att-btn:hover { opacity: 1; }
+  .att-btn:hover { color: var(--fg); }
   .ac-pop {
     position: absolute;
     bottom: 100%;

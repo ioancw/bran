@@ -19,10 +19,11 @@ finished with.
 from __future__ import annotations
 
 import json
+import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterator
-
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Locating session files on disk
@@ -35,12 +36,21 @@ def _claude_projects_dirs() -> list[Path]:
     files in multiple Claude Code installations (Windows-side and WSL-side),
     each storing them under a different encoded-cwd directory. Search both.
     """
-    candidates = []
-    home = Path.home()
-    candidates.append(home / ".claude" / "projects")
-    # Linux home when running inside WSL: also try /home/<user>/.claude/projects
-    # (already covered by Path.home() in that env, but harmless to dedupe later).
-    return [p for p in candidates if p.exists()]
+    candidates = [Path.home() / ".claude" / "projects"]
+    # If the server runs as a different user than the one who created the
+    # sessions (e.g. accidentally launched via sudo, so home is /root),
+    # Path.home() misses the files entirely and every chat renders empty.
+    # Scan the other /home/<user> dirs too.
+    home_root = Path("/home")
+    if home_root.is_dir():
+        candidates.extend(sorted(home_root.glob("*/.claude/projects")))
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for p in candidates:
+        if p.exists() and p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
 
 
 def find_session_file(session_id: str) -> Path | None:
@@ -51,7 +61,10 @@ def find_session_file(session_id: str) -> Path | None:
     sessions created on another host, or for the orphaned smoke-test rows that
     were never actually sent to the SDK).
     """
-    if not session_id:
+    # The id is interpolated into a glob pattern below and reaches us straight
+    # from URL path params — restrict it to the session-id alphabet so crafted
+    # ids (slashes, "..", wildcards) can't widen the search outside ~/.claude.
+    if not session_id or not re.fullmatch(r"[A-Za-z0-9_-]+", session_id):
         return None
     for root in _claude_projects_dirs():
         for candidate in root.glob(f"*/{session_id}.jsonl"):

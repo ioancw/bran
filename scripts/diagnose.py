@@ -1,11 +1,10 @@
 """Narrow down which orchestrator config feature is crashing the CLI subprocess."""
 import asyncio
 import os
-import sys
-
-from claude_agent_sdk import ClaudeAgentOptions, query, ResultMessage
 
 from bran.personas import RESEARCH_AGENT, SUMMARISER_AGENT
+from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
+
 from bran.tools.spawn import spawn_agent_server
 
 # Capture the CLI subprocess's stderr so we can see what crashed it.

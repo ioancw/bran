@@ -166,35 +166,49 @@ def workdir_prompt(work_dir: str) -> str | None:
 
 
 def files_prompt(project_id: str) -> str | None:
-    """The "## Files" system-prompt section for a project, or None if empty.
+    """The "## Files" system-prompt section for a project.
 
-    Hands the agent the folder's absolute path and a manifest of what's in it,
-    plus how to use them. None when the project has no files (so we don't bloat
-    prompts with an empty section).
+    Describes the project's files folder as the shared read+write workspace: the
+    user uploads material into it, and agents both consult it AND save their own
+    deliverables back into it (so uploads and outputs live in one place). Always
+    present for a project — the folder is a capability even when empty.
     """
-    files = list_files(project_id)
-    if not files:
-        return None
     d = files_dir(project_id, create=True)
+    files = list_files(project_id)
     lines = [
         "## Files",
         (
-            "This project has working files the user uploaded. They live in this "
-            f"folder (use absolute paths): `{d}`"
+            "This project has a files folder — the shared workspace for this "
+            f"project (use absolute paths): `{d}`. The user uploads material "
+            "here, and you save what you produce here too, so inputs and outputs "
+            "live together."
         ),
         "",
     ]
-    for f in files[:_MAX_PROMPT_FILES]:
-        lines.append(f"- `{f['name']}` ({f['size_human']})")
-    if len(files) > _MAX_PROMPT_FILES:
-        lines.append(f"- …and {len(files) - _MAX_PROMPT_FILES} more (Glob the folder to see all).")
+    if files:
+        lines.append("Currently in the folder:")
+        for f in files[:_MAX_PROMPT_FILES]:
+            lines.append(f"- `{f['name']}` ({f['size_human']})")
+        if len(files) > _MAX_PROMPT_FILES:
+            lines.append(f"- …and {len(files) - _MAX_PROMPT_FILES} more (Glob the folder to see all).")
+    else:
+        lines.append("The folder is currently empty.")
     lines += [
         "",
         (
-            "Use `Read`/`Glob`/`Grep` on that folder to consult them, and "
-            "`mcp__bran_docs__read_pdf` for any `.pdf` (the plain Read tool can't "
-            "parse PDFs). Prefer these files over guessing when the user refers "
-            "to “my doc”, “the file”, “the report”, etc."
+            "Reading: use `Read`/`Glob`/`Grep` on that folder, and "
+            "`mcp__bran_docs__read_pdf` for any `.pdf` (the plain Read tool "
+            "can't parse PDFs). Prefer these files over guessing when the user "
+            "refers to “my doc”, “the file”, “the report”, etc."
+        ),
+        (
+            "Producing files: when the user wants a report/brief/write-up as a "
+            "file or PDF, call `mcp__bran_docs__save_document` (title + Markdown "
+            "body, with `\\(inline\\)` / `$$display$$` math) — it writes a "
+            "self-contained HTML file here that opens in Chrome and prints to "
+            "PDF. If you hold the `Write` tool you may also write raw files "
+            "(e.g. a `.tex` source, a `.csv`) into this folder. Always tell the "
+            "user the file name and that it's in the project's Files."
         ),
     ]
     return "\n".join(lines)

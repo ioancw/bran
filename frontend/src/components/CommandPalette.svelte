@@ -2,6 +2,7 @@
   // Ctrl/Cmd+K command palette: jump to any page, project, runner, or recent
   // chat, plus inline pause/resume actions. Data comes from the workspace
   // store (projects, chats) and a lazy schedules fetch on open.
+  import { fade, scale } from 'svelte/transition'
   import { api } from '../lib/api'
   import { navigate } from '../lib/router.svelte'
   import { workspace, loadProjects } from '../lib/workspace.svelte'
@@ -116,6 +117,9 @@
     } else if (e.key === 'Enter') {
       e.preventDefault()
       pick(idx)
+    } else if (e.key === 'Tab') {
+      // Keep focus in the palette — arrows navigate, Tab has nowhere to go.
+      e.preventDefault()
     }
   }
 </script>
@@ -123,8 +127,9 @@
 <svelte:window onkeydown={onWindowKeydown} />
 
 {#if open}
-  <button class="pal-overlay" aria-label="close palette" onclick={close}></button>
-  <div class="pal card" role="dialog" aria-label="command palette">
+  <button class="pal-overlay overlay-backdrop" aria-label="close palette" transition:fade={{ duration: 120 }} onclick={close}></button>
+  <div class="pal card elev-lg" role="dialog" aria-label="command palette"
+       transition:scale={{ duration: 140, start: 0.98 }}>
     <input
       bind:this={inputEl}
       bind:value={q}
@@ -132,10 +137,17 @@
       placeholder="Jump to, or do…"
       onkeydown={onInputKeydown}
       spellcheck="false"
+      role="combobox"
+      aria-expanded="true"
+      aria-controls="pal-listbox"
+      aria-activedescendant={shown.length ? `pal-opt-${idx}` : undefined}
+      aria-autocomplete="list"
     />
-    <div class="pal-list">
+    <div class="pal-list" role="listbox" id="pal-listbox" aria-label="commands">
       {#each shown as cmd, i (cmd.meta + cmd.label)}
-        <button class="pal-item" class:on={i === idx} onclick={() => pick(i)} onmouseenter={() => (idx = i)}>
+        <button class="pal-item" class:on={i === idx} id="pal-opt-{i}"
+                role="option" aria-selected={i === idx} tabindex="-1"
+                onclick={() => pick(i)} onmouseenter={() => (idx = i)}>
           <span class="pal-label">{cmd.label}</span>
           <span class="pal-meta label-cap">{cmd.meta}</span>
         </button>
@@ -149,10 +161,7 @@
 
 <style>
   .pal-overlay {
-    position: fixed;
-    inset: 0;
     z-index: 280;
-    background: rgba(0, 0, 0, 0.4);
     border: 0;
     padding: 0;
   }
@@ -160,11 +169,12 @@
     position: fixed;
     top: 16vh;
     left: 50%;
-    transform: translateX(-50%);
+    /* Svelte's scale transition owns `transform` while animating, so centre
+       with a margin instead of translateX(-50%). */
     width: min(560px, calc(100vw - 32px));
+    margin-left: calc(-1 * min(560px, calc(100vw - 32px)) / 2);
     z-index: 290;
     padding: 8px;
-    box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
   }
   .pal-input {
     width: 100%;

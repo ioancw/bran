@@ -207,8 +207,10 @@ export const api = {
 /**
  * POST a prompt and yield unified ChatEvents as they stream in over SSE.
  * Parses the `data: {...}\n\n` frames; the terminal `{type:'done'}` ends it.
+ * Aborting the signal is the "stop generating" path — the server sees the
+ * disconnect and cancels the agent turn.
  */
-export async function* streamChat(fields: Record<string, string>): AsyncGenerator<ChatEvent> {
+export async function* streamChat(fields: Record<string, string>, signal?: AbortSignal): AsyncGenerator<ChatEvent> {
   const body = new URLSearchParams()
   for (const [k, v] of Object.entries(fields)) if (v) body.set(k, v)
 
@@ -216,6 +218,7 @@ export async function* streamChat(fields: Record<string, string>): AsyncGenerato
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body,
+    signal,
   })
   if (!resp.ok) await raiseFor(resp, '/spa/chat/stream')
   if (!resp.body) throw new Error('Streaming unavailable (no response body)')

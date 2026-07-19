@@ -23,6 +23,7 @@
   let catalog = $state<Catalog>({ agents: [], commands: [] })
 
   async function load() {
+    error = null
     try {
       data = await api.projectDetail(projectId)
       name = data.project.name
@@ -49,7 +50,12 @@
   }
   async function deleteProject() {
     if (!(await confirmDialog(`Delete project "${name}"? Its chats become loose; nothing is lost.`))) return
-    await api.deleteProject(projectId)
+    try {
+      await api.deleteProject(projectId)
+    } catch (e) {
+      error = errorText(e)
+      return
+    }
     setScope(null)
     navigate('/projects')
   }

@@ -17,7 +17,6 @@ from typing import Any
 
 from claude_agent_sdk import tool
 
-
 # --- helpers ---------------------------------------------------------------
 
 def _ok(text: str) -> dict[str, Any]:

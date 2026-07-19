@@ -4,7 +4,7 @@
   // so history is the agent's scheduled/manual runs.)
   import { api } from '../lib/api'
   import { href, link, navigate } from '../lib/router.svelte'
-  import { fmtCost, relativeTime, localDateTime } from '../lib/time'
+  import { fmtCost, relativeTime, localDateTime, toDatetimeLocal } from '../lib/time'
   import { errorText } from '../lib/errors'
   import { toast } from '../lib/toast.svelte'
   import { confirmDialog } from '../lib/confirm.svelte'
@@ -41,6 +41,7 @@
   const projName = (id: string | null) => (id ? projects.find((p) => p.id === id)?.name ?? id : null)
 
   async function load() {
+    error = null // clear a stale banner so a recovered load shows clean
     try {
       const [schedules, ps, ag] = await Promise.all([api.schedules(), api.projects(), api.agents()])
       runner = schedules.find((s) => s.name === runnerName) ?? null
@@ -60,7 +61,7 @@
     eTask = runner.task ?? ''
     eKind = runner.run_at ? 'once' : 'cron'
     eCron = runner.cron ?? ''
-    eRunAt = runner.run_at ? runner.run_at.slice(0, 16) : '' // ISO → datetime-local
+    eRunAt = toDatetimeLocal(runner.run_at) // stored UTC ISO → local picker value
     eVerify = !!runner.verify
     eDelta = !!runner.delta
     editError = ''
@@ -73,7 +74,7 @@
     try {
       const fields =
         eKind === 'once'
-          ? { agent: eAgent, task: eTask, run_at: eRunAt, verify: eVerify, delta: eDelta }
+          ? { agent: eAgent, task: eTask, run_at: new Date(eRunAt).toISOString(), verify: eVerify, delta: eDelta }
           : { agent: eAgent, task: eTask, cron: eCron.trim(), verify: eVerify, delta: eDelta }
       runner = await api.updateSchedule(runner.name, fields)
       editing = false

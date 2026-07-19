@@ -16,7 +16,8 @@ back to "fetch the stored transcript".
 from __future__ import annotations
 
 import asyncio
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 # Cap the replay buffer so a pathologically chatty run can't hoard memory.
 # A subscriber attaching after 2000 events misses the oldest ones — rare, and

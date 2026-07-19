@@ -17,3 +17,5 @@ import tempfile
 _TMP = tempfile.mkdtemp(prefix="bran-tests-")
 os.environ.setdefault("BRAN_HOME", _TMP)
 os.environ.setdefault("BRAN_API_TOKEN", "test-token")
+# TestClient sends Host: testserver; the TrustedHost allowlist must admit it.
+os.environ.setdefault("BRAN_ALLOWED_HOSTS", "testserver")

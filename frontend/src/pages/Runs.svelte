@@ -42,6 +42,7 @@
     runs.filter((r) => (filter === 'all' || r.source === filter) && matchStatus(r, s)).length
 
   async function load() {
+    error = null // clear a stale banner so a recovered refresh shows clean
     try {
       runs = await api.runs({ limit, exclude_chats: true })
     } catch (e) {

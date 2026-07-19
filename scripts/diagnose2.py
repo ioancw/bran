@@ -1,11 +1,10 @@
 """Capture the actual subprocess stderr to see what's crashing claude.exe."""
 import asyncio
 import io
-import sys
-
-from claude_agent_sdk import ClaudeAgentOptions, query, ResultMessage
 
 from bran.personas import RESEARCH_AGENT
+from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
+
 from bran.tools.spawn import spawn_agent_server
 
 

@@ -25,7 +25,7 @@ def test_propose_plan_requires_a_plan():
 
 
 def test_propose_plan_registered_on_bran_server():
-    from bran.tools.spawn import spawn_agent_server  # noqa: F401 — import side check
     from bran.agents import get_agent
+    from bran.tools.spawn import spawn_agent_server  # noqa: F401 — import side check
 
     assert "mcp__bran__propose_plan" in get_agent("orchestrator").tools

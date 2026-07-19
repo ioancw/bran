@@ -404,6 +404,12 @@ def _add_job(scheduler: AsyncIOScheduler, rec: ScheduleRecord) -> None:
         except ValueError:
             log.exception("skipping schedule %s — invalid cron", rec.name)
             return
+    # Misfire policy: a one-shot must fire even if its moment passed while the
+    # server was down (grace=None = unlimited) — _fire disables it afterwards,
+    # so a still-enabled past-due one-shot re-registering on every restart and
+    # never firing (a "zombie") can't happen. Cron jobs get an hour: a fire
+    # missed during a restart window still runs (coalesced to one), while a
+    # server down longer than that skips to the next regular slot.
     scheduler.add_job(
         _fire,
         trigger=trigger,
@@ -413,7 +419,7 @@ def _add_job(scheduler: AsyncIOScheduler, rec: ScheduleRecord) -> None:
         replace_existing=True,
         coalesce=True,
         max_instances=1,
-        misfire_grace_time=60,
+        misfire_grace_time=None if once else 3600,
     )
 
 

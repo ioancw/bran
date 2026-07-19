@@ -24,7 +24,23 @@ export function fmtDuration(ms: number | null | undefined): string {
 
 export function localDateTime(iso: string | null): string {
   if (!iso) return '—'
-  return iso.replace('T', ' ').slice(0, 19)
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return iso // unparseable — show it raw rather than "Invalid Date"
+  return d.toLocaleString(undefined, {
+    year: 'numeric', month: 'short', day: '2-digit',
+    hour: '2-digit', minute: '2-digit',
+  })
+}
+
+/** ISO timestamp → the value a `<input type="datetime-local">` expects, in the
+ * viewer's LOCAL time (YYYY-MM-DDTHH:mm). Slicing the raw ISO instead would
+ * show the UTC wall-clock in a local-time picker (off by the tz offset). */
+export function toDatetimeLocal(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 /** "in 2h 14m" countdown to a future ISO timestamp; pass `nowMs` so a ticking

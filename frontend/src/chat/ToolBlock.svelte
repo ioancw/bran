@@ -1,6 +1,6 @@
 <script lang="ts">
   // Collapsible tool call + paired result, ported from chat.html's tool block.
-  import type { ToolItem } from './events'
+  import { toolDisplayName, type ToolItem } from './events'
   let { tool }: { tool: ToolItem } = $props()
 
   let expanded = $state(false)
@@ -15,6 +15,7 @@
     if (['bash', 'powershell'].includes(n)) return 'shell'
     if (n.startsWith('web') || n.startsWith('mcp__tavily')) return 'web'
     if (n === 'agent' || n === 'task' || n.startsWith('mcp__bran__spawn')) return 'agent'
+    if (n.includes('fetch') || n.includes('search')) return 'web'
     return 'misc'
   }
   function shortPath(p: unknown): string {
@@ -39,6 +40,12 @@
     }
     if (n === 'websearch' || n === 'mcp__tavily__tavily_search') return i.query ? truncate(i.query, 60) : ''
     if (n === 'webfetch' || n === 'mcp__tavily__tavily_extract') return i.url ? truncate(i.url, 60) : ''
+    // Unknown tools (MCP etc.): surface the most informative string param, so
+    // "fetch_url  https://feeds.bbci.co.uk/…" instead of a bare name.
+    for (const k of ['url', 'query', 'file_path', 'path', 'pattern', 'command', 'task', 'name', 'prompt', 'text']) {
+      const v = i[k]
+      if (typeof v === 'string' && v.trim()) return truncate(v, 60)
+    }
     return ''
   }
   function preview(name: string, text: string, isError: boolean): string {
@@ -79,7 +86,7 @@
 <div class="tool-block tool-cat-{cat}" class:running={tool.status === 'running'} class:errored={tool.isError} class:expanded>
   <button type="button" class="tool-header" onclick={() => (expanded = !expanded)}>
     <span class="tool-status-dot {dotClass}"></span>
-    <span class="tool-name">{tool.name}</span>
+    <span class="tool-name" title={tool.name}>{toolDisplayName(tool.name)}</span>
     <span class="tool-summary">{summary(tool.name, tool.input)}</span>
     <span class="tool-result-preview" class:error={tool.isError}>{preview(tool.name, tool.resultText, tool.isError)}</span>
     <span class="tool-duration">{tool.durationMs != null ? `${(tool.durationMs / 1000).toFixed(1)}s` : ''}</span>

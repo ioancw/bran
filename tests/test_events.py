@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from bran.transcript import Entry
 from bran.web.events import events_from_message, events_from_transcript_entry
 
-
 # --- Stand-ins whose class __name__ matches the SDK types events.py keys off. ---
 
 class TextBlock:

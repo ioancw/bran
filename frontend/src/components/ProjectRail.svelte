@@ -8,7 +8,10 @@
   import { workspace, loadProjects } from '../lib/workspace.svelte'
   import { relativeTime, fmtCost } from '../lib/time'
   import { confirmDialog } from '../lib/confirm.svelte'
+  import { toast } from '../lib/toast.svelte'
+  import { errorText } from '../lib/errors'
   import Section from './Section.svelte'
+  import Skeleton from './Skeleton.svelte'
   import StatusBadge from './StatusBadge.svelte'
   import CronField from './CronField.svelte'
   import type { AgentInfo, ProjectDetail, RunRecord } from '../lib/types'
@@ -26,6 +29,7 @@
   } = $props()
 
   let data = $state<ProjectDetail | null>(null)
+  let railLoading = $state(true)
   let agents = $state<AgentInfo[]>([])
   // Background runs spawned by the current chat (chat mode only).
   let chatRuns = $state<RunRecord[]>([])
@@ -53,6 +57,8 @@
       workDir = data.project.work_dir ?? ''
     } catch {
       /* ignore — rail just stays empty */
+    } finally {
+      railLoading = false
     }
   }
   $effect(() => {
@@ -95,17 +101,34 @@
   async function addMem() {
     const t = newMemory.trim()
     if (!t) return
-    await api.addMemory(projectId, t)
+    try {
+      await api.addMemory(projectId, t)
+    } catch (e) {
+      toast(errorText(e), 'err')
+      return
+    }
     newMemory = ''
     await load()
   }
   async function removeMem(id: string) {
-    await api.deleteMemory(projectId, id)
+    try {
+      await api.deleteMemory(projectId, id)
+    } catch (e) {
+      toast(errorText(e), 'err')
+      return
+    }
     await load()
   }
   async function addSchedule() {
     if (!sName.trim() || !sCron.trim()) return
-    await api.newSchedule({ name: sName.trim(), agent: sAgent, cron: sCron.trim(), task: sTask, project_id: projectId })
+    try {
+      await api.newSchedule({ name: sName.trim(), agent: sAgent, cron: sCron.trim(), task: sTask, project_id: projectId })
+    } catch (e) {
+      // Most often a bad cron or a duplicate runner name (400) — keep the form
+      // open so the user can fix it rather than silently swallowing the error.
+      toast(errorText(e), 'err')
+      return
+    }
     sName = ''
     sTask = ''
     showSchedForm = false
@@ -113,7 +136,12 @@
   }
   async function removeSchedule(n: string) {
     if (!(await confirmDialog(`Delete runner "${n}"?`))) return
-    await api.deleteSchedule(n)
+    try {
+      await api.deleteSchedule(n)
+    } catch (e) {
+      toast(errorText(e), 'err')
+      return
+    }
     await load()
   }
 
@@ -146,14 +174,26 @@
     dragOver = false
     if (e.dataTransfer?.files?.length) void doUpload(e.dataTransfer.files)
   }
+  // Direct URL to a project file (served inline: HTML docs render in the tab so
+  // you can print to PDF; other types open/download per the browser).
+  function fileUrl(name: string): string {
+    return `/spa/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(name)}`
+  }
   async function removeFile(name: string) {
     if (!(await confirmDialog(`Remove "${name}" from this project?`))) return
-    await api.deleteFile(projectId, name)
+    try {
+      await api.deleteFile(projectId, name)
+    } catch (e) {
+      toast(errorText(e), 'err')
+      return
+    }
     await load()
   }
 </script>
 
-{#if data}
+{#if !data && railLoading}
+  <Skeleton rows={4} />
+{:else if data}
   <div class="space-y-4">
     <!-- Progress is the chat-side "what's happening now"; the home page is for
          setup, so it leads with editable config instead. -->
@@ -303,7 +343,8 @@
         <div class="space-y-2" style="margin-bottom: 10px;">
           {#each data.files as f}
             <div class="file-row">
-              <span class="file-name mono" title={f.name}>{f.name}</span>
+              <a class="file-name mono" href={fileUrl(f.name)} target="_blank" rel="noopener"
+                 title="open {f.name} in a new tab">{f.name}</a>
               <span class="text-dim" style="font-size: 10px; white-space: nowrap;">{f.size_human}</span>
               {#if mode === 'home'}
                 <button class="btn-ghost" title="remove" onclick={() => removeFile(f.name)} aria-label="remove {f.name}">×</button>
@@ -394,7 +435,9 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--fg);
+    text-decoration: none;
   }
+  a.file-name:hover { color: var(--accent-soft); text-decoration: underline; }
   .dropzone {
     border: 1px dashed var(--border);
     border-radius: var(--radius);

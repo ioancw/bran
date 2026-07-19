@@ -18,6 +18,10 @@
 
 html, body {
   height: 100%;
+  /* The old Tailwind preflight zeroed this; without it the browser's default
+     8px body margin insets the whole app and leaks a canvas-coloured strip
+     below the clipped 100vh shell. */
+  margin: 0;
   overscroll-behavior-y: none;
 }
 
@@ -72,6 +76,19 @@ body::after {
     transparent 55%,
     rgba(90, 60, 30, 0.08) 100%
   );
+}
+
+/* Reduced motion: one global kill-switch. The !important beats inline styles,
+   so it also neutralises Svelte's JS-driven transitions (they animate via
+   injected keyframes + inline animation properties). Individual components
+   don't need their own guards. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* Selection */
@@ -150,7 +167,7 @@ a:hover { text-decoration: underline; }
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.15s var(--transition);
+  transition: background var(--dur-1) var(--transition);
 }
 .btn-primary:hover { background: var(--accent-soft); border-color: var(--accent-soft); }
 
@@ -164,9 +181,39 @@ a:hover { text-decoration: underline; }
   font-family: var(--font-ui);
   font-size: 12px;
   cursor: pointer;
-  transition: all 0.15s var(--transition);
+  transition: all var(--dur-1) var(--transition);
 }
 .btn-outline:hover { background: var(--surface2); color: var(--fg-bright); border-color: var(--muted); }
+
+/* Destructive CTA — solid red so "delete" reads as consequential. Same
+   geometry as .btn-primary; lives here (not in a component) so every
+   destructive control shares one look. */
+.btn-danger {
+  background: var(--red);
+  color: #fff;
+  border: 1px solid var(--red);
+  padding: 6px 14px;
+  border-radius: var(--radius);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: filter var(--dur-1) var(--transition);
+}
+.btn-danger:hover { filter: brightness(1.12); }
+
+/* Quiet text button — mono accent link-as-button ("show result", "edit →").
+   The one primitive behind the app's various inline text actions. */
+.btn-text {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent-soft);
+}
+.btn-text:hover { text-decoration: underline; }
 
 /* Quiet ghost button (for "cancel", "remove" etc.) */
 .btn-ghost {
@@ -177,7 +224,7 @@ a:hover { text-decoration: underline; }
   border-radius: var(--radius);
   font-size: 11px;
   cursor: pointer;
-  transition: all 0.15s var(--transition);
+  transition: all var(--dur-1) var(--transition);
 }
 .btn-ghost:hover { color: var(--fg); }
 .btn-ghost.danger:hover { color: var(--red); }
@@ -193,7 +240,7 @@ input[type="email"].field, select.field, textarea.field {
   font-family: var(--font-ui);
   font-size: 13px;
   width: 100%;
-  transition: border-color 0.15s var(--transition);
+  transition: border-color var(--dur-1) var(--transition);
 }
 .field:focus {
   outline: none;
@@ -212,13 +259,16 @@ input[type="email"].field, select.field, textarea.field {
 .composer {
   background: var(--surface);
   border: 1px solid var(--border2);
-  border-radius: 16px;
+  border-radius: 18px;
   padding: 10px 12px 8px;
-  transition: border-color 0.15s var(--transition), box-shadow 0.15s var(--transition);
+  /* The input is the room's anchor — it floats above the canvas even at rest,
+     and gains presence when engaged. */
+  box-shadow: var(--shadow-md);
+  transition: border-color var(--dur-1) var(--transition), box-shadow var(--dur-1) var(--transition);
 }
 .composer:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-glow);
+  box-shadow: var(--shadow-md), 0 0 0 3px var(--accent-glow);
 }
 .composer-input {
   width: 100%;
@@ -267,7 +317,7 @@ input[type="email"].field, select.field, textarea.field {
   justify-content: center;
   cursor: pointer;
   flex-shrink: 0;
-  transition: background 0.15s var(--transition), transform 0.1s var(--transition);
+  transition: background var(--dur-1) var(--transition), transform 0.1s var(--transition);
 }
 .composer-send:hover:not(:disabled) { background: var(--accent-soft); }
 .composer-send:active:not(:disabled) { transform: scale(0.94); }
@@ -281,6 +331,21 @@ input[type="email"].field, select.field, textarea.field {
   animation: composer-spin 0.7s linear infinite;
 }
 @keyframes composer-spin { to { transform: rotate(360deg); } }
+
+/* ---------------------------------------------------------------------------
+   Overlay recipe — the one visual language for every floating surface.
+   Backdrops: the shared scrim + blur. Panels: elevation via the shadow scale.
+   Components apply these classes instead of hand-rolling shadows/backdrops.
+   --------------------------------------------------------------------------- */
+.overlay-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--backdrop);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+}
+/* .elev-sm/md/lg live at the end of this file so they win over component
+   shadows (e.g. .card) when both classes sit on one element. */
 
 /* Status pill — for run states. Use with one of the modifier classes. */
 .pill {
@@ -342,16 +407,22 @@ input[type="email"].field, select.field, textarea.field {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 16px;
-  transition: border-color 0.18s var(--transition), background 0.18s var(--transition);
+  /* A whisper of shadow so surfaces read as paper laid on the desk, not
+     lines drawn on it. */
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--dur-2) var(--transition), background var(--dur-2) var(--transition),
+              box-shadow var(--dur-2) var(--transition), transform var(--dur-2) var(--transition);
 }
 .card.flush { padding: 0; }
-/* Anchor cards (e.g. dashboard briefings, project tiles) gain a soft hover
- * accent. Applied via :is so the hover rule is just one selector. */
+/* Anchor cards (dashboard briefings, project tiles, outputs) lift on hover —
+ * the whole card is the affordance, so the whole card responds. */
 a.card:hover,
 a.card.block:hover,
 a.card.project-card:hover,
 a.card.output-card:hover {
   border-color: var(--accent-soft);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
 }
 
 /* Card-quiet — for action affordances that should feel secondary to the
@@ -420,7 +491,7 @@ table.bran-table .mono { font-family: var(--font-mono); font-size: 12px; color: 
   font-size: 13px;
   color: var(--fg-dim);
   text-decoration: none;
-  transition: background 0.12s var(--transition);
+  transition: background var(--dur-1) var(--transition);
 }
 .sidebar .nav-item:hover { background: var(--surface2); color: var(--fg); }
 .sidebar .nav-item.active {
@@ -1308,9 +1379,10 @@ table.bran-table .mono { font-family: var(--font-mono); font-size: 12px; color: 
   gap: 4px;
   margin-left: auto;
   opacity: 0;
-  transition: opacity 0.15s ease;
+  transition: opacity var(--dur-1) var(--transition);
 }
-.card:hover .msg-actions { opacity: 1; }
+.card:hover .msg-actions,
+.card:focus-within .msg-actions { opacity: 1; }
 @media (hover: none) {
   .msg-actions { opacity: 1; }
 }
@@ -1473,7 +1545,7 @@ a:hover .editorial-arrow,
   position: fixed;
   inset: 0;
   z-index: 225;
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--backdrop);
   border: 0;
   padding: 0;
 }
@@ -1490,8 +1562,8 @@ a:hover .editorial-arrow,
     height: 100dvh;
     z-index: 230;
     transform: translateX(-105%);
-    transition: transform 0.22s var(--transition);
-    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.35);
+    transition: transform var(--dur-3) var(--transition);
+    box-shadow: var(--shadow-lg);
   }
   .sidebar.open { transform: translateX(0); }
 
@@ -1511,3 +1583,11 @@ a:hover .editorial-arrow,
   .sidebar.open { transform: none; } /* drawer class is inert on desktop */
 }
 
+
+/* ===========================================================================
+ * Elevation helpers — LAST in the file on purpose: an .elev-* class on a
+ * .card (modal, palette, popover) must win over the card's resting shadow.
+ * ========================================================================= */
+.elev-sm { box-shadow: var(--shadow-sm); }
+.elev-md { box-shadow: var(--shadow-md); }
+.elev-lg { box-shadow: var(--shadow-lg); }
