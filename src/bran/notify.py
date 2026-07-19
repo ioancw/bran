@@ -4,8 +4,13 @@ A notifier is any callable taking a `RunRecord` — sync or async. Register
 your own with `register_notifier(fn)`, or rely on the built-ins that
 auto-install based on environment variables:
 
-    BRAN_NOTIFY_WEBHOOK_URL=https://ntfy.sh/your-topic   (POST run JSON)
+    BRAN_NOTIFY_WEBHOOK_URL=https://ntfy.sh/your-topic   (push per finished run)
+    BRAN_NOTIFY_FORMAT=ntfy|json                         (auto-detected from URL)
     BRAN_NOTIFY_BELL=1                                   (console bell + line)
+
+The webhook skips chat-turn runs (the user is watching those live); it fires
+for runner/spawn/manual background work, and escalates alert-mode runs that
+crossed their significance bar.
 
 The runner calls `notify_completion(record)` in a `finally` block, so a
 notifier failure can't break the run. Failed notifiers are logged and
@@ -88,27 +93,43 @@ async def notify_completion(record: RunRecord) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def webhook_notifier(record: RunRecord) -> None:
-    """POST the run record as JSON to BRAN_NOTIFY_WEBHOOK_URL.
+def _webhook_format(url: str) -> str:
+    """"ntfy" (plain-text body a phone notification can show) or "json" (full
+    record for Slack/Discord/custom endpoints). Auto-detected from the URL
+    host; override with BRAN_NOTIFY_FORMAT=ntfy|json (e.g. self-hosted ntfy
+    on a domain the auto-detect can't recognise)."""
+    fmt = (os.getenv("BRAN_NOTIFY_FORMAT") or "").strip().lower()
+    if fmt in ("ntfy", "json"):
+        return fmt
+    from urllib.parse import urlsplit
 
-    Works with ntfy.sh, Slack incoming webhooks, Discord webhooks (with a tiny
-    payload tweak), or any custom endpoint.
+    host = urlsplit(url).hostname or ""
+    return "ntfy" if (host == "ntfy.sh" or host.startswith("ntfy.")) else "json"
+
+
+async def webhook_notifier(record: RunRecord) -> None:
+    """Push the run to BRAN_NOTIFY_WEBHOOK_URL.
+
+    ntfy targets get a plain-text body (the result snippet — what you want on
+    a lock screen); everything else (Slack/Discord/custom) gets the run record
+    as JSON with `summary` and `alert` fields added.
     """
     url = os.getenv("BRAN_NOTIFY_WEBHOOK_URL")
     if not url:
         return
+    # Chat turns are a conversation the user is already watching — pushing
+    # them to a phone would ping on every message they themselves sent.
+    # Background work (runner/spawn/manual) is what notifications are for.
+    if record.source == "chat":
+        return
     # Lazy import keeps httpx off the hot path until a notifier actually fires.
     import httpx
 
-    payload = asdict(record)
-    # A human-readable taste of the output so consumers (ntfy/Slack/Discord) can
-    # show the actual result, not just status. The full text stays in `result`.
-    payload["summary"] = _result_snippet(record)
-    payload["alert"] = is_alert(record)
+    alert = is_alert(record)
     # ntfy.sh-friendly headers; harmless for other targets. Alert-mode runs
     # that crossed their significance bar outrank everything — that's the
     # whole point of a sensing runner.
-    if payload["alert"]:
+    if alert:
         headers = {
             "Title": f"bran ALERT: {record.agent}",
             "Priority": "urgent",
@@ -122,7 +143,17 @@ async def webhook_notifier(record: RunRecord) -> None:
         }
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            await client.post(url, json=payload, headers=headers)
+            if _webhook_format(url) == "ntfy":
+                body = _result_snippet(record, limit=600)
+                if record.status != "completed":
+                    body = (record.error or "").strip()[:600]
+                body = body or f"{record.agent} {record.status}"
+                await client.post(url, content=body.encode("utf-8"), headers=headers)
+            else:
+                payload = asdict(record)
+                payload["summary"] = _result_snippet(record)
+                payload["alert"] = alert
+                await client.post(url, json=payload, headers=headers)
     except Exception:
         log.exception("webhook notifier failed")
 

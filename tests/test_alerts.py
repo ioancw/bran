@@ -113,32 +113,39 @@ def test_spa_update_distinguishes_absent_from_empty_alert():
         assert r.json()["alert"] == ""
 
 
-def test_webhook_payload_flags_alert(monkeypatch):
-    """The webhook notifier marks alert runs and escalates the ntfy headers."""
-    import bran.notify as notify
-
+class _FakeClient:
     captured: dict = {}
 
-    class _FakeClient:
-        def __init__(self, *a, **k):
-            pass
+    def __init__(self, *a, **k):
+        pass
 
-        async def __aenter__(self):
-            return self
+    async def __aenter__(self):
+        return self
 
-        async def __aexit__(self, *a):
-            return False
+    async def __aexit__(self, *a):
+        return False
 
-        async def post(self, url, json=None, headers=None):
-            captured["payload"] = json
-            captured["headers"] = headers
+    async def post(self, url, json=None, content=None, headers=None):
+        _FakeClient.captured.clear()
+        _FakeClient.captured.update(payload=json, content=content, headers=headers)
 
+
+def _patch_webhook(monkeypatch, url: str) -> dict:
     import httpx
 
-    monkeypatch.setenv("BRAN_NOTIFY_WEBHOOK_URL", "http://example.invalid/hook")
+    monkeypatch.setenv("BRAN_NOTIFY_WEBHOOK_URL", url)
     monkeypatch.setattr(httpx, "AsyncClient", _FakeClient)
+    _FakeClient.captured.clear()
+    return _FakeClient.captured
 
+
+def test_webhook_payload_flags_alert(monkeypatch):
+    """JSON targets get the record with alert/summary; headers escalate."""
     import asyncio
+
+    import bran.notify as notify
+
+    captured = _patch_webhook(monkeypatch, "http://example.invalid/hook")
 
     asyncio.run(notify.webhook_notifier(_run("completed", f"{ALERT_MARKER}: it happened")))
     assert captured["payload"]["alert"] is True
@@ -147,3 +154,48 @@ def test_webhook_payload_flags_alert(monkeypatch):
     asyncio.run(notify.webhook_notifier(_run("completed", "calm seas")))
     assert captured["payload"]["alert"] is False
     assert captured["headers"]["Priority"] == "default"
+
+
+def test_webhook_ntfy_sends_plain_text_snippet(monkeypatch):
+    """ntfy targets get a phone-friendly text body, not a JSON blob."""
+    import asyncio
+
+    import bran.notify as notify
+
+    captured = _patch_webhook(monkeypatch, "https://ntfy.sh/some-topic")
+
+    asyncio.run(notify.webhook_notifier(_run("completed", f"{ALERT_MARKER}: cable fell 1.4%")))
+    assert captured["payload"] is None
+    assert captured["content"].decode().startswith(ALERT_MARKER)
+    assert captured["headers"]["Priority"] == "urgent"
+
+    # failed runs push the error text
+    r = _run("failed", "")
+    r.error = "HTTP 500 fetching feed"
+    asyncio.run(notify.webhook_notifier(r))
+    assert captured["content"].decode() == "HTTP 500 fetching feed"
+    assert captured["headers"]["Priority"] == "high"
+
+
+def test_webhook_skips_chat_turns(monkeypatch):
+    """Chat turns must not ping the phone — the user is already watching."""
+    import asyncio
+
+    import bran.notify as notify
+
+    captured = _patch_webhook(monkeypatch, "https://ntfy.sh/some-topic")
+    r = _run("completed", "hi there")
+    r.source = "chat"
+    asyncio.run(notify.webhook_notifier(r))
+    assert not captured  # no post happened
+
+
+def test_webhook_format_detection(monkeypatch):
+    from bran.notify import _webhook_format
+
+    monkeypatch.delenv("BRAN_NOTIFY_FORMAT", raising=False)
+    assert _webhook_format("https://ntfy.sh/topic") == "ntfy"
+    assert _webhook_format("https://ntfy.example.com/topic") == "ntfy"
+    assert _webhook_format("https://hooks.slack.com/services/x") == "json"
+    monkeypatch.setenv("BRAN_NOTIFY_FORMAT", "ntfy")
+    assert _webhook_format("https://hooks.slack.com/services/x") == "ntfy"
