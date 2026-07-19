@@ -133,9 +133,38 @@ def _delta_append_system(schedule_id: str | None) -> str | None:
         f"Your previous scheduled run (ended {prior[0].ended_at}) produced the "
         "report below. Focus this run on what is NEW or CHANGED since then: lead "
         "with the deltas, dedupe anything already covered, and don't restate "
-        "unchanged items beyond a brief note. If nothing meaningful has changed, "
-        "say so in one short paragraph instead of regenerating the full report.\n\n"
+        "unchanged items beyond a brief note. The most valuable signal is the "
+        "second derivative — call out anything ACCELERATING (a story growing "
+        "since last time, a move extending, coverage spreading across sources) "
+        "and distinguish it from one-off news. Close with a line or two on what "
+        "the changes imply. If nothing meaningful has changed, say so in one "
+        "short paragraph instead of regenerating the full report.\n\n"
         "<previous_report>\n" + prev + "\n</previous_report>"
+    )
+
+
+def _alert_append_system(condition: str) -> str:
+    """Alert mode: the runner is a sensing loop with a significance bar. The
+    agent judges its own findings against the bar; only a crossed bar produces
+    the ALERT marker, which notifiers escalate (bran.notify) and the UI badges.
+    Cron stays the sampling rate — alert changes delivery prominence, so a
+    frequent quiet runner doesn't spam."""
+    from bran.notify import ALERT_MARKER
+
+    return (
+        "## Alert mode — significance bar\n"
+        "This is a sensing run. The user does not want noise; they want to be "
+        "interrupted only when the bar below is crossed.\n\n"
+        f"<significance_bar>\n{condition.strip()}\n</significance_bar>\n\n"
+        "After gathering your findings, judge them against that bar.\n"
+        f"- Bar crossed → your final report MUST start with the line "
+        f"`{ALERT_MARKER}: <one sentence — what crossed the bar and why it "
+        "matters>` followed by the supporting detail. Reserve this strictly "
+        "for a genuine crossing.\n"
+        "- Bar not crossed → produce your normal report WITHOUT that marker "
+        "and note in one line that nothing crossed the alert bar. Never use "
+        "the marker for near-misses; mention those as 'approaching the bar' "
+        "in the body instead."
     )
 
 
@@ -273,6 +302,7 @@ async def _fire(
         p for p in (
             _project_append_system(project_id),
             _delta_append_system(schedule_id) if (rec is not None and rec.delta) else None,
+            _alert_append_system(rec.alert) if (rec is not None and rec.alert.strip()) else None,
         ) if p
     ]
     append_system = "\n\n".join(append_parts) if append_parts else None

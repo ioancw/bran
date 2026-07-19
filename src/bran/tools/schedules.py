@@ -114,10 +114,16 @@ def _next_run(rec: Any) -> str:
         "- delta: true → each run sees the previous run's report and reports only "
         "what's NEW/CHANGED (great for recurring news/research runners). Default "
         "false.\n"
+        "- alert: a natural-language significance bar that turns the runner into "
+        "a sensing loop (e.g. 'GBP/USD moves more than 1% intraday, or the BoE "
+        "acts outside a scheduled meeting'). Runs that cross the bar lead with "
+        "an alert marker and notifications are escalated; quiet runs stay "
+        "low-key. Pass an empty string for a normal runner. Pairs well with "
+        "delta and a frequent schedule.\n"
         "Confirm the details back to the user (agent, when, next fire time)."
     ),
     {"name": str, "agent": str, "task": str, "schedule": str, "project_id": str,
-     "verify": bool, "delta": bool},
+     "verify": bool, "delta": bool, "alert": str},
 )
 async def create_runner(args: dict[str, Any]) -> dict[str, Any]:
     from bran.agents import get_agent
@@ -129,6 +135,7 @@ async def create_runner(args: dict[str, Any]) -> dict[str, Any]:
     project_id = (args.get("project_id") or "").strip() or None
     verify = bool(args.get("verify"))
     delta = bool(args.get("delta"))
+    alert = (args.get("alert") or "").strip()
 
     if not name:
         return _err("a unique name is required.")
@@ -148,6 +155,7 @@ async def create_runner(args: dict[str, Any]) -> dict[str, Any]:
     rec = ScheduleRecord.new(
         name=name, agent=agent, task=task, cron=cron,
         project_id=project_id, run_at=run_at, verify=verify, delta=delta,
+        alert=alert,
     )
     insert_schedule(rec)
     _register(rec)
@@ -155,6 +163,8 @@ async def create_runner(args: dict[str, Any]) -> dict[str, Any]:
     modes = "".join(
         f" [{m}]" for m, on in (("verify", verify), ("delta", delta)) if on
     )
+    if alert:
+        modes += f" [alert: {alert}]"
     return _ok(f"Created runner '{name}': {agent} runs {_when(rec)}{scope}{modes}. {_next_run(rec)}")
 
 
@@ -229,10 +239,12 @@ async def _set_enabled(name: str, enabled: bool) -> dict[str, Any]:
         "for a one-shot).\n"
         "- verify / delta: 'true' or 'false' to change the runner's output-quality "
         "modes (see create_runner), or an empty string to leave as-is.\n"
+        "- alert: a NEW significance bar (see create_runner), the word 'off' to "
+        "remove the current one, or an empty string to leave as-is.\n"
         "Confirm the new settings and next fire time back."
     ),
     {"name": str, "agent": str, "task": str, "schedule": str,
-     "verify": str, "delta": str},
+     "verify": str, "delta": str, "alert": str},
 )
 async def update_runner(args: dict[str, Any]) -> dict[str, Any]:
     from bran.agents import get_agent
@@ -268,9 +280,13 @@ async def update_runner(args: dict[str, Any]) -> dict[str, Any]:
             return False
         return None  # empty / unrecognised = leave unchanged
 
+    raw_alert = (args.get("alert") or "").strip()
+    # Tri-state text field: "" = leave as-is, "off"/"none" = clear, else = set.
+    alert = None if not raw_alert else ("" if raw_alert.lower() in ("off", "none") else raw_alert)
+
     new = update_schedule(
         name, agent=agent, task=task, cron=cron, run_at=run_at,
-        verify=_tri("verify"), delta=_tri("delta"),
+        verify=_tri("verify"), delta=_tri("delta"), alert=alert,
     )
     _unregister(name)
     _register(new)  # no-op when paused

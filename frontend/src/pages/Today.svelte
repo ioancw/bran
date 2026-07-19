@@ -8,7 +8,7 @@
   import { href, link } from '../lib/router.svelte'
   import { relativeTime, localDateTime, localClock, countdown, fmtCost } from '../lib/time'
   import { errorText } from '../lib/errors'
-  import { isSuperseded, verifyBadge } from '../lib/verification'
+  import { isAlertResult, isSuperseded, verifyBadge } from '../lib/verification'
   import Page from '../components/Page.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import EmptyState from '../components/EmptyState.svelte'
@@ -170,6 +170,7 @@
                     {#if !r.read_at}<span class="new-dot" title="unread"></span>{/if}
                     <span class="text-bright" style="font-size: 14px; font-weight: 500;">{titleFor(r)}</span>
                     <span class="src src-{r.source}">{r.source}</span>
+                    {#if isAlertResult(r)}<span class="alert-tag" title="this run crossed its alert bar">🚨 alert</span>{/if}
                     {#if runnerFor(r)?.delta}<span class="delta-tag" title="delta report — only what changed since the last run">Δ</span>{/if}
                     {#if badge}<span class="pill {badge.tone === 'ok' ? 'ok' : 'warn'}" style="font-size: 10px;" title="reviewed by the verification evaluator">{badge.label}</span>{/if}
                     <span class="ml-auto text-dim" style="font-size: 11px; white-space: nowrap;" title={localDateTime(r.started_at)}>{relativeTime(r.started_at)}</span>
@@ -287,6 +288,17 @@
     color: var(--accent-soft);
     font-family: var(--font-mono);
     font-size: 10px;
+    cursor: help;
+  }
+  .alert-tag {
+    display: inline-block;
+    padding: 0 6px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--red) 14%, transparent);
+    color: var(--red);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    white-space: nowrap;
     cursor: help;
   }
 

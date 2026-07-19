@@ -40,6 +40,7 @@
   let fProject = $state('') // '' = standalone
   let fVerify = $state(false) // evaluator reviews each output, re-runs once on failure
   let fDelta = $state(false) // each run sees the previous report, reports only changes
+  let fAlert = $state('') // significance bar; '' = normal (non-sensing) runner
 
   async function load() {
     error = null // clear a stale banner so a recovered refresh shows clean
@@ -72,9 +73,9 @@
 
   async function create() {
     if (!fName.trim()) return
-    const fields: { name: string; agent: string; task: string; project_id?: string; cron?: string; run_at?: string; verify?: boolean; delta?: boolean } = {
+    const fields: { name: string; agent: string; task: string; project_id?: string; cron?: string; run_at?: string; verify?: boolean; delta?: boolean; alert?: string } = {
       name: fName.trim(), agent: fAgent, task: fTask, project_id: fProject || undefined,
-      verify: fVerify, delta: fDelta,
+      verify: fVerify, delta: fDelta, alert: fAlert.trim(),
     }
     if (fKind === 'once') {
       if (!fRunAt) return
@@ -96,6 +97,7 @@
     fRunAt = ''
     fVerify = false
     fDelta = false
+    fAlert = ''
     showForm = false
     await load()
   }
@@ -166,6 +168,9 @@
             <input type="checkbox" bind:checked={fDelta} />
             <span><strong>delta</strong> — report only what changed since last run</span>
           </label>
+          <input class="field" bind:value={fAlert} aria-label="alert condition"
+            placeholder="alert when… (optional significance bar, e.g. 'GBP moves >1% intraday') — crossed = escalated 🚨"
+            style="grid-column: span 2;" />
         </div>
         <div style="display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px;">
           <button class="btn-ghost" onclick={() => (showForm = false)}>cancel</button>
@@ -204,6 +209,7 @@
                   {r.agent}
                   {#if r.verify}<span class="mode-tag" title="outputs are reviewed by an evaluator">v</span>{/if}
                   {#if r.delta}<span class="mode-tag" title="reports only what changed since the last run">Δ</span>{/if}
+                  {#if r.alert}<span class="mode-tag" title="sensing runner — alerts when: {r.alert}">🚨</span>{/if}
                 </td>
                 <td class="mono" style="color: var(--fg-dim);">{r.run_at ? 'once' : r.cron}</td>
                 <td style="color: var(--fg-dim); white-space: nowrap;">{r.enabled && r.next_run ? localDateTime(r.next_run) : '—'}</td>

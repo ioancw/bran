@@ -67,6 +67,7 @@ export interface ScheduleRecord {
   next_run?: string | null // computed next fire time (null when paused/invalid)
   verify?: boolean // evaluator reviews each output; failed verdicts re-run once
   delta?: boolean // each run sees the previous report and reports only changes
+  alert?: string // natural-language significance bar; '' / absent = off
 }
 
 export interface ChatSummary {

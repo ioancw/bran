@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS schedules (
     project_id  TEXT,
     run_at      TEXT,
     verify      INTEGER NOT NULL DEFAULT 0,
-    delta       INTEGER NOT NULL DEFAULT 0
+    delta       INTEGER NOT NULL DEFAULT 0,
+    alert       TEXT NOT NULL DEFAULT ''
 );
 
 -- Files a run produced (captured from its Write/Edit tool calls). First-class
@@ -272,18 +273,24 @@ class ScheduleRecord:
     #          reviewer's feedback (cookbook evaluator-optimizer pattern).
     # delta  — feed the previous completed run's report into the next fire so
     #          the agent reports what's NEW/CHANGED rather than restating state.
+    # alert  — natural-language significance bar for a sensing runner (empty =
+    #          off). When set, the agent judges each run against it and leads
+    #          the report with the ALERT marker only when the bar is crossed;
+    #          notifiers escalate marked runs (see bran.notify).
     verify: bool = False
     delta: bool = False
+    alert: str = ""
 
     @staticmethod
     def new(
         name: str, agent: str, task: str, cron: str,
         project_id: str | None = None, run_at: str | None = None,
-        verify: bool = False, delta: bool = False,
+        verify: bool = False, delta: bool = False, alert: str = "",
     ) -> ScheduleRecord:
         return ScheduleRecord(
             id=str(uuid.uuid4()), name=name, agent=agent, task=task, cron=cron,
             project_id=project_id, run_at=run_at, verify=verify, delta=delta,
+            alert=alert,
         )
 
 
@@ -474,6 +481,7 @@ def _row_to_schedule(r: sqlite3.Row) -> ScheduleRecord:
         run_at=(r["run_at"] if "run_at" in keys else None),
         verify=bool(r["verify"]) if "verify" in keys else False,
         delta=bool(r["delta"]) if "delta" in keys else False,
+        alert=(r["alert"] or "") if "alert" in keys else "",
     )
 
 
@@ -482,8 +490,8 @@ def insert_schedule(record: ScheduleRecord) -> None:
         conn.execute(
             """INSERT INTO schedules
                (id, name, agent, task, cron, enabled, created_at, project_id, run_at,
-                verify, delta)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                verify, delta, alert)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 record.id,
                 record.name,
@@ -496,6 +504,7 @@ def insert_schedule(record: ScheduleRecord) -> None:
                 record.run_at,
                 1 if record.verify else 0,
                 1 if record.delta else 0,
+                record.alert or "",
             ),
         )
 
@@ -529,14 +538,16 @@ def get_schedule(name: str) -> ScheduleRecord | None:
 def update_schedule(
     name: str, *, agent: str, task: str, cron: str, run_at: str | None,
     verify: bool | None = None, delta: bool | None = None,
+    alert: str | None = None,
 ) -> ScheduleRecord | None:
     """Edit an existing runner's agent/task/trigger in place (keyed by name).
 
     `name`, `project_id`, and `enabled` are preserved — name is the stable
     identifier (the APScheduler job id + how the user refers to it), and pausing
-    is a separate action. `verify`/`delta` None = leave unchanged. Returns the
-    fresh record, or None if no such runner. Callers running `bran serve`
-    should re-register the live job afterwards.
+    is a separate action. `verify`/`delta`/`alert` None = leave unchanged
+    (pass alert="" to clear the significance bar). Returns the fresh record,
+    or None if no such runner. Callers running `bran serve` should re-register
+    the live job afterwards.
     """
     sets = ["agent = ?", "task = ?", "cron = ?", "run_at = ?"]
     params: list[Any] = [agent, task, cron, run_at]
@@ -546,6 +557,9 @@ def update_schedule(
     if delta is not None:
         sets.append("delta = ?")
         params.append(1 if delta else 0)
+    if alert is not None:
+        sets.append("alert = ?")
+        params.append(alert)
     params.append(name)
     with _lock, _conn() as conn:
         cur = conn.execute(
@@ -945,6 +959,8 @@ def _migrate_runs_schedules_add_project_id() -> None:
         # verify/delta: per-runner output quality controls (see ScheduleRecord).
         _add_column_if_missing(conn, "schedules", "verify", "INTEGER NOT NULL DEFAULT 0")
         _add_column_if_missing(conn, "schedules", "delta", "INTEGER NOT NULL DEFAULT 0")
+        # alert: natural-language significance bar for sensing runners.
+        _add_column_if_missing(conn, "schedules", "alert", "TEXT NOT NULL DEFAULT ''")
         # Safe to index now that the column exists on both fresh and legacy DBs.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id)")
 

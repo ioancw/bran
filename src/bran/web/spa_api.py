@@ -502,6 +502,7 @@ async def new_schedule(
     run_at: Annotated[str | None, Form()] = None,
     verify: Annotated[str, Form()] = "",
     delta: Annotated[str, Form()] = "",
+    alert: Annotated[str, Form()] = "",
 ) -> dict[str, Any]:
     try:
         get_agent(agent)
@@ -523,7 +524,8 @@ async def new_schedule(
         cron = _normalize_cron(cron)  # accept natural language too
     rec = ScheduleRecord.new(name=name, agent=agent, task=task, cron=cron,
                              project_id=project_id or None, run_at=run_at,
-                             verify=_form_flag(verify), delta=_form_flag(delta))
+                             verify=_form_flag(verify), delta=_form_flag(delta),
+                             alert=alert.strip())
     insert_schedule(rec)
     # Register with the live scheduler if one is running (lazy import so the
     # web module doesn't pull APScheduler in when --no-scheduler is used).
@@ -538,6 +540,7 @@ async def new_schedule(
 
 @router.post("/schedules/{name}")
 async def edit_schedule(
+    request: Request,
     name: str,
     agent: Annotated[str, Form()],
     cron: Annotated[str, Form()] = "",
@@ -572,11 +575,16 @@ async def edit_schedule(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "cron or run_at required")
     else:
         cron = _normalize_cron(cron)  # accept natural language too
+    # `alert` comes from the raw form, not a Form() param: FastAPI swallows an
+    # EMPTY form value for a defaulted field, which would make "clear the bar"
+    # (alert=) indistinguishable from "field absent" (leave unchanged).
+    raw_alert = (await request.form()).get("alert")
     rec = update_schedule(
         name, agent=agent, task=task, cron=cron, run_at=run_at,
         # None = field absent from the form = leave unchanged.
         verify=_form_flag(verify) if verify is not None else None,
         delta=_form_flag(delta) if delta is not None else None,
+        alert=str(raw_alert).strip() if raw_alert is not None else None,
     )
     # Re-sync the live scheduler: drop the old job, add the new one (register is a
     # no-op when the runner is paused, so paused stays paused).

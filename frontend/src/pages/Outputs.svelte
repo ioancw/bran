@@ -9,7 +9,7 @@
   import { relativeTime, localDateTime } from '../lib/time'
   import { errorText } from '../lib/errors'
   import { bumpActivity } from '../lib/workspace.svelte'
-  import { isSuperseded, verifyBadge } from '../lib/verification'
+  import { isAlertResult, isSuperseded, verifyBadge } from '../lib/verification'
   import { toast } from '../lib/toast.svelte'
   import Page from '../components/Page.svelte'
   import Skeleton from '../components/Skeleton.svelte'
@@ -213,11 +213,12 @@
         {#each g.items as r (r.id)}
           {@const runner = runnerFor(r)}
           {@const badge = verifyBadge(r)}
-          <article class="card output" class:fresh={freshIds.has(r.id)} class:quiet={isQuietDelta(r)}>
+          <article class="card output" class:fresh={freshIds.has(r.id)} class:quiet={isQuietDelta(r)} class:alerted={isAlertResult(r)}>
             <header class="out-head">
               {#if freshIds.has(r.id)}<span class="new-dot" title="new since your last visit"></span>{/if}
               <a href={href('/runs/' + r.id)} use:link class="out-agent text-bright">{titleFor(r)}</a>
               <span class="src src-{r.source}">{r.source}</span>
+              {#if isAlertResult(r)}<span class="alert-tag" title="this run crossed its alert bar">🚨 alert</span>{/if}
               {#if runner?.delta}<span class="delta-tag" title="delta report — only what changed since the last run">Δ</span>{/if}
               {#if badge}<span class="pill {badge.tone === 'ok' ? 'ok' : 'warn'}" style="font-size: 10px;" title="reviewed by the verification evaluator">{badge.label}</span>{/if}
               <span class="text-muted out-task" title={r.task}>{runner ? `${r.agent} · ${r.task}` : r.task}</span>
@@ -273,6 +274,19 @@
     color: var(--accent-soft);
     font-family: var(--font-mono);
     font-size: 10px;
+    cursor: help;
+  }
+  /* A sensing runner that crossed its bar — the one card that must not be missed. */
+  .output.alerted { border-color: color-mix(in srgb, var(--red) 55%, var(--border)); }
+  .alert-tag {
+    display: inline-block;
+    padding: 0 6px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--red) 14%, transparent);
+    color: var(--red);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    white-space: nowrap;
     cursor: help;
   }
   .new-dot {

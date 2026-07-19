@@ -144,7 +144,7 @@
       clearInterval(timer)
       fanoutTimers = fanoutTimers.filter((t) => t !== timer)
       if (known.some((r) => r.status === 'completed')) {
-        input = 'Those background runs have finished — collect their results and synthesise them into one combined summary for me.'
+        input = 'Those background runs have finished — collect their results and synthesise them into one combined summary for me. Cluster overlapping findings (report each once, noting corroboration) rather than summarising run by run.'
         void send()
       }
     }, 3000)

@@ -27,7 +27,21 @@ log = logging.getLogger("bran.notify")
 
 Notifier = Callable[[RunRecord], None | Awaitable[None]]
 
+# Contract with alert-mode runners (schedules.alert, see scheduler.py): when
+# the run's significance bar is crossed, the agent leads its report with this
+# marker. Notifiers escalate marked runs; the frontend badges them. Keep in
+# sync with the frontend's isAlert helper.
+ALERT_MARKER = "🚨 ALERT"
+
 _notifiers: list[Notifier] = []
+
+
+def is_alert(record: RunRecord) -> bool:
+    """True when a completed run's report leads with the alert marker."""
+    return (
+        record.status == "completed"
+        and (record.result or "").lstrip().startswith(ALERT_MARKER)
+    )
 
 
 def _result_snippet(record: RunRecord, limit: int = 400) -> str:
@@ -90,12 +104,22 @@ async def webhook_notifier(record: RunRecord) -> None:
     # A human-readable taste of the output so consumers (ntfy/Slack/Discord) can
     # show the actual result, not just status. The full text stays in `result`.
     payload["summary"] = _result_snippet(record)
-    # ntfy.sh-friendly headers; harmless for other targets.
-    headers = {
-        "Title": f"bran: {record.agent} {record.status}",
-        "Priority": "default" if record.status == "completed" else "high",
-        "Tags": "white_check_mark" if record.status == "completed" else "x",
-    }
+    payload["alert"] = is_alert(record)
+    # ntfy.sh-friendly headers; harmless for other targets. Alert-mode runs
+    # that crossed their significance bar outrank everything — that's the
+    # whole point of a sensing runner.
+    if payload["alert"]:
+        headers = {
+            "Title": f"bran ALERT: {record.agent}",
+            "Priority": "urgent",
+            "Tags": "rotating_light",
+        }
+    else:
+        headers = {
+            "Title": f"bran: {record.agent} {record.status}",
+            "Priority": "default" if record.status == "completed" else "high",
+            "Tags": "white_check_mark" if record.status == "completed" else "x",
+        }
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             await client.post(url, json=payload, headers=headers)
@@ -105,7 +129,7 @@ async def webhook_notifier(record: RunRecord) -> None:
 
 def bell_notifier(record: RunRecord) -> None:
     """Print a console bell + one-line summary to stderr."""
-    badge = {"completed": "✓", "failed": "✗"}.get(record.status, "?")
+    badge = "🚨" if is_alert(record) else {"completed": "✓", "failed": "✗"}.get(record.status, "?")
     cost = f"${record.total_cost_usd:.4f}" if record.total_cost_usd else "-"
     sys.stderr.write(
         f"\a[bran] {badge} {record.agent} · {record.status} · "

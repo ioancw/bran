@@ -150,16 +150,17 @@ export const api = {
     if (!r.ok) await raiseFor(r, url)
   },
 
-  newSchedule: (fields: { name: string; agent: string; cron?: string; task?: string; project_id?: string; run_at?: string; verify?: boolean; delta?: boolean }) => {
+  newSchedule: (fields: { name: string; agent: string; cron?: string; task?: string; project_id?: string; run_at?: string; verify?: boolean; delta?: boolean; alert?: string }) => {
     const body: Record<string, string> = {
       name: fields.name, agent: fields.agent, cron: fields.cron ?? '', task: fields.task ?? '',
       verify: fields.verify ? 'true' : '', delta: fields.delta ? 'true' : '',
+      alert: fields.alert ?? '',
     }
     if (fields.project_id) body.project_id = fields.project_id // omit → standalone
     if (fields.run_at) body.run_at = fields.run_at // present → one-shot
     return form<ScheduleRecord>('/spa/schedules', body)
   },
-  updateSchedule: (name: string, fields: { agent: string; task?: string; cron?: string; run_at?: string; verify?: boolean; delta?: boolean }) => {
+  updateSchedule: (name: string, fields: { agent: string; task?: string; cron?: string; run_at?: string; verify?: boolean; delta?: boolean; alert?: string }) => {
     const body: Record<string, string> = {
       agent: fields.agent, task: fields.task ?? '', cron: fields.cron ?? '',
     }
@@ -167,6 +168,7 @@ export const api = {
     // Only send the flags when the caller set them (absent = leave unchanged).
     if (fields.verify !== undefined) body.verify = fields.verify ? 'true' : 'false'
     if (fields.delta !== undefined) body.delta = fields.delta ? 'true' : 'false'
+    if (fields.alert !== undefined) body.alert = fields.alert // '' clears the bar
     return form<ScheduleRecord>(`/spa/schedules/${encodeURIComponent(name)}`, body)
   },
   deleteSchedule: async (name: string): Promise<void> => {

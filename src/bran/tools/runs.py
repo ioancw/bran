@@ -29,7 +29,9 @@ def _cost(rec: Any) -> str:
     (
         "Read the result of a run by its id — use this to collect the output of "
         "background runs you fanned out with spawn_agent (which returned the "
-        "run_id to you), then synthesise them into one answer. If the run is "
+        "run_id to you), then synthesise them into one answer. When you hold "
+        "several results, cluster overlapping findings and report each once "
+        "(with corroboration) instead of relaying run-by-run. If the run is "
         "still pending/running you'll be told so — report that to the user and "
         "check back later; do NOT loop on it. On completion you get the full "
         "result text to fold into your reply."

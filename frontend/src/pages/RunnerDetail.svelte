@@ -36,6 +36,7 @@
   let eRunAt = $state('')
   let eVerify = $state(false)
   let eDelta = $state(false)
+  let eAlert = $state('')
   let editError = $state('')
 
   const projName = (id: string | null) => (id ? projects.find((p) => p.id === id)?.name ?? id : null)
@@ -64,6 +65,7 @@
     eRunAt = toDatetimeLocal(runner.run_at) // stored UTC ISO → local picker value
     eVerify = !!runner.verify
     eDelta = !!runner.delta
+    eAlert = runner.alert ?? ''
     editError = ''
     editing = true
   }
@@ -74,8 +76,8 @@
     try {
       const fields =
         eKind === 'once'
-          ? { agent: eAgent, task: eTask, run_at: new Date(eRunAt).toISOString(), verify: eVerify, delta: eDelta }
-          : { agent: eAgent, task: eTask, cron: eCron.trim(), verify: eVerify, delta: eDelta }
+          ? { agent: eAgent, task: eTask, run_at: new Date(eRunAt).toISOString(), verify: eVerify, delta: eDelta, alert: eAlert.trim() }
+          : { agent: eAgent, task: eTask, cron: eCron.trim(), verify: eVerify, delta: eDelta, alert: eAlert.trim() }
       runner = await api.updateSchedule(runner.name, fields)
       editing = false
       toast('runner saved', 'ok')
@@ -184,6 +186,8 @@
                   <input type="checkbox" bind:checked={eDelta} />
                   <span><strong>delta</strong> — report only what changed since last run</span>
                 </label>
+                <input class="field" bind:value={eAlert} aria-label="alert condition"
+                  placeholder="alert when… (optional significance bar; blank = off)" />
               </div>
               {#if editError}<div style="color: var(--red); font-size: 12px;">{editError}</div>{/if}
               <div style="display: flex; gap: 6px; justify-content: flex-end;">
@@ -264,6 +268,12 @@
                 <span class="text-muted">none</span>
               {/if}
             </div>
+            {#if runner.alert}
+              <div>
+                <span class="label-cap">alert when</span>
+                <span class="text-dim">🚨 {runner.alert}</span>
+              </div>
+            {/if}
           </div>
         </div>
       </aside>
