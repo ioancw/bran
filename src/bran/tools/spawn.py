@@ -55,6 +55,10 @@ async def spawn_agent(args: dict[str, Any]) -> dict[str, Any]:
         project_id=current_project_id.get(),
         source="spawn",
     )
+    if wait:
+        # An inline spawn's result is consumed by the turn that made it — the
+        # headless fan-in (bran.synthesis) must not count it as batch work.
+        record.metadata["inline"] = True
     insert_run(record)
 
     if wait:

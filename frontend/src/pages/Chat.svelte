@@ -101,10 +101,11 @@
   }
 
   // --- Auto fan-in -----------------------------------------------------------
-  // When a turn fans out >=2 background runs (spawn_agent), watch them; once
-  // they ALL finish, automatically ask the agent to collect + synthesise their
-  // results — so you get one combined answer without prompting again. Works
-  // while you're viewing the chat (a chat turn has no server-side callback).
+  // The SERVER owns fan-out synthesis (bran.synthesis): when a turn spawns >=2
+  // background runs, the server watches the batch and runs the synthesis turn
+  // itself — even if this tab is closed. Our only job here is to reflect it:
+  // watch for the server's synthesis run in this session and reload the
+  // conversation when it lands, so the combined answer appears live.
   let watchedSpawnIds = new Set<string>()
   let fanoutTimers: ReturnType<typeof setInterval>[] = []
 
@@ -126,27 +127,36 @@
     fanoutTimers.forEach(clearInterval)
     fanoutTimers = []
   }
-  function watchFanout(ids: string[]) {
+  function watchFanout() {
+    const watchStart = Date.now() - 60_000 // small skew allowance
+    const terminal = (s: string) => s === 'completed' || s === 'failed' || s === 'cancelled'
+    let ticks = 0
     const timer = setInterval(async () => {
-      let runs: (RunRecord | null)[]
+      // Give up quietly after ~10 min; reopening the chat shows the result anyway.
+      if (++ticks > 200) {
+        clearInterval(timer)
+        fanoutTimers = fanoutTimers.filter((t) => t !== timer)
+        return
+      }
+      if (streaming) return // never clobber an in-flight turn
+      const sid = loadedId
+      if (!sid) return
+      let synth: RunRecord | undefined
       try {
-        runs = await Promise.all(ids.map((id) => api.run(id).catch(() => null)))
+        const runs = await api.runs({ session_id: sid, limit: 20 })
+        // Only a synthesis run from THIS fan-out — an older one in the same
+        // chat (a previous fan-out) must not trigger a premature reload.
+        synth = runs.find(
+          (r) => r.source === 'synthesis' && terminal(r.status) && Date.parse(r.started_at) >= watchStart
+        )
       } catch {
         return
       }
-      const known = runs.filter((r): r is RunRecord => !!r)
-      if (known.length < ids.length) return
-      const terminal = (s: string) => s === 'completed' || s === 'failed' || s === 'cancelled'
-      if (!known.every((r) => terminal(r.status))) return
-      // All finished — but wait until the chat is idle and the user isn't typing,
-      // so we don't interrupt a turn or clobber a draft.
-      if (streaming || input.trim()) return
+      if (!synth) return
       clearInterval(timer)
       fanoutTimers = fanoutTimers.filter((t) => t !== timer)
-      if (known.some((r) => r.status === 'completed')) {
-        input = 'Those background runs have finished — collect their results and synthesise them into one combined summary for me. Cluster overlapping findings (report each once, noting corroboration) rather than summarising run by run.'
-        void send()
-      }
+      await loadHistory(sid) // pull the server-written synthesis turn into view
+      bumpActivity()
     }, 3000)
     fanoutTimers.push(timer)
   }
@@ -326,11 +336,12 @@
       if (mounted) {
         void loadChats() // refresh the sidebar Recents
         bumpActivity() // refresh the rail's Progress (new run recorded)
-        // Auto fan-in: if this turn fanned out >=2 new background runs, watch them
-        // and synthesise automatically once they all finish.
+        // Auto fan-in: if this turn fanned out >=2 new background runs, the
+        // server will synthesise when they finish — watch for that synthesis
+        // run and refresh the conversation when it lands.
         const fresh = spawnRunIds().filter((id) => !watchedSpawnIds.has(id))
         fresh.forEach((id) => watchedSpawnIds.add(id))
-        if (fresh.length >= 2) watchFanout(fresh)
+        if (fresh.length >= 2) watchFanout()
       }
     }
   }

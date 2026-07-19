@@ -200,6 +200,13 @@ async def _drive(
         # Fire notifications regardless of how the run ended. notify_completion
         # never raises, so this can't break an otherwise-fine exception path.
         await notify_completion(record)
+        # Headless fan-in: a finished spawn may complete its batch, and a
+        # finished chat turn may find its spawns already done — either way the
+        # server (not the browser) owns synthesis now. Never raises; lazy
+        # import breaks the runner <-> synthesis cycle.
+        from bran.synthesis import check_after_run
+
+        check_after_run(record)
 
 
 async def run_agent(

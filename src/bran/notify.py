@@ -122,6 +122,12 @@ async def webhook_notifier(record: RunRecord) -> None:
     # Background work (runner/spawn/manual) is what notifications are for.
     if record.source == "chat":
         return
+    # Completed members of a synthesised fan-out don't push individually —
+    # the synthesis run delivers the combined answer as one notification.
+    from bran.synthesis import suppresses_notification
+
+    if suppresses_notification(record):
+        return
     # Lazy import keeps httpx off the hot path until a notifier actually fires.
     import httpx
 

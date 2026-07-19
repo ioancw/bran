@@ -19,3 +19,10 @@ os.environ.setdefault("BRAN_HOME", _TMP)
 os.environ.setdefault("BRAN_API_TOKEN", "test-token")
 # TestClient sends Host: testserver; the TrustedHost allowlist must admit it.
 os.environ.setdefault("BRAN_ALLOWED_HOSTS", "testserver")
+# config.py load_dotenv() pulls the repo's real .env into the test process —
+# neutralise anything with SIDE EFFECTS OUTSIDE THE PROCESS before that
+# happens (a pre-set var wins over dotenv). Without this, any test that
+# completes a run (e.g. the run-timeout test) pushes to the owner's real
+# ntfy topic / phone.
+os.environ["BRAN_NOTIFY_WEBHOOK_URL"] = ""
+os.environ["BRAN_NOTIFY_BELL"] = ""

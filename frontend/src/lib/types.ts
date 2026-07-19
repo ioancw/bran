@@ -35,7 +35,7 @@ export interface RunRecord {
   ended_at: string | null
   metadata: Record<string, unknown>
   project_id: string | null // null = standalone (not attached to a project)
-  source: 'chat' | 'runner' | 'spawn' | 'manual' // how the run was triggered
+  source: 'chat' | 'runner' | 'spawn' | 'manual' | 'synthesis' // how the run was triggered
   schedule_id: string | null // the runner this run belongs to, if any
   actor?: string | null // named API token that triggered the run, if any
   artifacts?: string[] // file paths the run produced (list endpoints only)

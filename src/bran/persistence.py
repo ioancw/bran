@@ -387,6 +387,34 @@ def get_run(run_id: str) -> RunRecord | None:
     return RunRecord.from_row(row) if row else None
 
 
+def list_spawns(parent_run_id: str) -> list[RunRecord]:
+    """The background runs a single turn fanned out (its synthesis batch)."""
+    with _lock, _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM runs WHERE parent_run_id = ? AND source = 'spawn' "
+            "ORDER BY started_at",
+            (parent_run_id,),
+        ).fetchall()
+    return [RunRecord.from_row(r) for r in rows]
+
+
+def claim_fanout_synthesis(parent_run_id: str) -> bool:
+    """Atomically claim the right to synthesise a fan-out batch (at most one
+    winner, ever). Sibling runs can finish near-simultaneously and each check
+    the batch; the marker lives in the parent run's metadata and the UPDATE's
+    WHERE clause makes the claim race-free under SQLite's single-writer lock."""
+    with _lock, _conn() as conn:
+        cur = conn.execute(
+            "UPDATE runs SET metadata = json_set("
+            "  CASE WHEN metadata IS NULL OR metadata = '' THEN '{}' ELSE metadata END,"
+            "  '$.fanout_synthesis', 'claimed')"
+            " WHERE id = ? AND (metadata IS NULL OR metadata = ''"
+            "   OR json_extract(metadata, '$.fanout_synthesis') IS NULL)",
+            (parent_run_id,),
+        )
+        return cur.rowcount == 1
+
+
 def get_run_by_session(session_id: str) -> RunRecord | None:
     """The earliest run that produced this SDK session — used to let a run's
     session be continued as a chat even though no chat row exists for it."""
