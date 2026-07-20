@@ -97,8 +97,13 @@ body::after {
   color: #fff;
 }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 9px; height: 9px; }
+/* Scrollbar — thin and themed in both engines. scrollbar-width/-color are
+   inherited, so the root declaration covers every scroll container. */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border2) transparent;
+}
+::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
   background: var(--border2);
@@ -568,6 +573,49 @@ table.bran-table .mono { font-family: var(--font-mono); font-size: 12px; color: 
      comfortably above the italic ascenders. */
   margin-bottom: 4px;
 }
+/* Condensing masthead — the publication header stays put but earns its keep:
+   as the page scrolls, it pins to the top and scrubs (scroll-driven, no JS)
+   from the full 42px editorial title down to a compact glass bar. Browsers
+   without scroll-timeline support just keep the static header — nothing
+   breaks, nothing half-animates. The chat breadcrumb (head-custom) is
+   excluded: chat scrolls internally, the bar never moves. */
+@supports (animation-timeline: scroll()) {
+  .page-header:not(.head-custom) {
+    position: sticky;
+    top: 0;
+    z-index: 60;
+    animation: masthead-condense linear both;
+    animation-timeline: scroll(nearest);
+    animation-range: 0px 140px;
+  }
+  .page-header:not(.head-custom) h1 {
+    animation: masthead-title linear both;
+    animation-timeline: scroll(nearest);
+    animation-range: 0px 140px;
+  }
+  .page-header:not(.head-custom) .subheading {
+    animation: masthead-eyebrow linear both;
+    animation-timeline: scroll(nearest);
+    animation-range: 0px 100px;
+  }
+}
+@keyframes masthead-condense {
+  to {
+    padding-top: 10px;
+    padding-bottom: 9px;
+    background: color-mix(in srgb, var(--surface) 74%, transparent);
+    -webkit-backdrop-filter: blur(14px);
+    backdrop-filter: blur(14px);
+    box-shadow: var(--shadow-sm);
+  }
+}
+@keyframes masthead-title {
+  to { font-size: 21px; }
+}
+@keyframes masthead-eyebrow {
+  to { opacity: 0; font-size: 1px; margin-bottom: 0; letter-spacing: 0; }
+}
+
 .page-header .page-actions {
   grid-area: actions;
   align-self: end;
@@ -956,6 +1004,52 @@ table.bran-table .mono { font-family: var(--font-mono); font-size: 12px; color: 
   flex-direction: column;
   min-height: 0;             /* a flex child that's allowed to scroll, not grow */
   overflow-y: auto;
+}
+
+/* ---------------------------------------------------------------------------
+ * Collapsible sidebar (desktop). Toggled by the panel button / Ctrl+B; the
+ * rail slides out via a negative margin (content reflows with it), and a
+ * small fixed reopen button takes its place. Below 768px the off-canvas
+ * drawer owns the show/hide story, so none of this applies there.
+ * ------------------------------------------------------------------------- */
+.sidebar-reopen { display: none; }
+@media (min-width: 769px) {
+  .sidebar {
+    transition: margin-left var(--dur-3) var(--transition);
+  }
+  .app-shell.sidebar-collapsed .sidebar {
+    margin-left: calc(-1 * var(--sidebar-w));
+  }
+  /* Page headers (masthead + chat breadcrumb) shift right so the reopen
+     button never sits on top of a title. */
+  .app-shell.sidebar-collapsed .page-header { padding-left: 56px; }
+
+  .sidebar-reopen {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    position: fixed;
+    top: 13px;
+    left: 12px;
+    z-index: 120;
+    width: 32px;
+    height: 32px;
+    background: color-mix(in srgb, var(--surface) 82%, transparent);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius);
+    color: var(--fg-dim);
+    cursor: pointer;
+    transition: color var(--dur-1) var(--transition), border-color var(--dur-1) var(--transition);
+  }
+  .sidebar-reopen:hover {
+    color: var(--fg-bright);
+    border-color: var(--accent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar { transition: none; }
 }
 
 /* Per-agent stat row used on dashboard */

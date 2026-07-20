@@ -11,15 +11,25 @@
   import { confirmDialog } from '../lib/confirm.svelte'
   import { toast } from '../lib/toast.svelte'
   import { errorText } from '../lib/errors'
+  import { requestPalette } from '../lib/palette.svelte'
   import OnboardingChecklist from './OnboardingChecklist.svelte'
 
-  let { counts, version, open = false }: { counts: Record<string, number | null>; version: string; open?: boolean } = $props()
+  let {
+    counts, version, open = false, oncollapse,
+  }: {
+    counts: Record<string, number | null>
+    version: string
+    open?: boolean
+    oncollapse?: () => void
+  } = $props()
 
   let theme = $state(getTheme())
-  function onTheme(e: Event) {
-    theme = (e.target as HTMLSelectElement).value
-    setTheme(theme)
+  function chooseTheme(name: string) {
+    theme = name
+    setTheme(name)
   }
+
+  const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
 
   // Load Recents + project names once; pages drive scope via setScope().
   $effect(() => {
@@ -93,10 +103,24 @@
       <span>bran</span>
     </a>
     <span class="ml-auto label-cap">{version}</span>
+    {#if oncollapse}
+      <button class="side-collapse" title="Hide sidebar ({isMac ? '⌘' : 'Ctrl+'}B)" aria-label="hide sidebar" onclick={oncollapse}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" />
+        </svg>
+      </button>
+    {/if}
   </div>
 
-  <div class="p-3" style="border-bottom: 1px solid var(--border);">
+  <div class="p-3 space-y-2" style="border-bottom: 1px solid var(--border);">
     <button class="btn-primary" style="width: 100%;" onclick={newChat}>+ new chat</button>
+    <button class="palette-row" onclick={requestPalette}>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" />
+      </svg>
+      <span>search</span>
+      <kbd>{isMac ? '⌘K' : 'Ctrl K'}</kbd>
+    </button>
   </div>
 
   <nav class="p-3 text-sm">
@@ -140,12 +164,19 @@
       runnerDone={(counts.runners ?? 0) > 0}
     />
     <div class="space-y-2">
-      <div class="label-cap px-1">Theme</div>
-      <select class="field" value={theme} onchange={onTheme} style="font-size: 12px;">
-        {#each THEMES as t}
-          <option value={t.name}>{t.label}</option>
-        {/each}
-      </select>
+      <div class="theme-block px-1">
+        <span class="label-cap">Theme</span>
+        <div class="theme-row" role="group" aria-label="theme">
+          {#each THEMES as t}
+            <button
+              class="theme-swatch" class:sel={theme === t.name}
+              title={t.label} aria-label="{t.label} theme" aria-pressed={theme === t.name}
+              style="--sw-bg: {t.bg}; --sw-accent: {t.accent};"
+              onclick={() => chooseTheme(t.name)}
+            ></button>
+          {/each}
+        </div>
+      </div>
       <a href={href('/agents')} use:link class="nav-item" class:active={active === 'agents'} style="font-size: 13px;">
         <span>Agent library</span>
         {#if counts.agents != null}<span class="count">{counts.agents}</span>{/if}
@@ -161,6 +192,86 @@
   .nav-group-label {
     padding: 2px 12px 6px;
     color: var(--muted);
+  }
+  .side-collapse {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius);
+    color: var(--muted);
+    cursor: pointer;
+    transition: color var(--dur-1) var(--transition), background var(--dur-1) var(--transition);
+  }
+  .side-collapse:hover { color: var(--fg-bright); background: var(--surface2); }
+  /* Hidden on phones — the drawer closes by tapping the overlay instead. */
+  @media (max-width: 768px) { .side-collapse { display: none; } }
+
+  .palette-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 10px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--muted);
+    font-size: 12px;
+    cursor: pointer;
+    transition: color var(--dur-1) var(--transition), border-color var(--dur-1) var(--transition);
+  }
+  .palette-row:hover { color: var(--fg); border-color: var(--border2); }
+  .palette-row kbd {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--muted);
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+
+  .theme-block {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .theme-row {
+    display: flex;
+    gap: 6px;
+    margin-left: auto;
+  }
+  .theme-swatch {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 1px solid var(--border2);
+    background: var(--sw-bg);
+    position: relative;
+    cursor: pointer;
+    padding: 0;
+    transition: transform var(--dur-1) var(--transition), box-shadow var(--dur-1) var(--transition);
+  }
+  /* Each swatch wears its theme's accent as an off-centre dot — bg + accent
+     together identify a theme faster than a name in a dropdown ever did. */
+  .theme-swatch::after {
+    content: '';
+    position: absolute;
+    right: 3px;
+    bottom: 3px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--sw-accent);
+  }
+  .theme-swatch:hover { transform: scale(1.15); }
+  .theme-swatch.sel {
+    box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--accent);
   }
   /* "New deliveries" badge — accent-tinted so it reads as unread, not a total. */
   .count.fresh {

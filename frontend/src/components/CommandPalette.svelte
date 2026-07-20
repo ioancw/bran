@@ -8,6 +8,7 @@
   import { workspace, loadProjects } from '../lib/workspace.svelte'
   import { toast } from '../lib/toast.svelte'
   import { errorText } from '../lib/errors'
+  import { paletteSignal } from '../lib/palette.svelte'
   import type { ScheduleRecord } from '../lib/types'
 
   interface Cmd {
@@ -75,6 +76,15 @@
   $effect(() => {
     void q
     idx = 0
+  })
+
+  // Open requests from elsewhere in the UI (the sidebar's search row).
+  let handledRequests = paletteSignal.requests
+  $effect(() => {
+    if (paletteSignal.requests !== handledRequests) {
+      handledRequests = paletteSignal.requests
+      if (!open) openPalette()
+    }
   })
 
   function openPalette() {

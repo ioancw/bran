@@ -77,6 +77,21 @@
 
   // Off-canvas sidebar on small screens; navigation closes the drawer.
   let sidebarOpen = $state(false)
+  // Desktop: the rail can be hidden entirely (toggle button / Ctrl+B) for a
+  // focused reading-writing surface. Persisted so the choice survives reloads.
+  let sidebarCollapsed = $state(
+    typeof localStorage !== 'undefined' && localStorage.getItem('bran.sidebarCollapsed') === '1',
+  )
+  function toggleSidebar() {
+    sidebarCollapsed = !sidebarCollapsed
+    try { localStorage.setItem('bran.sidebarCollapsed', sidebarCollapsed ? '1' : '0') } catch { /* ignore */ }
+  }
+  function onShellKeydown(e: KeyboardEvent) {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'b') {
+      e.preventDefault()
+      toggleSidebar()
+    }
+  }
   // <main> is the scroll container now (the body is fixed-height), so reset its
   // scroll to the top on navigation — what window.scrollTo used to do for us.
   let mainEl = $state<HTMLElement | undefined>()
@@ -91,6 +106,8 @@
     void loadCounts()
   }
 </script>
+
+<svelte:window onkeydown={onShellKeydown} />
 
 <button class="nav-burger" aria-label="open navigation" onclick={() => (sidebarOpen = true)}>
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
@@ -110,8 +127,16 @@
   </div>
 {/if}
 
-<div class="app-shell flex">
-  <Sidebar counts={navCounts} version="v0.1.0" open={sidebarOpen} />
+{#if sidebarCollapsed}
+  <button class="sidebar-reopen" title="Show sidebar (Ctrl+B)" aria-label="show sidebar" onclick={toggleSidebar}>
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" />
+    </svg>
+  </button>
+{/if}
+
+<div class="app-shell flex" class:sidebar-collapsed={sidebarCollapsed}>
+  <Sidebar counts={navCounts} version="v0.1.0" open={sidebarOpen} oncollapse={toggleSidebar} />
   <main class="flex-1 min-w-0 app-main" bind:this={mainEl}>
     {#if seg[0] === undefined}
       <Today />

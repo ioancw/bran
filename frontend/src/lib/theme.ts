@@ -4,14 +4,18 @@
 export interface Theme {
   name: string
   label: string
+  // Swatch colours for the sidebar theme picker — each theme's --bg / --accent
+  // (keep in sync with styles/themes.css).
+  bg: string
+  accent: string
 }
 
 export const THEMES: Theme[] = [
-  { name: 'midnight', label: 'Midnight' },
-  { name: 'light', label: 'Light' },
-  { name: 'dracula', label: 'Dracula' },
-  { name: 'solarized', label: 'Solarized' },
-  { name: 'nord', label: 'Nord' },
+  { name: 'midnight', label: 'Midnight', bg: '#0c0c0e', accent: '#c17b5b' },
+  { name: 'light', label: 'Light', bg: '#faf0e6', accent: '#a04a5f' },
+  { name: 'dracula', label: 'Dracula', bg: '#282a36', accent: '#bd93f9' },
+  { name: 'solarized', label: 'Solarized', bg: '#002b36', accent: '#268bd2' },
+  { name: 'nord', label: 'Nord', bg: '#2e3440', accent: '#88c0d0' },
 ]
 
 const KEY = 'bran_theme'
