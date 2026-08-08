@@ -5,6 +5,8 @@
   import { href, link, navigate } from '../lib/router.svelte'
   import { fmtCost, relativeTime } from '../lib/time'
   import { errorText } from '../lib/errors'
+  import { toast } from '../lib/toast.svelte'
+  import ErrorBanner from '../components/ErrorBanner.svelte'
   import Page from '../components/Page.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import EmptyState from '../components/EmptyState.svelte'
@@ -24,9 +26,12 @@
   let firing = $state(false)
 
   async function load() {
+    error = null // clear a stale banner so a recovered load shows clean
     try {
       const [agents, schedules, rs] = await Promise.all([
-        api.agents(), api.schedules(), api.runs({ agent: agentName, limit: 50 }),
+        api.agents(),
+        api.schedules(),
+        api.runs({ agent: agentName, limit: 50 }),
       ])
       agent = agents.find((a) => a.name === agentName) ?? null
       runners = schedules.filter((s) => s.agent === agentName)
@@ -49,7 +54,9 @@
       const r = await api.newRun(agentName, task.trim() || `Run ${agentName}`)
       navigate('/runs/' + r.id)
     } catch (e) {
-      error = String(e)
+      // An action failure is a toast, not the page-level banner — the banner's
+      // retry reloads the page, which isn't what "run now failed" needs.
+      toast(errorText(e), 'err')
       firing = false
     }
   }
@@ -58,11 +65,15 @@
 <Page title={agentName}>
   {#snippet subtitle()}agent{/snippet}
   {#snippet actions()}
-    <button class="btn-outline" onclick={() => navigate('/runners?agent=' + encodeURIComponent(agentName))}>schedule →</button>
+    <button class="btn-outline" onclick={() => navigate('/runners?agent=' + encodeURIComponent(agentName))}
+      >schedule →</button
+    >
   {/snippet}
 
-  {#if error}<div class="card" style="color: var(--red);">{errorText(error)}</div>{/if}
-  {#if !loaded}
+  {#if error}
+    <!-- A failed load is not "unknown agent" — don't show both, and offer retry. -->
+    <ErrorBanner {error} onretry={load} />
+  {:else if !loaded}
     <Skeleton rows={5} />
   {:else if !agent}
     <EmptyState title="unknown agent" hint="check the agent library for the current roster" />
@@ -72,25 +83,44 @@
       <div class="col-span-2 space-y-6">
         <div>
           <div class="label-cap" style="margin-bottom: 8px;">Run now</div>
-          <Composer bind:value={task} hint="fires a one-off run" busy={firing} rows={3}
-                    placeholder={`Task for ${agentName}… (blank = a default run)`} onsubmit={runNow} />
+          <Composer
+            bind:value={task}
+            hint="fires a one-off run"
+            busy={firing}
+            rows={3}
+            placeholder={`Task for ${agentName}… (blank = a default run)`}
+            onsubmit={runNow}
+          />
         </div>
 
         <section>
           <div class="label-cap" style="margin-bottom: 8px;">Recent runs ({runs.length})</div>
           {#if runs.length}
             <div class="space-y-2">
-              {#each runs.slice(0, 20) as r}
-                <a href={href('/runs/' + r.id)} use:link class="row-link card-quiet" style="display: flex; gap: 10px; align-items: baseline; text-decoration: none;">
+              {#each runs.slice(0, 20) as r (r.id)}
+                <a
+                  href={href('/runs/' + r.id)}
+                  use:link
+                  class="row-link card-quiet"
+                  style="display: flex; gap: 10px; align-items: baseline; text-decoration: none;"
+                >
                   <span class="src src-{r.source}">{r.source}</span>
                   <StatusBadge status={r.status} />
-                  <span class="text-dim" style="font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{r.task}</span>
-                  <span class="ml-auto text-muted" style="font-size: 11px; white-space: nowrap;">{relativeTime(r.started_at)} · {fmtCost(r.total_cost_usd)}</span>
+                  <span
+                    class="text-dim"
+                    style="font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+                    >{r.task}</span
+                  >
+                  <span class="ml-auto text-muted" style="font-size: 11px; white-space: nowrap;"
+                    >{relativeTime(r.started_at)} · {fmtCost(r.total_cost_usd)}</span
+                  >
                 </a>
               {/each}
             </div>
           {:else}
-            <div class="text-muted" style="font-size: 13px; font-style: italic;">no runs yet — fire one above.</div>
+            <div class="text-muted" style="font-size: 13px; font-style: italic;">
+              no runs yet — fire one above.
+            </div>
           {/if}
         </section>
       </div>
@@ -101,12 +131,15 @@
           <div class="label-cap" style="margin-bottom: 8px;">Config</div>
           <div class="text-dim" style="font-size: 13px; margin-bottom: 10px;">{agent.description}</div>
           <div style="font-size: 12px;" class="space-y-1">
-            <div><span class="label-cap">model</span> <span class="mono text-dim">{agent.model ?? 'default'}</span></div>
+            <div>
+              <span class="label-cap">model</span>
+              <span class="mono text-dim">{agent.model ?? 'default'}</span>
+            </div>
             <div><span class="label-cap">tools</span> <span class="text-dim">{agent.tools.length}</span></div>
           </div>
           {#if agent.tools.length}
             <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px;">
-              {#each agent.tools as t}<span class="src">{t}</span>{/each}
+              {#each agent.tools as t (t)}<span class="src">{t}</span>{/each}
             </div>
           {/if}
           {#if agent.subagents.length}
@@ -118,15 +151,26 @@
           <div class="label-cap" style="margin-bottom: 8px;">Runners ({runners.length})</div>
           {#if runners.length}
             <div class="space-y-2">
-              {#each runners as s}
-                <a href={href('/runners/' + encodeURIComponent(s.name))} use:link class="row-link" style="display: flex; gap: 8px; align-items: baseline; font-size: 12px; text-decoration: none;">
+              {#each runners as s (s.name)}
+                <a
+                  href={href('/runners/' + encodeURIComponent(s.name))}
+                  use:link
+                  class="row-link"
+                  style="display: flex; gap: 8px; align-items: baseline; font-size: 12px; text-decoration: none;"
+                >
                   <span class="text-bright">{s.name}</span>
                   <span class="mono text-dim ml-auto">{s.run_at ? 'once' : s.cron}</span>
                 </a>
               {/each}
             </div>
           {:else}
-            <div class="text-muted" style="font-size: 12px; font-style: italic;">none — <button class="linkish" onclick={() => navigate('/runners?agent=' + encodeURIComponent(agentName))}>schedule one</button></div>
+            <div class="text-muted" style="font-size: 12px; font-style: italic;">
+              none — <button
+                class="linkish"
+                onclick={() => navigate('/runners?agent=' + encodeURIComponent(agentName))}
+                >schedule one</button
+              >
+            </div>
           {/if}
         </div>
       </aside>
@@ -140,10 +184,17 @@
     border-radius: var(--radius);
     transition: background 0.12s var(--transition);
   }
-  .row-link:hover { background: var(--surface2); }
+  .row-link:hover {
+    background: var(--surface2);
+  }
   /* .src lives in global.css (shared source-pill); reused here for tool tags. */
   .linkish {
-    background: none; border: 0; padding: 0; cursor: pointer;
-    color: var(--accent-soft); font: inherit; text-decoration: underline;
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    color: var(--accent-soft);
+    font: inherit;
+    text-decoration: underline;
   }
 </style>

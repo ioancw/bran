@@ -23,9 +23,28 @@
 
 <div class="card section">
   <div class="section-head">
-    <button type="button" class="section-toggle" onclick={() => (expanded = !expanded)}>
-      <svg class="section-chevron" class:open={expanded} width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
-        <path d="M2 4l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+    <button
+      type="button"
+      class="section-toggle"
+      aria-expanded={expanded}
+      onclick={() => (expanded = !expanded)}
+    >
+      <svg
+        class="section-chevron"
+        class:open={expanded}
+        width="10"
+        height="10"
+        viewBox="0 0 10 10"
+        fill="none"
+        aria-hidden="true"
+      >
+        <path
+          d="M2 4l3 3 3-3"
+          stroke="currentColor"
+          stroke-width="1.3"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
       </svg>
       <span class="label-cap">{label}</span>
     </button>

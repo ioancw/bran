@@ -73,7 +73,18 @@ export const api = {
   catalog: () => getJSON<Catalog>('/spa/catalog'),
   agents: () => getJSON<AgentInfo[]>('/spa/agents'),
 
-  runs: (q: { agent?: string; status?: string; project_id?: string; schedule_id?: string; session_id?: string; exclude_chats?: boolean; limit?: number; q?: string } = {}) => {
+  runs: (
+    q: {
+      agent?: string
+      status?: string
+      project_id?: string
+      schedule_id?: string
+      session_id?: string
+      exclude_chats?: boolean
+      limit?: number
+      q?: string
+    } = {},
+  ) => {
     const p = new URLSearchParams()
     if (q.agent) p.set('agent', q.agent)
     if (q.status) p.set('status', q.status)
@@ -90,8 +101,7 @@ export const api = {
     form<{ run_id: string; starred: boolean }>(`/spa/outputs/${encodeURIComponent(id)}/star`, {
       starred: starred ? 'true' : 'false',
     }),
-  markOutputsRead: (ids: string[]) =>
-    form<{ read: number }>('/spa/outputs/read', { ids: ids.join(',') }),
+  markOutputsRead: (ids: string[]) => form<{ read: number }>('/spa/outputs/read', { ids: ids.join(',') }),
   run: (id: string) => getJSON<RunRecord>(`/spa/runs/${encodeURIComponent(id)}`),
   runTranscript: (id: string) =>
     getJSON<{ run: RunRecord; events: ChatEvent[] }>(`/spa/runs/${encodeURIComponent(id)}/transcript`),
@@ -115,9 +125,14 @@ export const api = {
   projectDetail: (id: string) => getJSON<ProjectDetail>(`/spa/projects/${encodeURIComponent(id)}`),
   newProject: (name: string, description = '') =>
     form<ProjectSummary>('/spa/projects', { name, description }),
-  saveProject: (id: string, fields: { name: string; description?: string; instructions?: string; work_dir?: string }) =>
+  saveProject: (
+    id: string,
+    fields: { name: string; description?: string; instructions?: string; work_dir?: string },
+  ) =>
     form<ProjectSummary>(`/spa/projects/${encodeURIComponent(id)}`, {
-      name: fields.name, description: fields.description ?? '', instructions: fields.instructions ?? '',
+      name: fields.name,
+      description: fields.description ?? '',
+      instructions: fields.instructions ?? '',
       work_dir: fields.work_dir ?? '',
     }),
   deleteProject: async (id: string): Promise<void> => {
@@ -150,19 +165,46 @@ export const api = {
     if (!r.ok) await raiseFor(r, url)
   },
 
-  newSchedule: (fields: { name: string; agent: string; cron?: string; task?: string; project_id?: string; run_at?: string; verify?: boolean; delta?: boolean; alert?: string }) => {
+  newSchedule: (fields: {
+    name: string
+    agent: string
+    cron?: string
+    task?: string
+    project_id?: string
+    run_at?: string
+    verify?: boolean
+    delta?: boolean
+    alert?: string
+  }) => {
     const body: Record<string, string> = {
-      name: fields.name, agent: fields.agent, cron: fields.cron ?? '', task: fields.task ?? '',
-      verify: fields.verify ? 'true' : '', delta: fields.delta ? 'true' : '',
+      name: fields.name,
+      agent: fields.agent,
+      cron: fields.cron ?? '',
+      task: fields.task ?? '',
+      verify: fields.verify ? 'true' : '',
+      delta: fields.delta ? 'true' : '',
       alert: fields.alert ?? '',
     }
     if (fields.project_id) body.project_id = fields.project_id // omit → standalone
     if (fields.run_at) body.run_at = fields.run_at // present → one-shot
     return form<ScheduleRecord>('/spa/schedules', body)
   },
-  updateSchedule: (name: string, fields: { agent: string; task?: string; cron?: string; run_at?: string; verify?: boolean; delta?: boolean; alert?: string }) => {
+  updateSchedule: (
+    name: string,
+    fields: {
+      agent: string
+      task?: string
+      cron?: string
+      run_at?: string
+      verify?: boolean
+      delta?: boolean
+      alert?: string
+    },
+  ) => {
     const body: Record<string, string> = {
-      agent: fields.agent, task: fields.task ?? '', cron: fields.cron ?? '',
+      agent: fields.agent,
+      task: fields.task ?? '',
+      cron: fields.cron ?? '',
     }
     if (fields.run_at) body.run_at = fields.run_at // present → one-shot
     // Only send the flags when the caller set them (absent = leave unchanged).
@@ -212,7 +254,10 @@ export const api = {
  * Aborting the signal is the "stop generating" path — the server sees the
  * disconnect and cancels the agent turn.
  */
-export async function* streamChat(fields: Record<string, string>, signal?: AbortSignal): AsyncGenerator<ChatEvent> {
+export async function* streamChat(
+  fields: Record<string, string>,
+  signal?: AbortSignal,
+): AsyncGenerator<ChatEvent> {
   const body = new URLSearchParams()
   for (const [k, v] of Object.entries(fields)) if (v) body.set(k, v)
 
@@ -245,24 +290,31 @@ async function* readSSE(resp: Response): AsyncGenerator<ChatEvent> {
   const reader = resp.body!.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    let sep: number
-    while ((sep = buffer.indexOf('\n\n')) !== -1) {
-      const rawEvent = buffer.slice(0, sep)
-      buffer = buffer.slice(sep + 2)
-      for (const line of rawEvent.split('\n')) {
-        if (!line.startsWith('data:')) continue
-        const payload = line.slice(5).trim()
-        if (!payload) continue
-        try {
-          yield JSON.parse(payload) as ChatEvent
-        } catch {
-          // ignore malformed frames
+  // finally: consumers `break` out of this generator on {type:'done'}, which
+  // ends execution at the suspended yield — without an explicit cancel the
+  // response body (and the server's connection) stays open until GC.
+  try {
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let sep: number
+      while ((sep = buffer.indexOf('\n\n')) !== -1) {
+        const rawEvent = buffer.slice(0, sep)
+        buffer = buffer.slice(sep + 2)
+        for (const line of rawEvent.split('\n')) {
+          if (!line.startsWith('data:')) continue
+          const payload = line.slice(5).trim()
+          if (!payload) continue
+          try {
+            yield JSON.parse(payload) as ChatEvent
+          } catch {
+            // ignore malformed frames
+          }
         }
       }
     }
+  } finally {
+    await reader.cancel().catch(() => {})
   }
 }

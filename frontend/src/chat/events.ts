@@ -55,11 +55,7 @@ function close(st: ReducerState): void {
  * reactivity picks it up). Returns a session id when the event carries one, so
  * the caller can pivot the URL for a brand-new chat.
  */
-export function applyEvent(
-  items: ChatItem[],
-  st: ReducerState,
-  ev: ChatEvent,
-): { session?: string } {
+export function applyEvent(items: ChatItem[], st: ReducerState, ev: ChatEvent): { session?: string } {
   switch (ev.type) {
     case 'session':
       return { session: ev.session_id }

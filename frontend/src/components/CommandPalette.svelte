@@ -41,11 +41,23 @@
       ...NAV.map(([label, to]): Cmd => ({ label, meta: 'go to', run: () => navigate(to) })),
     ]
     for (const p of workspace.projects) {
-      cmds.push({ label: p.name, meta: 'project', run: () => navigate('/projects/' + encodeURIComponent(p.id)) })
-      cmds.push({ label: `New chat in ${p.name}`, meta: 'action', run: () => navigate('/chat?project=' + encodeURIComponent(p.id)) })
+      cmds.push({
+        label: p.name,
+        meta: 'project',
+        run: () => navigate('/projects/' + encodeURIComponent(p.id)),
+      })
+      cmds.push({
+        label: `New chat in ${p.name}`,
+        meta: 'action',
+        run: () => navigate('/chat?project=' + encodeURIComponent(p.id)),
+      })
     }
     for (const r of runners) {
-      cmds.push({ label: r.name, meta: 'runner', run: () => navigate('/runners/' + encodeURIComponent(r.name)) })
+      cmds.push({
+        label: r.name,
+        meta: 'runner',
+        run: () => navigate('/runners/' + encodeURIComponent(r.name)),
+      })
       cmds.push({
         label: `${r.enabled ? 'Pause' : 'Resume'} ${r.name}`,
         meta: 'action',
@@ -62,7 +74,11 @@
       })
     }
     for (const c of workspace.chats) {
-      cmds.push({ label: c.title, meta: 'recent chat', run: () => navigate('/chat/' + encodeURIComponent(c.id)) })
+      cmds.push({
+        label: c.title,
+        meta: 'recent chat',
+        run: () => navigate('/chat/' + encodeURIComponent(c.id)),
+      })
     }
     return cmds
   })
@@ -93,7 +109,10 @@
     q = ''
     idx = 0
     void loadProjects()
-    void api.schedules().then((s) => (runners = s)).catch(() => {})
+    void api
+      .schedules()
+      .then((s) => (runners = s))
+      .catch(() => {})
     requestAnimationFrame(() => inputEl?.focus())
   }
   function close() {
@@ -111,7 +130,8 @@
   function onWindowKeydown(e: KeyboardEvent) {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault()
-      open ? close() : openPalette()
+      if (open) close()
+      else openPalette()
     } else if (open && e.key === 'Escape') {
       e.preventDefault()
       close()
@@ -137,9 +157,19 @@
 <svelte:window onkeydown={onWindowKeydown} />
 
 {#if open}
-  <button class="pal-overlay overlay-backdrop" aria-label="close palette" transition:fade={{ duration: 120 }} onclick={close}></button>
-  <div class="pal card elev-lg" role="dialog" aria-label="command palette"
-       transition:scale={{ duration: 140, start: 0.98 }}>
+  <button
+    class="pal-overlay overlay-backdrop"
+    aria-label="close palette"
+    transition:fade={{ duration: 120 }}
+    onclick={close}
+  ></button>
+  <div
+    class="pal card elev-lg"
+    role="dialog"
+    aria-modal="true"
+    aria-label="command palette"
+    transition:scale={{ duration: 140, start: 0.98 }}
+  >
     <input
       bind:this={inputEl}
       bind:value={q}
@@ -155,9 +185,16 @@
     />
     <div class="pal-list" role="listbox" id="pal-listbox" aria-label="commands">
       {#each shown as cmd, i (cmd.meta + cmd.label)}
-        <button class="pal-item" class:on={i === idx} id="pal-opt-{i}"
-                role="option" aria-selected={i === idx} tabindex="-1"
-                onclick={() => pick(i)} onmouseenter={() => (idx = i)}>
+        <button
+          class="pal-item"
+          class:on={i === idx}
+          id="pal-opt-{i}"
+          role="option"
+          aria-selected={i === idx}
+          tabindex="-1"
+          onclick={() => pick(i)}
+          onmouseenter={() => (idx = i)}
+        >
           <span class="pal-label">{cmd.label}</span>
           <span class="pal-meta label-cap">{cmd.meta}</span>
         </button>
@@ -197,7 +234,9 @@
     color: var(--fg-bright);
     outline: none;
   }
-  .pal-input::placeholder { color: var(--muted); }
+  .pal-input::placeholder {
+    color: var(--muted);
+  }
   .pal-list {
     max-height: 320px;
     overflow-y: auto;
@@ -217,14 +256,21 @@
     color: var(--fg);
     font-size: 13.5px;
   }
-  .pal-item.on { background: var(--accent-glow); }
-  .pal-item.on .pal-label { color: var(--accent-soft); }
+  .pal-item.on {
+    background: var(--accent-glow);
+  }
+  .pal-item.on .pal-label {
+    color: var(--accent-soft);
+  }
   .pal-label {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .pal-meta { margin-left: auto; flex-shrink: 0; }
+  .pal-meta {
+    margin-left: auto;
+    flex-shrink: 0;
+  }
   .pal-none {
     padding: 14px 10px;
     font-size: 13px;

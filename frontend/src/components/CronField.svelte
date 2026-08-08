@@ -6,13 +6,17 @@
   // it holds whatever the user typed — the backend normalises it to cron on save.
   import { api } from '../lib/api'
 
-  let { value = $bindable(''), placeholder = 'e.g. every weekday at 8am' }: {
+  let {
+    value = $bindable(''),
+    placeholder = 'e.g. every weekday at 8am',
+  }: {
     value?: string
     placeholder?: string
   } = $props()
 
   let human = $state('')
   let error = $state('')
+  const uid = $props.id()
 
   const PRESETS = [
     { label: 'Weekdays 8am', expr: 'every weekday at 8am' },
@@ -52,8 +56,17 @@
 </script>
 
 <div>
-  <input class="field" bind:value {placeholder} aria-label="schedule" />
-  <div class="cron-meta">
+  <input
+    class="field"
+    bind:value
+    {placeholder}
+    aria-label="schedule"
+    aria-describedby="{uid}-meta"
+    aria-invalid={error ? true : undefined}
+  />
+  <!-- role="status": the parse result / error is announced as it changes,
+       not just painted under the input. -->
+  <div class="cron-meta" id="{uid}-meta" role="status">
     {#if error}
       <span class="cron-err">{error.split('\n')[0]}</span>
     {:else if human}
@@ -63,18 +76,35 @@
     {/if}
   </div>
   <div class="cron-presets">
-    {#each PRESETS as p}
+    {#each PRESETS as p (p.expr)}
       <button type="button" class="cron-chip" onclick={() => (value = p.expr)}>{p.label}</button>
     {/each}
   </div>
 </div>
 
 <style>
-  .cron-meta { min-height: 15px; margin-top: 4px; font-size: 11px; line-height: 1.3; }
-  .cron-ok { color: var(--accent-soft); }
-  .cron-err { color: var(--red); }
-  .cron-hint { color: var(--muted); font-style: italic; }
-  .cron-presets { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .cron-meta {
+    min-height: 15px;
+    margin-top: 4px;
+    font-size: 11px;
+    line-height: 1.3;
+  }
+  .cron-ok {
+    color: var(--accent-soft);
+  }
+  .cron-err {
+    color: var(--red);
+  }
+  .cron-hint {
+    color: var(--muted);
+    font-style: italic;
+  }
+  .cron-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+  }
   .cron-chip {
     background: transparent;
     border: 1px solid var(--border2);
@@ -85,5 +115,8 @@
     cursor: pointer;
     transition: all 0.12s var(--transition);
   }
-  .cron-chip:hover { color: var(--fg-bright); border-color: var(--muted); }
+  .cron-chip:hover {
+    color: var(--fg-bright);
+    border-color: var(--muted);
+  }
 </style>

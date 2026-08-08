@@ -27,8 +27,11 @@ export function localDateTime(iso: string | null): string {
   const d = new Date(iso)
   if (isNaN(d.getTime())) return iso // unparseable — show it raw rather than "Invalid Date"
   return d.toLocaleString(undefined, {
-    year: 'numeric', month: 'short', day: '2-digit',
-    hour: '2-digit', minute: '2-digit',
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
   })
 }
 

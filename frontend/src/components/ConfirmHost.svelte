@@ -51,12 +51,21 @@
 <svelte:window onkeydown={onKeydown} />
 
 {#if confirmState.open}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-  <div class="confirm-backdrop overlay-backdrop" role="presentation"
-       transition:fade={{ duration: 120 }} onclick={onBackdrop}>
-    <div class="confirm-box card elev-lg" bind:this={boxEl}
-         transition:scale={{ duration: 140, start: 0.96 }}
-         role="dialog" aria-modal="true" aria-labelledby="confirm-msg" tabindex="-1">
+  <div
+    class="confirm-backdrop overlay-backdrop"
+    role="presentation"
+    transition:fade={{ duration: 120 }}
+    onclick={onBackdrop}
+  >
+    <div
+      class="confirm-box card elev-lg"
+      bind:this={boxEl}
+      transition:scale={{ duration: 140, start: 0.96 }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="confirm-msg"
+      tabindex="-1"
+    >
       <p class="confirm-msg" id="confirm-msg">{confirmState.message}</p>
       <div class="confirm-actions">
         <button class="btn-outline" bind:this={cancelBtn} onclick={() => settleConfirm(false)}>cancel</button>

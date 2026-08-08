@@ -2,8 +2,8 @@
   import { api } from '../lib/api'
   import { href, link } from '../lib/router.svelte'
   import { fmtCost, fmtDuration, localDateTime, shortId } from '../lib/time'
-  import { errorText } from '../lib/errors'
   import Page from '../components/Page.svelte'
+  import ErrorBanner from '../components/ErrorBanner.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import EmptyState from '../components/EmptyState.svelte'
   import StatusBadge from '../components/StatusBadge.svelte'
@@ -80,21 +80,29 @@
 
 <Page title="Runs">
   {#snippet subtitle()}{shown.length} of {runs.length}{/snippet}
-  {#if error}<div class="card" style="color: var(--red);">{errorText(error)}</div>{/if}
+  {#if error}<ErrorBanner {error} onretry={load} />{/if}
   {#if !loaded}
     <Skeleton rows={5} />
   {:else if !runs.length}
-    <EmptyState title="no runs yet" hint="run an agent — from chat, a runner, or the CLI — and it lands here" />
+    <EmptyState
+      title="no runs yet"
+      hint="run an agent — from chat, a runner, or the CLI — and it lands here"
+    />
   {:else}
     <div style="display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; align-items: center;">
-      {#each SOURCES as s}
+      {#each SOURCES as s (s)}
         <button class="chip" class:on={filter === s} onclick={() => (filter = s)}>
           {s} <span class="chip-n">{countFor(s)}</span>
         </button>
       {/each}
       <span class="chip-sep"></span>
-      {#each STATUSES as s}
-        <button class="chip" class:on={statusFilter === s} class:warn={s === 'failed'} onclick={() => (statusFilter = s)}>
+      {#each STATUSES as s (s)}
+        <button
+          class="chip"
+          class:on={statusFilter === s}
+          class:warn={s === 'failed'}
+          onclick={() => (statusFilter = s)}
+        >
           {s} <span class="chip-n">{countForStatus(s)}</span>
         </button>
       {/each}
@@ -103,15 +111,28 @@
       <table class="bran-table" style="min-width: 720px;">
         <thead>
           <tr>
-            <th>ID</th><th>Agent</th><th>Source</th><th>Status</th><th>Started</th><th class="num">Dur</th><th class="num">Cost</th><th>Task</th>
+            <th>ID</th><th>Agent</th><th>Source</th><th>Status</th><th>Started</th><th class="num">Dur</th><th
+              class="num">Cost</th
+            ><th>Task</th>
           </tr>
         </thead>
         <tbody>
-          {#each shown as r}
+          {#each shown as r (r.id)}
             <tr>
               <td>
-                <a href={href('/runs/' + r.id)} use:link class="mono" style="color: var(--fg-dim); text-decoration: none;">{shortId(r.id)}</a>
-                {#if r.parent_run_id}<span class="text-muted" title="spawned by another run" style="font-size: 10px;"> ↳</span>{/if}
+                <a
+                  href={href('/runs/' + r.id)}
+                  use:link
+                  class="mono"
+                  style="color: var(--fg-dim); text-decoration: none;">{shortId(r.id)}</a
+                >
+                {#if r.parent_run_id}<span
+                    class="text-muted"
+                    title="spawned by another run"
+                    style="font-size: 10px;"
+                  >
+                    ↳</span
+                  >{/if}
               </td>
               <td style="color: var(--fg-bright);">{r.agent}</td>
               <td><span class="src src-{r.source}">{r.source}</span></td>
@@ -122,7 +143,12 @@
               <td style="color: var(--fg-dim); max-width: 320px;">
                 <div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{r.task}</div>
                 {#if r.status === 'failed' && r.error}
-                  <div title={r.error} style="color: var(--red); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{r.error}</div>
+                  <div
+                    title={r.error}
+                    style="color: var(--red); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+                  >
+                    {r.error}
+                  </div>
                 {/if}
               </td>
             </tr>
@@ -152,14 +178,25 @@
     text-transform: capitalize;
     transition: all 0.12s var(--transition);
   }
-  .chip:hover { color: var(--fg-bright); border-color: var(--muted); }
-  .chip.on { background: var(--accent-glow); border-color: var(--accent-soft); color: var(--accent-soft); }
+  .chip:hover {
+    color: var(--fg-bright);
+    border-color: var(--muted);
+  }
+  .chip.on {
+    background: var(--accent-glow);
+    border-color: var(--accent-soft);
+    color: var(--accent-soft);
+  }
   .chip.warn.on {
     background: color-mix(in srgb, var(--red) 12%, transparent);
     border-color: var(--red);
     color: var(--red);
   }
-  .chip-n { opacity: 0.6; font-family: var(--font-mono); font-size: 10px; }
+  .chip-n {
+    opacity: 0.6;
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
   .chip-sep {
     width: 1px;
     height: 18px;

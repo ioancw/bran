@@ -7,20 +7,48 @@
   <div class="toasts">
     {#each toastState.items as t (t.id)}
       <!-- Errors announce assertively (role=alert); the rest stay polite. -->
-      <div class="toast toast-{t.tone} elev-md" role={t.tone === 'err' ? 'alert' : 'status'}
-           in:fly={{ y: 8, duration: 180 }} out:fade={{ duration: 140 }}>
+      <div
+        class="toast toast-{t.tone} elev-md"
+        role={t.tone === 'err' ? 'alert' : 'status'}
+        in:fly={{ y: 8, duration: 180 }}
+        out:fade={{ duration: 140 }}
+      >
         <span class="toast-icon" aria-hidden="true">
           {#if t.tone === 'ok'}
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6.5l2.5 2.5 4.5-5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"
+              ><path
+                d="M2.5 6.5l2.5 2.5 4.5-5"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              /></svg
+            >
           {:else if t.tone === 'err'}
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 3v3.6M6 8.8v.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"
+              ><path
+                d="M6 3v3.6M6 8.8v.2"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+              /></svg
+            >
           {:else}
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="2" fill="currentColor"/></svg>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"
+              ><circle cx="6" cy="6" r="2" fill="currentColor" /></svg
+            >
           {/if}
         </span>
         <span class="toast-text">{t.text}</span>
         <button class="toast-x" onclick={() => dismiss(t.id)} aria-label="dismiss">
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none"
+            ><path
+              d="M2 2l6 6M8 2l-6 6"
+              stroke="currentColor"
+              stroke-width="1.4"
+              stroke-linecap="round"
+            /></svg
+          >
         </button>
       </div>
     {/each}
@@ -54,7 +82,10 @@
     color: var(--fg);
     max-width: min(480px, 90vw);
   }
-  .toast-icon { display: inline-flex; flex-shrink: 0; }
+  .toast-icon {
+    display: inline-flex;
+    flex-shrink: 0;
+  }
   .toast-text {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -72,9 +103,20 @@
     border-radius: 50%;
     color: var(--muted);
     cursor: pointer;
-    transition: color var(--dur-1) var(--transition), background var(--dur-1) var(--transition);
+    transition:
+      color var(--dur-1) var(--transition),
+      background var(--dur-1) var(--transition);
   }
-  .toast-x:hover { color: var(--fg); background: var(--surface2); }
-  .toast-ok { border-color: color-mix(in srgb, var(--green) 45%, transparent); color: var(--green); }
-  .toast-err { border-color: color-mix(in srgb, var(--red) 50%, transparent); color: var(--red); }
+  .toast-x:hover {
+    color: var(--fg);
+    background: var(--surface2);
+  }
+  .toast-ok {
+    border-color: color-mix(in srgb, var(--green) 45%, transparent);
+    color: var(--green);
+  }
+  .toast-err {
+    border-color: color-mix(in srgb, var(--red) 50%, transparent);
+    color: var(--red);
+  }
 </style>

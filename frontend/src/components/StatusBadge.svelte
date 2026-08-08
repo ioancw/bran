@@ -23,7 +23,12 @@
     animation: badge-pulse 1.6s ease-in-out infinite;
   }
   @keyframes badge-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.35; }
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.35;
+    }
   }
 </style>

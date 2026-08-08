@@ -3,6 +3,8 @@
   import { href, link, navigate } from '../lib/router.svelte'
   import { errorText } from '../lib/errors'
   import Page from '../components/Page.svelte'
+  import Skeleton from '../components/Skeleton.svelte'
+  import ErrorBanner from '../components/ErrorBanner.svelte'
   import type { ProjectSummary } from '../lib/types'
 
   let projects = $state<ProjectSummary[]>([])
@@ -12,6 +14,8 @@
   let showForm = $state(false)
   let newName = $state('')
   let newDesc = $state('')
+  let creating = $state(false)
+  let formError = $state<string | null>(null)
 
   async function load() {
     error = null
@@ -27,14 +31,23 @@
     void load()
   })
 
-  async function create() {
-    if (!newName.trim()) return
+  async function create(e?: Event) {
+    e?.preventDefault()
+    if (creating) return
+    if (!newName.trim()) {
+      formError = 'give the project a name'
+      return
+    }
+    formError = null
+    creating = true
     let p
     try {
       p = await api.newProject(newName.trim(), newDesc.trim())
-    } catch (e) {
-      error = errorText(e)
+    } catch (err) {
+      formError = errorText(err)
       return
+    } finally {
+      creating = false
     }
     newName = ''
     newDesc = ''
@@ -44,31 +57,58 @@
 </script>
 
 <Page title="Projects">
-  {#snippet subtitle()}{projects.length} workspaces{/snippet}
+  {#snippet subtitle()}{loaded
+      ? `${projects.length} ${projects.length === 1 ? 'workspace' : 'workspaces'}`
+      : 'loading…'}{/snippet}
   {#snippet actions()}
     <button class="btn-primary" onclick={() => (showForm = !showForm)}>+ new project</button>
   {/snippet}
 
   <div class="space-y-4">
-    {#if error}<div class="card" style="color: var(--red);">{errorText(error)}</div>{/if}
+    {#if error}<ErrorBanner {error} onretry={load} />{/if}
 
     {#if showForm}
-      <div class="card-quiet" style="max-width: 480px;">
+      <form class="card-quiet" style="max-width: 480px;" onsubmit={create}>
         <span class="label-cap" style="display: block; margin-bottom: 6px;">New project</span>
-        <input class="field" bind:value={newName} placeholder="name" aria-label="project name" style="margin-bottom: 6px;" />
-        <input class="field" bind:value={newDesc} placeholder="description (optional)" aria-label="project description" />
+        <input
+          class="field"
+          bind:value={newName}
+          placeholder="name"
+          aria-label="project name"
+          style="margin-bottom: 6px;"
+        />
+        <input
+          class="field"
+          bind:value={newDesc}
+          placeholder="description (optional)"
+          aria-label="project description"
+        />
+        {#if formError}<div role="alert" style="color: var(--red); font-size: 12px; margin-top: 6px;">
+            {formError}
+          </div>{/if}
         <div style="display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px;">
-          <button class="btn-ghost" onclick={() => (showForm = false)}>cancel</button>
-          <button class="btn-primary" onclick={create}>create</button>
+          <button
+            type="button"
+            class="btn-ghost"
+            onclick={() => {
+              showForm = false
+              formError = null
+            }}>cancel</button
+          >
+          <button type="submit" class="btn-primary" disabled={creating}
+            >{creating ? 'creating…' : 'create'}</button
+          >
         </div>
-      </div>
+      </form>
     {/if}
 
-    {#if loaded && !projects.length && !showForm}
+    {#if !loaded}
+      <Skeleton rows={4} />
+    {:else if !projects.length && !showForm}
       <!-- First-run: a project is the front door, so explain it rather than
            showing an empty grid. -->
       <div class="empty-state">
-        <div class="brackets">[       ]</div>
+        <div class="brackets">[ ]</div>
         <h3>no projects yet</h3>
         <p class="cta">a project is a workspace — chat, memory, and scheduled runners in one place</p>
         <div style="margin-top: 18px;">
@@ -79,18 +119,26 @@
       <section class="proj-hero">
         <div class="proj-rule"></div>
         <p class="proj-standfirst">
-          A workspace keeps a project's <em>conversations, memory, and scheduled agents</em> in one place — your room to think with the fleet.
+          A workspace keeps a project's <em>conversations, memory, and scheduled agents</em> in one place — your
+          room to think with the fleet.
         </p>
       </section>
       <div class="label-cap" style="margin-bottom: 12px;">Workspaces · {projects.length}</div>
       <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px;">
-        {#each projects as p}
-          <a href={href('/projects/' + encodeURIComponent(p.id))} use:link class="card project-card" style="text-decoration: none; display: block;">
+        {#each projects as p (p.id)}
+          <a
+            href={href('/projects/' + encodeURIComponent(p.id))}
+            use:link
+            class="card project-card"
+            style="text-decoration: none; display: block;"
+          >
             <div style="display: flex; align-items: baseline; gap: 8px;">
               <span class="text-bright" style="font-weight: 600;">{p.name}</span>
               <span class="ml-auto label-cap">{p.n_chats} chats</span>
             </div>
-            {#if p.description}<p class="text-dim" style="font-size: 13px; margin-top: 6px;">{p.description}</p>{/if}
+            {#if p.description}<p class="text-dim" style="font-size: 13px; margin-top: 6px;">
+                {p.description}
+              </p>{/if}
           </a>
         {/each}
       </div>
@@ -128,7 +176,9 @@
 
   /* Subtle lift on the project cards — the grid is the front door. */
   .project-card {
-    transition: border-color 0.15s var(--transition), transform 0.15s var(--transition);
+    transition:
+      border-color 0.15s var(--transition),
+      transform 0.15s var(--transition);
   }
   .project-card:hover {
     transform: translateY(-1px);

@@ -10,12 +10,20 @@
   import PlanCard from './PlanCard.svelte'
   import { toast } from '../lib/toast.svelte'
 
-  let { items, streamingIndex = -1, onaction }: {
+  let {
+    items,
+    streamingIndex = -1,
+    onaction,
+    onretry,
+  }: {
     items: ChatItem[]
     streamingIndex?: number
     // Lets interactive cards (PlanCard approve/revise) put a message in the
     // composer (and optionally send it). Absent on read-only surfaces.
     onaction?: (text: string, sendNow: boolean) => void
+    // Re-send the turn that produced a trailing error row. Only the live chat
+    // passes this; transcript replays render errors as plain records.
+    onretry?: () => void
   } = $props()
 
   // Copy an assistant turn's markdown source; brief "copied" feedback inline.
@@ -48,9 +56,12 @@
       if (it.kind === 'tool' && !NEVER_GROUP.has(it.name)) {
         let j = i
         while (
-          j < items.length && items[j].kind === 'tool' &&
-          (items[j] as ToolItem).name === it.name && !NEVER_GROUP.has((items[j] as ToolItem).name)
-        ) j++
+          j < items.length &&
+          items[j].kind === 'tool' &&
+          (items[j] as ToolItem).name === it.name &&
+          !NEVER_GROUP.has((items[j] as ToolItem).name)
+        )
+          j++
         const run = items.slice(i, j) as ToolItem[]
         if (run.length >= 3) {
           out.push({ group: true, name: it.name, tools: run, idx: i })
@@ -79,63 +90,90 @@
 
 {#each rows as row (rowKey(row))}
   <div class="chat-row">
-  {#if row.group}
-    <ToolGroup name={row.name} tools={row.tools} />
-  {:else}
-    {@const item = row.item}
-    {@const i = row.idx}
-  {#if item.kind === 'user'}
-    <!-- Your turn: a compact right-aligned bubble (position says who it is). -->
-    <div class="msg-user">
-      <div class="user-bubble">{item.text}</div>
-    </div>
-  {:else if item.kind === 'assistant'}
-    <!-- bran's turn: prose flows on the canvas, no card chrome — the answer is
+    {#if row.group}
+      <ToolGroup name={row.name} tools={row.tools} />
+    {:else}
+      {@const item = row.item}
+      {@const i = row.idx}
+      {#if item.kind === 'user'}
+        <!-- Your turn: a compact right-aligned bubble (position says who it is). -->
+        <div class="msg-user">
+          <div class="user-bubble">{item.text}</div>
+        </div>
+      {:else if item.kind === 'assistant'}
+        <!-- bran's turn: prose flows on the canvas, no card chrome — the answer is
          the page, not a boxed message. Copy reveals on hover/focus. -->
-    <div class="msg-assistant">
-      <Prose text={item.text} streaming={i === streamingIndex} />
-      {#if i !== streamingIndex}
-        <div class="row-actions">
-          <button class="msg-action-btn" class:done={copiedIdx === i}
-                  onclick={() => copyText(item.text, i)}>
-            {copiedIdx === i ? 'copied ✓' : 'copy'}
-          </button>
+        <div class="msg-assistant">
+          <Prose text={item.text} streaming={i === streamingIndex} />
+          {#if i !== streamingIndex}
+            <div class="row-actions">
+              <button
+                class="msg-action-btn"
+                class:done={copiedIdx === i}
+                onclick={() => copyText(item.text, i)}
+              >
+                {copiedIdx === i ? 'copied ✓' : 'copy'}
+              </button>
+            </div>
+          {/if}
+        </div>
+      {:else if item.kind === 'thinking'}
+        <details class="thinking-row">
+          <summary class="label-cap">
+            <svg
+              class="think-icon"
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+              ><path
+                d="M12 3a6 6 0 0 1 6 6c0 2.2-1.2 4.1-3 5.2V17a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1v-2.8c-1.8-1.1-3-3-3-5.2a6 6 0 0 1 6-6z"
+              /><path d="M10 21h4" /></svg
+            >
+            thinking
+          </summary>
+          <div class="thinking-body text-dim">{item.text}</div>
+        </details>
+      {:else if item.kind === 'tool'}
+        {#if item.name === 'mcp__bran__spawn_agent'}
+          <SpawnCard tool={item} />
+        {:else if item.name === 'mcp__bran__propose_plan'}
+          <PlanCard tool={item} {onaction} answered={items.slice(i + 1).some((x) => x.kind === 'user')} />
+        {:else}
+          <ToolBlock tool={item} />
+        {/if}
+      {:else if item.kind === 'routed'}
+        <div
+          class="text-muted font-mono"
+          style="padding: 4px 12px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em;"
+        >
+          → routed to <span class="text-accent-soft">{item.agent}</span>
+        </div>
+      {:else if item.kind === 'footer'}
+        <div
+          class="text-muted font-mono"
+          style="padding: 4px 12px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em;"
+        >
+          {#if item.stopped}
+            stopped
+          {:else}
+            done · {item.numTurns} turns{item.cost != null ? ` · $${item.cost.toFixed(4)}` : ''}
+          {/if}
+        </div>
+      {:else if item.kind === 'error'}
+        <div class="card err-row">
+          <span class="err-msg">{item.message}</span>
+          {#if onretry && i === items.length - 1}
+            <button class="btn-outline" onclick={onretry}>↻ retry</button>
+          {/if}
         </div>
       {/if}
-    </div>
-  {:else if item.kind === 'thinking'}
-    <details class="thinking-row">
-      <summary class="label-cap">
-        <svg class="think-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 1 6 6c0 2.2-1.2 4.1-3 5.2V17a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1v-2.8c-1.8-1.1-3-3-3-5.2a6 6 0 0 1 6-6z"/><path d="M10 21h4"/></svg>
-        thinking
-      </summary>
-      <div class="thinking-body text-dim">{item.text}</div>
-    </details>
-  {:else if item.kind === 'tool'}
-    {#if item.name === 'mcp__bran__spawn_agent'}
-      <SpawnCard tool={item} />
-    {:else if item.name === 'mcp__bran__propose_plan'}
-      <PlanCard tool={item} {onaction}
-                answered={items.slice(i + 1).some((x) => x.kind === 'user')} />
-    {:else}
-      <ToolBlock tool={item} />
     {/if}
-  {:else if item.kind === 'routed'}
-    <div class="text-muted font-mono" style="padding: 4px 12px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em;">
-      → routed to <span class="text-accent-soft">{item.agent}</span>
-    </div>
-  {:else if item.kind === 'footer'}
-    <div class="text-muted font-mono" style="padding: 4px 12px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em;">
-      {#if item.stopped}
-        stopped
-      {:else}
-        done · {item.numTurns} turns{item.cost != null ? ` · $${item.cost.toFixed(4)}` : ''}
-      {/if}
-    </div>
-  {:else if item.kind === 'error'}
-    <div class="card" style="color: var(--red); border-color: color-mix(in srgb, var(--red) 30%, transparent);">{item.message}</div>
-  {/if}
-  {/if}
   </div>
 {/each}
 
@@ -146,8 +184,30 @@
     animation: row-in var(--dur-3) var(--transition) both;
   }
   @keyframes row-in {
-    from { opacity: 0; transform: translateY(3px); }
-    to   { opacity: 1; transform: translateY(0); }
+    from {
+      opacity: 0;
+      transform: translateY(3px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .err-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--red);
+    border-color: color-mix(in srgb, var(--red) 30%, transparent);
+  }
+  .err-row .err-msg {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .err-row button {
+    flex-shrink: 0;
   }
 
   .msg-user {
@@ -182,9 +242,13 @@
     transition: opacity var(--dur-1) var(--transition);
   }
   .msg-assistant:hover .row-actions,
-  .msg-assistant:focus-within .row-actions { opacity: 1; }
+  .msg-assistant:focus-within .row-actions {
+    opacity: 1;
+  }
   @media (hover: none) {
-    .row-actions { opacity: 1; }
+    .row-actions {
+      opacity: 1;
+    }
   }
   .msg-action-btn {
     background: transparent;
@@ -197,14 +261,19 @@
     font-size: 10px;
     letter-spacing: 0.1em;
     text-transform: uppercase;
-    transition: color var(--dur-1), background var(--dur-1), border-color var(--dur-1);
+    transition:
+      color var(--dur-1),
+      background var(--dur-1),
+      border-color var(--dur-1);
   }
   .msg-action-btn:hover {
     color: var(--fg-dim);
     background: var(--surface2);
     border-color: var(--border2);
   }
-  .msg-action-btn.done { color: var(--accent-soft); }
+  .msg-action-btn.done {
+    color: var(--accent-soft);
+  }
 
   /* Thinking: a quiet disclosure, not a card demanding attention. */
   .thinking-row {
@@ -213,7 +282,9 @@
     transition: background var(--dur-1) var(--transition);
   }
   .thinking-row[open],
-  .thinking-row:hover { background: var(--surface); }
+  .thinking-row:hover {
+    background: var(--surface);
+  }
   .thinking-row summary {
     display: inline-flex;
     align-items: center;
@@ -223,8 +294,13 @@
     list-style: none;
     user-select: none;
   }
-  .thinking-row summary::-webkit-details-marker { display: none; }
-  .think-icon { color: var(--muted); flex-shrink: 0; }
+  .thinking-row summary::-webkit-details-marker {
+    display: none;
+  }
+  .think-icon {
+    color: var(--muted);
+    flex-shrink: 0;
+  }
   .thinking-body {
     padding: 2px 16px 12px;
     font-size: 12px;

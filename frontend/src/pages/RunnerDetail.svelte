@@ -8,7 +8,9 @@
   import { errorText } from '../lib/errors'
   import { toast } from '../lib/toast.svelte'
   import { confirmDialog } from '../lib/confirm.svelte'
+  import { validateTrigger, nowLocal } from '../lib/schedule'
   import EmptyState from '../components/EmptyState.svelte'
+  import ErrorBanner from '../components/ErrorBanner.svelte'
   import Page from '../components/Page.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import StatusBadge from '../components/StatusBadge.svelte'
@@ -39,7 +41,7 @@
   let eAlert = $state('')
   let editError = $state('')
 
-  const projName = (id: string | null) => (id ? projects.find((p) => p.id === id)?.name ?? id : null)
+  const projName = (id: string | null) => (id ? (projects.find((p) => p.id === id)?.name ?? id) : null)
 
   async function load() {
     error = null // clear a stale banner so a recovered load shows clean
@@ -71,13 +73,35 @@
   }
   async function saveEdit() {
     if (!runner || saving) return
+    // Same client-side checks as the create form — an empty cron or a blank/past
+    // date is catchable here with human copy, not a server round-trip (or a raw
+    // "Invalid time value" from new Date('')).
+    const invalid = validateTrigger(eKind, eCron, eRunAt)
+    if (invalid) {
+      editError = invalid
+      return
+    }
     saving = true
     editError = ''
     try {
       const fields =
         eKind === 'once'
-          ? { agent: eAgent, task: eTask, run_at: new Date(eRunAt).toISOString(), verify: eVerify, delta: eDelta, alert: eAlert.trim() }
-          : { agent: eAgent, task: eTask, cron: eCron.trim(), verify: eVerify, delta: eDelta, alert: eAlert.trim() }
+          ? {
+              agent: eAgent,
+              task: eTask,
+              run_at: new Date(eRunAt).toISOString(),
+              verify: eVerify,
+              delta: eDelta,
+              alert: eAlert.trim(),
+            }
+          : {
+              agent: eAgent,
+              task: eTask,
+              cron: eCron.trim(),
+              verify: eVerify,
+              delta: eDelta,
+              alert: eAlert.trim(),
+            }
       runner = await api.updateSchedule(runner.name, fields)
       editing = false
       toast('runner saved', 'ok')
@@ -96,10 +120,14 @@
     if (!runner || firing) return
     firing = true
     try {
-      const r = await api.newRun(runner.agent, runner.task || `Run ${runner.agent}`, { schedule_id: runner.id })
+      const r = await api.newRun(runner.agent, runner.task || `Run ${runner.agent}`, {
+        schedule_id: runner.id,
+      })
       navigate('/runs/' + r.id)
     } catch (e) {
-      error = String(e)
+      // Action failure → toast; the page banner (with its reload-retry) is for
+      // load failures only.
+      toast(errorText(e), 'err')
       firing = false
     }
   }
@@ -142,8 +170,10 @@
     {/if}
   {/snippet}
 
-  {#if error}<div class="card" style="color: var(--red);">{errorText(error)}</div>{/if}
-  {#if !loaded}
+  {#if error}
+    <!-- A failed load is not "unknown runner" — don't show both, and offer retry. -->
+    <ErrorBanner {error} onretry={load} />
+  {:else if !loaded}
     <Skeleton rows={5} />
   {:else if !runner}
     <EmptyState title="unknown runner" hint="it may have been deleted — check the runners list" />
@@ -157,7 +187,10 @@
             <div class="space-y-3">
               <div>
                 <div class="label-cap" style="margin-bottom: 4px;">Prompt / task</div>
-                <textarea class="field" rows="6" bind:value={eTask}
+                <textarea
+                  class="field"
+                  rows="6"
+                  bind:value={eTask}
                   placeholder="what the agent should do each time it runs"
                   style="resize: vertical; line-height: 1.5;"></textarea>
               </div>
@@ -165,43 +198,67 @@
                 <div>
                   <div class="label-cap" style="margin-bottom: 4px;">Agent</div>
                   <select class="field" bind:value={eAgent}>
-                    {#each agents as a}<option value={a.name}>{a.name}</option>{/each}
+                    {#each agents as a (a.name)}<option value={a.name}>{a.name}</option>{/each}
                   </select>
                 </div>
                 <div>
                   <div class="label-cap" style="margin-bottom: 4px;">Trigger</div>
                   {#if eKind === 'once'}
-                    <input class="field" type="datetime-local" bind:value={eRunAt} />
+                    <input
+                      class="field"
+                      type="datetime-local"
+                      bind:value={eRunAt}
+                      min={nowLocal()}
+                      aria-label="run date and time"
+                    />
                   {:else}
                     <CronField bind:value={eCron} />
                   {/if}
                 </div>
               </div>
               <div class="space-y-2">
-                <label class="mode-check" title="An evaluator reviews each output against the task; a failed verdict re-runs the agent once with the reviewer's feedback.">
+                <label
+                  class="mode-check"
+                  title="An evaluator reviews each output against the task; a failed verdict re-runs the agent once with the reviewer's feedback."
+                >
                   <input type="checkbox" bind:checked={eVerify} />
                   <span><strong>verify</strong> — review each output, retry once on a bad one</span>
                 </label>
-                <label class="mode-check" title="Each run sees the previous run's report and reports only what's new or changed.">
+                <label
+                  class="mode-check"
+                  title="Each run sees the previous run's report and reports only what's new or changed."
+                >
                   <input type="checkbox" bind:checked={eDelta} />
                   <span><strong>delta</strong> — report only what changed since last run</span>
                 </label>
-                <input class="field" bind:value={eAlert} aria-label="alert condition"
-                  placeholder="alert when… (optional significance bar; blank = off)" />
+                <input
+                  class="field"
+                  bind:value={eAlert}
+                  aria-label="alert condition"
+                  placeholder="alert when… (optional significance bar; blank = off)"
+                />
               </div>
-              {#if editError}<div style="color: var(--red); font-size: 12px;">{editError}</div>{/if}
+              {#if editError}<div role="alert" style="color: var(--red); font-size: 12px;">
+                  {editError}
+                </div>{/if}
               <div style="display: flex; gap: 6px; justify-content: flex-end;">
                 <button class="btn-ghost" disabled={saving} onclick={() => (editing = false)}>cancel</button>
-                <button class="btn-primary" disabled={saving} onclick={saveEdit}>{saving ? 'saving…' : 'save'}</button>
+                <button class="btn-primary" disabled={saving} onclick={saveEdit}
+                  >{saving ? 'saving…' : 'save'}</button
+                >
               </div>
             </div>
           </div>
         {:else}
           <div class="card">
             <div class="label-cap" style="margin-bottom: 8px;">Task</div>
-            <div class="text-fg" style="font-size: 14px; white-space: pre-wrap; margin-bottom: 12px;">{runner.task || '—'}</div>
+            <div class="text-fg" style="font-size: 14px; white-space: pre-wrap; margin-bottom: 12px;">
+              {runner.task || '—'}
+            </div>
             <div style="display: flex; justify-content: flex-end;">
-              <button class="btn-primary" disabled={firing} onclick={runNow}>{firing ? 'starting…' : 'run now →'}</button>
+              <button class="btn-primary" disabled={firing} onclick={runNow}
+                >{firing ? 'starting…' : 'run now →'}</button
+              >
             </div>
           </div>
         {/if}
@@ -210,17 +267,30 @@
           <div class="label-cap" style="margin-bottom: 8px;">Runs ({runs.length})</div>
           {#if runs.length}
             <div class="space-y-2">
-              {#each runs.slice(0, 20) as r}
-                <a href={href('/runs/' + r.id)} use:link class="row-link card-quiet" style="display: flex; gap: 10px; align-items: baseline; text-decoration: none;">
+              {#each runs.slice(0, 20) as r (r.id)}
+                <a
+                  href={href('/runs/' + r.id)}
+                  use:link
+                  class="row-link card-quiet"
+                  style="display: flex; gap: 10px; align-items: baseline; text-decoration: none;"
+                >
                   <span class="src src-{r.source}">{r.source}</span>
                   <StatusBadge status={r.status} />
-                  <span class="text-dim" style="font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{r.task}</span>
-                  <span class="ml-auto text-muted" style="font-size: 11px; white-space: nowrap;">{relativeTime(r.started_at)} · {fmtCost(r.total_cost_usd)}</span>
+                  <span
+                    class="text-dim"
+                    style="font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+                    >{r.task}</span
+                  >
+                  <span class="ml-auto text-muted" style="font-size: 11px; white-space: nowrap;"
+                    >{relativeTime(r.started_at)} · {fmtCost(r.total_cost_usd)}</span
+                  >
                 </a>
               {/each}
             </div>
           {:else}
-            <div class="text-muted" style="font-size: 13px; font-style: italic;">no runs yet — fire one above.</div>
+            <div class="text-muted" style="font-size: 13px; font-style: italic;">
+              no runs yet — fire one above.
+            </div>
           {/if}
         </section>
       </div>
@@ -231,14 +301,31 @@
           <div class="label-cap" style="margin-bottom: 8px;">Trigger</div>
           <div style="font-size: 13px;" class="space-y-2">
             {#if runner.run_at}
-              <div><span class="label-cap">once</span><br /><span class="mono text-bright">{localDateTime(runner.run_at)}</span></div>
+              <div>
+                <span class="label-cap">once</span><br /><span class="mono text-bright"
+                  >{localDateTime(runner.run_at)}</span
+                >
+              </div>
             {:else}
-              <div><span class="label-cap">schedule</span><br /><span class="mono text-bright">{runner.cron}</span></div>
+              <div>
+                <span class="label-cap">schedule</span><br /><span class="mono text-bright"
+                  >{runner.cron}</span
+                >
+              </div>
             {/if}
-            <div><span class="label-cap">next</span> <span class="text-dim">{runner.enabled && runner.next_run ? localDateTime(runner.next_run) : '—'}</span></div>
+            <div>
+              <span class="label-cap">next</span>
+              <span class="text-dim"
+                >{runner.enabled && runner.next_run ? localDateTime(runner.next_run) : '—'}</span
+              >
+            </div>
             <div style="display: flex; align-items: center; gap: 10px;">
-              <span class="src" style="color: {runner.enabled ? 'var(--accent-soft)' : 'var(--muted)'};">{runner.enabled ? 'enabled' : 'paused'}</span>
-              <button class="btn-ghost" disabled={busy} onclick={toggleEnabled}>{busy ? '…' : runner.enabled ? 'pause' : 'resume'}</button>
+              <span class="src" style="color: {runner.enabled ? 'var(--accent-soft)' : 'var(--muted)'};"
+                >{runner.enabled ? 'enabled' : 'paused'}</span
+              >
+              <button class="btn-ghost" disabled={busy} onclick={toggleEnabled}
+                >{busy ? '…' : runner.enabled ? 'pause' : 'resume'}</button
+              >
             </div>
           </div>
         </div>
@@ -248,12 +335,22 @@
           <div style="font-size: 13px;" class="space-y-2">
             <div>
               <span class="label-cap">agent</span>
-              <a href={href('/agents/' + encodeURIComponent(runner.agent))} use:link class="text-accent-soft" style="text-decoration: none;">{runner.agent} →</a>
+              <a
+                href={href('/agents/' + encodeURIComponent(runner.agent))}
+                use:link
+                class="text-accent-soft"
+                style="text-decoration: none;">{runner.agent} →</a
+              >
             </div>
             <div>
               <span class="label-cap">project</span>
               {#if runner.project_id}
-                <a href={href('/projects/' + runner.project_id)} use:link class="text-accent-soft" style="text-decoration: none;">{projName(runner.project_id)} →</a>
+                <a
+                  href={href('/projects/' + runner.project_id)}
+                  use:link
+                  class="text-accent-soft"
+                  style="text-decoration: none;">{projName(runner.project_id)} →</a
+                >
               {:else}
                 <span class="text-muted">standalone</span>
               {/if}
@@ -262,7 +359,9 @@
               <span class="label-cap">modes</span>
               {#if runner.verify || runner.delta}
                 <span class="text-dim">
-                  {[runner.verify ? 'verify' : null, runner.delta ? 'delta' : null].filter(Boolean).join(' · ')}
+                  {[runner.verify ? 'verify' : null, runner.delta ? 'delta' : null]
+                    .filter(Boolean)
+                    .join(' · ')}
                 </span>
               {:else}
                 <span class="text-muted">none</span>
@@ -287,7 +386,9 @@
     border-radius: var(--radius);
     transition: background 0.12s var(--transition);
   }
-  .row-link:hover { background: var(--surface2); }
+  .row-link:hover {
+    background: var(--surface2);
+  }
   .mode-check {
     display: flex;
     align-items: baseline;
@@ -296,7 +397,12 @@
     color: var(--fg-dim);
     cursor: pointer;
   }
-  .mode-check input { cursor: pointer; }
-  .mode-check strong { color: var(--fg-bright); font-weight: 500; }
+  .mode-check input {
+    cursor: pointer;
+  }
+  .mode-check strong {
+    color: var(--fg-bright);
+    font-weight: 500;
+  }
   /* .src lives in global.css (shared source-pill component). */
 </style>

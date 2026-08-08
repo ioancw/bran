@@ -87,7 +87,10 @@ export function link(node: HTMLAnchorElement) {
     go()
   }
   const onKeydown = (e: KeyboardEvent) => {
-    if (e.key === 'Enter') { e.preventDefault(); go() }
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      go()
+    }
   }
   node.addEventListener('click', onClick)
   node.addEventListener('keydown', onKeydown)

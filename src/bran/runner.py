@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import time
 import traceback
+from collections import deque
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -101,6 +102,15 @@ async def _drive(
     # pure converter — no FastAPI/SDK imports).
     from bran.web.events import events_from_message
 
+    # Capture the CLI subprocess's stderr so a startup failure records WHY.
+    # Without this, the SDK's ProcessError reads "Check stderr output for
+    # details" with the details nowhere — a five-hour usage-window rejection
+    # (overage disabled) looked identical to a crash. Tail only: it's appended
+    # to record.error, which is truncated to 16KB anyway.
+    stderr_tail: deque[str] = deque(maxlen=40)
+    if options is not None and getattr(options, "stderr", None) is None:
+        options.stderr = stderr_tail.append
+
     started = time.perf_counter()
     # Wall-clock ceiling: a hung SDK subprocess (stuck tool, network stall)
     # would otherwise block this task forever — and with the scheduler's
@@ -184,9 +194,10 @@ async def _drive(
         raise
     except Exception as exc:
         record.status = "failed"
-        record.error = _truncate_error(
-            f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
-        )
+        detail = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
+        if stderr_tail:
+            detail += "\n--- CLI stderr (tail) ---\n" + "\n".join(stderr_tail)
+        record.error = _truncate_error(detail)
         record.duration_ms = int((time.perf_counter() - started) * 1000)
         record.ended_at = utcnow_iso()
         update_run(record)

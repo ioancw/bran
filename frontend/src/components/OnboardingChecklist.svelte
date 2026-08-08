@@ -5,19 +5,25 @@
   // every step is done.
   import { href, link } from '../lib/router.svelte'
 
-  let { projectDone, chatDone, runnerDone }: {
+  let {
+    projectDone,
+    chatDone,
+    runnerDone,
+  }: {
     projectDone: boolean
     chatDone: boolean
     runnerDone: boolean
   } = $props()
 
   const DISMISS_KEY = 'bran.onboarding.dismissed'
-  let dismissed = $state(
-    typeof localStorage !== 'undefined' && localStorage.getItem(DISMISS_KEY) === '1',
-  )
+  let dismissed = $state(typeof localStorage !== 'undefined' && localStorage.getItem(DISMISS_KEY) === '1')
   function dismiss() {
     dismissed = true
-    try { localStorage.setItem(DISMISS_KEY, '1') } catch { /* ignore */ }
+    try {
+      localStorage.setItem(DISMISS_KEY, '1')
+    } catch {
+      /* ignore */
+    }
   }
 
   const steps = $derived([
@@ -36,9 +42,11 @@
       <span class="ml-auto label-cap">{doneCount}/{steps.length}</span>
       <button class="btn-ghost onboard-x" onclick={dismiss} title="dismiss">×</button>
     </div>
-    <div class="onboard-bar"><div class="onboard-fill" style="width: {(doneCount / steps.length) * 100}%;"></div></div>
+    <div class="onboard-bar">
+      <div class="onboard-fill" style="width: {(doneCount / steps.length) * 100}%;"></div>
+    </div>
     <div class="onboard-steps">
-      {#each steps as s}
+      {#each steps as s (s.label)}
         <a href={href(s.to)} use:link class="onboard-step" class:done={s.done}>
           <span class="onboard-check" class:done={s.done}>{s.done ? '✓' : ''}</span>
           <span style="text-decoration: {s.done ? 'line-through' : 'none'};">{s.label}</span>
@@ -55,8 +63,15 @@
     padding: 10px 12px;
     background: var(--surface2);
   }
-  .onboard-head { display: flex; align-items: center; gap: 8px; }
-  .onboard-x { padding: 0 4px; line-height: 1; }
+  .onboard-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .onboard-x {
+    padding: 0 4px;
+    line-height: 1;
+  }
   .onboard-bar {
     height: 3px;
     border-radius: 3px;
@@ -69,7 +84,11 @@
     background: var(--accent-soft);
     transition: width 0.3s var(--transition);
   }
-  .onboard-steps { display: flex; flex-direction: column; gap: 5px; }
+  .onboard-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
   .onboard-step {
     display: flex;
     align-items: center;
@@ -79,8 +98,12 @@
     text-decoration: none;
     padding: 2px 0;
   }
-  .onboard-step:hover { color: var(--fg-bright); }
-  .onboard-step.done { color: var(--muted); }
+  .onboard-step:hover {
+    color: var(--fg-bright);
+  }
+  .onboard-step.done {
+    color: var(--muted);
+  }
   .onboard-check {
     width: 14px;
     height: 14px;

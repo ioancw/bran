@@ -3,7 +3,15 @@
   import { fly } from 'svelte/transition'
   import { api, streamChat } from '../lib/api'
   import { router, navigate, href, link } from '../lib/router.svelte'
-  import { workspace, setScope, loadChats, loadProjects, projectName, bumpActivity, setLive } from '../lib/workspace.svelte'
+  import {
+    workspace,
+    setScope,
+    loadChats,
+    loadProjects,
+    projectName,
+    bumpActivity,
+    setLive,
+  } from '../lib/workspace.svelte'
   import { errorText } from '../lib/errors'
   import Page from '../components/Page.svelte'
   import Composer from '../components/Composer.svelte'
@@ -26,8 +34,40 @@
 
   let rstate: ReducerState = freshState()
   let loadedId: string | null = null
+  // Bumped each time the route effect takes over the view. A send() started
+  // under an older epoch must not touch `items`/`input` after a mid-stream
+  // navigation — those now belong to a different conversation.
+  let viewEpoch = 0
   let autoSent = false
   let messagesEl: HTMLDivElement | undefined = $state()
+  let composer = $state<{ focusInput: () => void } | null>(null)
+
+  // Put the caret in the composer — but never on touch devices, where a
+  // programmatic focus pops the keyboard over half the conversation.
+  function focusComposer() {
+    if (matchMedia('(hover: hover) and (pointer: fine)').matches) composer?.focusInput()
+  }
+
+  // --- per-chat drafts -------------------------------------------------------
+  // A half-typed message survives navigation and never leaks into another
+  // conversation: each chat (and "new") keeps its own draft for the session.
+  const draftKey = (sid: string | null) => 'bran.draft:' + (sid ?? 'new')
+  function readDraft(sid: string | null): string {
+    try {
+      return sessionStorage.getItem(draftKey(sid)) ?? ''
+    } catch {
+      return ''
+    }
+  }
+  $effect(() => {
+    const v = input
+    try {
+      if (v.trim()) sessionStorage.setItem(draftKey(loadedId), v)
+      else sessionStorage.removeItem(draftKey(loadedId))
+    } catch {
+      /* storage unavailable — drafts just don't persist */
+    }
+  })
   let historyLoading = $state(false)
   // Abort handle for the in-flight stream — the "stop" button's lever.
   let streamAbort: AbortController | null = null
@@ -50,9 +90,9 @@
   const lastItem = $derived(items.length ? items[items.length - 1] : null)
   const showPending = $derived(
     streaming &&
-    streamingIndex < 0 &&
-    !(lastItem?.kind === 'tool' && lastItem.status === 'running') &&
-    lastItem?.kind !== 'footer'
+      streamingIndex < 0 &&
+      !(lastItem?.kind === 'tool' && lastItem.status === 'running') &&
+      lastItem?.kind !== 'footer',
   )
 
   // Breadcrumb scope switcher.
@@ -106,6 +146,7 @@
   // itself — even if this tab is closed. Our only job here is to reflect it:
   // watch for the server's synthesis run in this session and reload the
   // conversation when it lands, so the combined answer appears live.
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity -- bookkeeping only, never read by the template
   let watchedSpawnIds = new Set<string>()
   let fanoutTimers: ReturnType<typeof setInterval>[] = []
 
@@ -147,7 +188,7 @@
         // Only a synthesis run from THIS fan-out — an older one in the same
         // chat (a previous fan-out) must not trigger a premature reload.
         synth = runs.find(
-          (r) => r.source === 'synthesis' && terminal(r.status) && Date.parse(r.started_at) >= watchStart
+          (r) => r.source === 'synthesis' && terminal(r.status) && Date.parse(r.started_at) >= watchStart,
         )
       } catch {
         return
@@ -167,21 +208,35 @@
   })
 
   $effect(() => {
-    void api.catalog().then((c) => (catalog = c)).catch(() => {})
+    void api
+      .catalog()
+      .then((c) => (catalog = c))
+      .catch(() => {})
     void loadProjects()
   })
 
   // React to the active session id (route change). Skip our own URL pivot
-  // (loadedId already set) and never reload mid-stream.
+  // (loadedId already set).
   $effect(() => {
     const sid = sessionId
-    if (sid === loadedId || streaming) return
+    if (sid === loadedId) return
+    // Navigating to another chat mid-reply stops the turn (the same lever as
+    // the stop button — the server sees the disconnect) and switches. The old
+    // behavior silently kept the previous conversation on screen under the
+    // new URL until the stream ended.
+    if (streaming) streamAbort?.abort()
+    viewEpoch++
     loadedId = sid
     clearFanoutWatchers()
     watchedSpawnIds = new Set()
     items = []
     rstate = freshState()
     pendingAgent = null
+    // Each conversation gets its own composer contents — a draft typed in the
+    // previous chat must not follow us here (it's saved under its own key).
+    input = readDraft(sid)
+    attachments = []
+    focusComposer()
     if (sid) {
       historyLoading = true // before the first await, so no empty-state flash
       void (async () => {
@@ -259,6 +314,20 @@
     if (streaming) return
     input = text
     if (sendNow) void send()
+    else focusComposer()
+  }
+
+  // A failed turn's inputs, kept so the error row's retry can re-send them.
+  let lastFailed: { text: string } | null = null
+  function retryFailed() {
+    if (streaming || !lastFailed) return
+    // Drop the error row and its unanswered user bubble — send() re-adds both.
+    if (items[items.length - 1]?.kind === 'error') items.pop()
+    if (items[items.length - 1]?.kind === 'user') items.pop()
+    // The failed text was handed back to the composer; if the user has since
+    // cleared it, fall back to what actually failed.
+    if (!input.trim()) input = lastFailed.text
+    void send()
   }
 
   async function send() {
@@ -293,8 +362,12 @@
     }
 
     streamAbort = new AbortController()
+    const epoch = viewEpoch
     try {
       for await (const ev of streamChat(fields, streamAbort.signal)) {
+        // A read that resolved just as a mid-stream navigation aborted us can
+        // still deliver one event — it belongs to the abandoned conversation.
+        if (epoch !== viewEpoch) break
         if (ev.type === 'done') break
         // Reflect what the agent is doing into the rail's live Progress row.
         if (ev.type === 'tool_use') setLive(true, `using ${toolDisplayName(ev.name)}`)
@@ -305,12 +378,19 @@
           const id = r.session
           const proj = router.route.query.get('project')
           activeChat = {
-            id, title: '(new)', agent: pendingAgent ?? 'orchestrator',
-            project_id: proj, updated_at: new Date().toISOString(),
+            id,
+            title: '(new)',
+            agent: pendingAgent ?? 'orchestrator',
+            project_id: proj,
+            updated_at: new Date().toISOString(),
             created_at: new Date().toISOString(),
           }
           setScope(proj)
-          try { localStorage.setItem('bran.didChat', '1') } catch { /* ignore */ }
+          try {
+            localStorage.setItem('bran.didChat', '1')
+          } catch {
+            /* ignore */
+          }
           loadedId = id // pre-set so the route effect won't reload + wipe
           if (mounted) navigate('/chat/' + id) // don't yank a user who already left
         }
@@ -318,10 +398,14 @@
         scrollSoon()
       }
     } catch (e) {
-      if (streamAbort?.signal.aborted) {
-        // User pressed stop (or navigated away) — a quiet note, not an error.
+      if (epoch !== viewEpoch) {
+        // Mid-stream navigation aborted us — the view (and composer) belong to
+        // another conversation now; leave them alone.
+      } else if (streamAbort?.signal.aborted) {
+        // User pressed stop — a quiet note, not an error.
         items.push({ kind: 'footer', numTurns: null, cost: null, stopped: true })
       } else {
+        lastFailed = { text: priorInput }
         items.push({ kind: 'error', message: errorText(e) })
         // Send failed before reaching the server — give the text back so it can
         // be retried instead of retyped.
@@ -351,7 +435,6 @@
   function stop() {
     streamAbort?.abort()
   }
-
 </script>
 
 <!-- Close the scope menu on outside click / Escape. -->
@@ -362,19 +445,41 @@
     <!-- Cowork-style breadcrumb: <scope ▾> / conversation -->
     <div class="bc">
       <span class="crumb-wrap" bind:this={scopeMenuEl}>
-        <button class="crumb crumb-scope" bind:this={scopeBtnEl}
-                aria-haspopup="menu" aria-expanded={scopeMenuOpen}
-                onclick={() => (scopeMenuOpen = !scopeMenuOpen)}>
+        <!-- A disclosure, not a menu: the popup is plain buttons without menu
+             semantics, so don't announce aria-haspopup="menu". -->
+        <button
+          class="crumb crumb-scope"
+          bind:this={scopeBtnEl}
+          aria-expanded={scopeMenuOpen}
+          onclick={() => (scopeMenuOpen = !scopeMenuOpen)}
+        >
           {scopeName}
-          <svg width="11" height="11" viewBox="0 0 10 10" fill="none" aria-hidden="true" style="margin-left: 4px;">
-            <path d="M2 4l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+          <svg
+            width="11"
+            height="11"
+            viewBox="0 0 10 10"
+            fill="none"
+            aria-hidden="true"
+            style="margin-left: 4px;"
+          >
+            <path
+              d="M2 4l3 3 3-3"
+              stroke="currentColor"
+              stroke-width="1.3"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
           </svg>
         </button>
         {#if scopeMenuOpen}
           <div class="crumb-menu card elev-md" transition:fly={{ y: -4, duration: 120 }}>
-            <button class="crumb-opt" class:on={!scopeId} onclick={() => switchScope(null)}>Recents (loose chats)</button>
-            {#each workspace.projects as p}
-              <button class="crumb-opt" class:on={scopeId === p.id} onclick={() => switchScope(p.id)}>{p.name}</button>
+            <button class="crumb-opt" class:on={!scopeId} onclick={() => switchScope(null)}
+              >Recents (all chats)</button
+            >
+            {#each workspace.projects as p (p.id)}
+              <button class="crumb-opt" class:on={scopeId === p.id} onclick={() => switchScope(p.id)}
+                >{p.name}</button
+              >
             {/each}
           </div>
         {/if}
@@ -389,9 +494,13 @@
   <div style="display: flex; gap: 16px; flex: 1; min-height: 0;">
     <!-- Center: conversation + composer -->
     <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative;">
-      <div bind:this={messagesEl} class="space-y-3 chat-scroll" class:chat-empty={!items.length}
-           onscroll={onMessagesScroll}
-           style="flex: 1; overflow-y: auto; padding-right: 6px;">
+      <div
+        bind:this={messagesEl}
+        class="space-y-3 chat-scroll"
+        class:chat-empty={!items.length}
+        onscroll={onMessagesScroll}
+        style="flex: 1; overflow-y: auto; padding-right: 6px;"
+      >
         {#if historyLoading && !items.length}
           <Skeleton rows={6} />
         {:else if !items.length}
@@ -400,16 +509,35 @@
             <h3>{currentAgent !== 'orchestrator' ? `chat with ${currentAgent}` : 'start a conversation'}</h3>
             <p class="cta">type a message below — try <code>/digest</code> or <code>@research</code></p>
             <div class="starters">
-              <button class="starter" onclick={() => (input = 'What did my runners deliver today?')}>What did my runners deliver today?</button>
-              <button class="starter" onclick={() => (input = 'Summarise the latest finance briefing for me.')}>Summarise the latest briefing</button>
-              <button class="starter" onclick={() => (input = '/digest ')}>/digest a topic</button>
+              <button
+                class="starter"
+                onclick={() => {
+                  input = 'What did my runners deliver today?'
+                  focusComposer()
+                }}>What did my runners deliver today?</button
+              >
+              <button
+                class="starter"
+                onclick={() => {
+                  input = 'Summarise the latest finance briefing for me.'
+                  focusComposer()
+                }}>Summarise the latest briefing</button
+              >
+              <button
+                class="starter"
+                onclick={() => {
+                  input = '/digest '
+                  focusComposer()
+                }}>/digest a topic</button
+              >
             </div>
           </div>
         {:else}
-          <ChatLog {items} {streamingIndex} onaction={onPlanAction} />
+          <ChatLog {items} {streamingIndex} onaction={onPlanAction} onretry={retryFailed} />
           {#if showPending}
             <div class="pending-turn" aria-label="working on a reply">
-              <span class="pending-dot"></span><span class="pending-dot"></span><span class="pending-dot"></span>
+              <span class="pending-dot"></span><span class="pending-dot"></span><span class="pending-dot"
+              ></span>
               <span class="pending-label">{workspace.liveLabel || 'thinking…'}</span>
             </div>
           {/if}
@@ -426,26 +554,49 @@
         <!-- Only while a reply is streaming — an idle reader scrolling old
              messages doesn't need chrome floating over the page. -->
         <div class="jump-wrap">
-          <button class="jump-latest elev-md" transition:fly={{ y: 6, duration: 160 }}
-                  onclick={jumpToLatest} aria-label="Jump to latest" title="jump to latest">
-            <svg width="13" height="13" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M6 2.5v7M2.8 6.5L6 9.7l3.2-3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <button
+            class="jump-latest elev-md"
+            transition:fly={{ y: 6, duration: 160 }}
+            onclick={jumpToLatest}
+            aria-label="Jump to latest"
+            title="jump to latest"
+          >
+            <svg width="13" height="13" viewBox="0 0 12 12" fill="none" aria-hidden="true"
+              ><path
+                d="M6 2.5v7M2.8 6.5L6 9.7l3.2-3.2"
+                stroke="currentColor"
+                stroke-width="1.4"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              /></svg
+            >
           </button>
         </div>
       {/if}
 
       <!-- Composer -->
       <div class="composer-col">
-        <Composer bind:value={input} bind:attachments attach={true} {catalog}
-                  hint="⏎ send · ⇧⏎ newline · / @"
-                  busy={streaming} placeholder="Message bran…" onsubmit={send}
-                  onstop={stop}>
+        <Composer
+          bind:this={composer}
+          bind:value={input}
+          bind:attachments
+          attach={true}
+          {catalog}
+          hint="⏎ send · ⇧⏎ newline · / @"
+          busy={streaming}
+          placeholder="Message bran…"
+          onsubmit={send}
+          onstop={stop}
+        >
           {#snippet leading()}
             {#if activeChat}
               <span class="composer-agent">{activeChat.agent}</span>
             {:else}
               <select class="composer-agent-select" bind:value={pendingAgent} title="agent for this chat">
                 <option value={null}>orchestrator</option>
-                {#each catalog.agents.filter((a) => a.name !== 'orchestrator') as a}<option value={a.name}>{a.name}</option>{/each}
+                {#each catalog.agents.filter((a) => a.name !== 'orchestrator') as a (a.name)}<option
+                    value={a.name}>{a.name}</option
+                  >{/each}
               </select>
             {/if}
           {/snippet}
@@ -457,7 +608,12 @@
     {#if scopeId}
       <aside class="chat-rail">
         <div style="margin-bottom: 10px; display: flex; align-items: baseline; gap: 8px;">
-          <a href={href('/projects/' + encodeURIComponent(scopeId))} use:link class="text-bright" style="font-weight: 600; text-decoration: none;">{scopeName}</a>
+          <a
+            href={href('/projects/' + encodeURIComponent(scopeId))}
+            use:link
+            class="text-bright"
+            style="font-weight: 600; text-decoration: none;">{scopeName}</a
+          >
           <span class="label-cap">project</span>
         </div>
         <ProjectRail projectId={scopeId} mode="chat" sessionId={activeChat?.id ?? null} />
@@ -505,8 +661,10 @@
     font-size: 13px;
     color: var(--fg-dim);
     cursor: pointer;
-    transition: color var(--dur-1) var(--transition), border-color var(--dur-1) var(--transition),
-                background var(--dur-1) var(--transition);
+    transition:
+      color var(--dur-1) var(--transition),
+      border-color var(--dur-1) var(--transition),
+      background var(--dur-1) var(--transition);
   }
   .starter:hover {
     color: var(--accent-soft);
@@ -536,7 +694,10 @@
     letter-spacing: -0.01em;
     min-width: 0;
   }
-  .crumb-wrap { position: relative; display: inline-block; }
+  .crumb-wrap {
+    position: relative;
+    display: inline-block;
+  }
   .crumb {
     background: transparent;
     border: 0;
@@ -546,9 +707,15 @@
     align-items: center;
     padding: 0;
   }
-  .crumb-scope { color: var(--muted); }
-  .crumb-scope:hover { color: var(--accent-soft); }
-  .crumb-sep { color: var(--border2); }
+  .crumb-scope {
+    color: var(--muted);
+  }
+  .crumb-scope:hover {
+    color: var(--accent-soft);
+  }
+  .crumb-sep {
+    color: var(--border2);
+  }
   .crumb-title {
     color: var(--fg-bright);
     font-weight: 500;
@@ -592,8 +759,12 @@
     letter-spacing: 0;
     font-family: var(--font-ui);
   }
-  .crumb-opt:hover { background: var(--surface2); }
-  .crumb-opt.on { color: var(--accent-soft); }
+  .crumb-opt:hover {
+    background: var(--surface2);
+  }
+  .crumb-opt.on {
+    color: var(--accent-soft);
+  }
   .chat-rail {
     width: 320px;
     flex-shrink: 0;
@@ -626,9 +797,14 @@
     border: 1px solid var(--border2);
     color: var(--fg);
     cursor: pointer;
-    transition: color var(--dur-1) var(--transition), border-color var(--dur-1) var(--transition);
+    transition:
+      color var(--dur-1) var(--transition),
+      border-color var(--dur-1) var(--transition);
   }
-  .jump-latest:hover { color: var(--accent-soft); border-color: var(--accent-soft); }
+  .jump-latest:hover {
+    color: var(--accent-soft);
+    border-color: var(--accent-soft);
+  }
 
   /* Visually hidden, still announced. */
   .sr-only {
@@ -657,8 +833,12 @@
     background: var(--accent-soft);
     animation: pending-bounce 1.1s ease-in-out infinite;
   }
-  .pending-dot:nth-child(2) { animation-delay: 0.18s; }
-  .pending-dot:nth-child(3) { animation-delay: 0.36s; }
+  .pending-dot:nth-child(2) {
+    animation-delay: 0.18s;
+  }
+  .pending-dot:nth-child(3) {
+    animation-delay: 0.36s;
+  }
   .pending-label {
     margin-left: 6px;
     font-family: var(--font-mono);
@@ -668,8 +848,13 @@
     color: var(--muted);
   }
   @keyframes pending-bounce {
-    0%, 100% { opacity: 0.25; }
-    50% { opacity: 1; }
+    0%,
+    100% {
+      opacity: 0.25;
+    }
+    50% {
+      opacity: 1;
+    }
   }
   /* .composer / .composer-* now live in global.css (shared input component). */
 </style>

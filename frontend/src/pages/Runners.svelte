@@ -7,7 +7,9 @@
   import { errorText } from '../lib/errors'
   import { toast } from '../lib/toast.svelte'
   import { localDateTime } from '../lib/time'
+  import { validateTrigger, nowLocal } from '../lib/schedule'
   import EmptyState from '../components/EmptyState.svelte'
+  import ErrorBanner from '../components/ErrorBanner.svelte'
   import Page from '../components/Page.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import CronField from '../components/CronField.svelte'
@@ -41,12 +43,16 @@
   let fVerify = $state(false) // evaluator reviews each output, re-runs once on failure
   let fDelta = $state(false) // each run sees the previous report, reports only changes
   let fAlert = $state('') // significance bar; '' = normal (non-sensing) runner
+  let creating = $state(false)
+  let formError = $state<string | null>(null)
 
   async function load() {
     error = null // clear a stale banner so a recovered refresh shows clean
     try {
       ;[runners, agents, projects, recentRuns] = await Promise.all([
-        api.schedules(), api.agents(), api.projects(),
+        api.schedules(),
+        api.agents(),
+        api.projects(),
         api.runs({ limit: 200, exclude_chats: true }),
       ])
     } catch (e) {
@@ -68,28 +74,56 @@
     }
   })
 
-  const projName = (id: string | null) =>
-    id ? (projects.find((p) => p.id === id)?.name ?? id) : null
+  const projName = (id: string | null) => (id ? (projects.find((p) => p.id === id)?.name ?? id) : null)
 
-  async function create() {
-    if (!fName.trim()) return
-    const fields: { name: string; agent: string; task: string; project_id?: string; cron?: string; run_at?: string; verify?: boolean; delta?: boolean; alert?: string } = {
-      name: fName.trim(), agent: fAgent, task: fTask, project_id: fProject || undefined,
-      verify: fVerify, delta: fDelta, alert: fAlert.trim(),
+  async function create(e?: Event) {
+    e?.preventDefault()
+    if (creating) return
+    if (!fName.trim()) {
+      formError = 'give the runner a name'
+      return
     }
-    if (fKind === 'once') {
-      if (!fRunAt) return
+    if (!fTask.trim()) {
+      formError = 'describe the task — what should the agent do each run?'
+      return
+    }
+    const fields: {
+      name: string
+      agent: string
+      task: string
+      project_id?: string
+      cron?: string
+      run_at?: string
+      verify?: boolean
+      delta?: boolean
+      alert?: string
+    } = {
+      name: fName.trim(),
+      agent: fAgent,
+      task: fTask,
+      project_id: fProject || undefined,
+      verify: fVerify,
+      delta: fDelta,
+      alert: fAlert.trim(),
+    }
+    const invalid = validateTrigger(fKind, fCron, fRunAt)
+    if (invalid) {
+      formError = invalid
+      return
+    }
+    if (fKind === 'once')
       fields.run_at = new Date(fRunAt).toISOString() // local picker → UTC
-    } else {
-      if (!fCron.trim()) return
-      fields.cron = fCron.trim()
-    }
+    else fields.cron = fCron.trim()
+    formError = null
+    creating = true
     try {
       await api.newSchedule(fields)
       toast(`created runner ${fields.name}`, 'ok')
-    } catch (e) {
-      error = String(e)
+    } catch (err) {
+      formError = errorText(err)
       return
+    } finally {
+      creating = false
     }
     fName = ''
     fTask = ''
@@ -134,58 +168,98 @@
   {/snippet}
 
   <div class="space-y-4">
-    {#if error}<div class="card" style="color: var(--red);">{errorText(error)}</div>{/if}
+    {#if error}<ErrorBanner {error} onretry={load} />{/if}
 
     {#if showForm}
-      <div class="card-quiet" style="max-width: 660px;">
-        <span class="label-cap" style="display: block; margin-bottom: 8px;">New runner — an agent on a schedule</span>
+      <form class="card-quiet" style="max-width: 660px;" onsubmit={create}>
+        <span class="label-cap" style="display: block; margin-bottom: 8px;"
+          >New runner — an agent on a schedule</span
+        >
         <div class="grid grid-cols-2 gap-4">
           <input class="field" bind:value={fName} placeholder="name (unique)" aria-label="runner name" />
           <select class="field" bind:value={fAgent} aria-label="agent">
-            {#each agents as a}<option value={a.name}>{a.name}</option>{/each}
+            {#each agents as a (a.name)}<option value={a.name}>{a.name}</option>{/each}
           </select>
           <select class="field" bind:value={fKind} aria-label="trigger type">
             <option value="cron">Recurring (cron)</option>
             <option value="once">Once (one-shot)</option>
           </select>
           {#if fKind === 'once'}
-            <input class="field" type="datetime-local" bind:value={fRunAt} aria-label="run date and time" />
+            <input
+              class="field"
+              type="datetime-local"
+              bind:value={fRunAt}
+              min={nowLocal()}
+              aria-label="run date and time"
+            />
           {:else}
             <CronField bind:value={fCron} />
           {/if}
           <select class="field" bind:value={fProject} aria-label="attach to project">
             <option value="">standalone (no project)</option>
-            {#each projects as p}<option value={p.id}>attach to: {p.name}</option>{/each}
+            {#each projects as p (p.id)}<option value={p.id}>attach to: {p.name}</option>{/each}
           </select>
-          <textarea class="field" bind:value={fTask} rows="4" aria-label="task prompt"
-            placeholder={fKind === 'once' ? 'prompt to run once — what should the agent do?' : 'prompt to run each tick — what should the agent do?'}
+          <textarea
+            class="field"
+            bind:value={fTask}
+            rows="4"
+            aria-label="task prompt"
+            placeholder={fKind === 'once'
+              ? 'prompt to run once — what should the agent do?'
+              : 'prompt to run each tick — what should the agent do?'}
             style="grid-column: span 2; resize: vertical; line-height: 1.5;"></textarea>
-          <label class="mode-check" title="An evaluator reviews each output against the task; a failed verdict re-runs the agent once with the reviewer's feedback.">
+          <label
+            class="mode-check"
+            title="An evaluator reviews each output against the task; a failed verdict re-runs the agent once with the reviewer's feedback."
+          >
             <input type="checkbox" bind:checked={fVerify} />
             <span><strong>verify</strong> — review each output, retry once on a bad one</span>
           </label>
-          <label class="mode-check" title="Each run sees the previous run's report and reports only what's new or changed — ideal for recurring news/research runners.">
+          <label
+            class="mode-check"
+            title="Each run sees the previous run's report and reports only what's new or changed — ideal for recurring news/research runners."
+          >
             <input type="checkbox" bind:checked={fDelta} />
             <span><strong>delta</strong> — report only what changed since last run</span>
           </label>
-          <input class="field" bind:value={fAlert} aria-label="alert condition"
+          <input
+            class="field"
+            bind:value={fAlert}
+            aria-label="alert condition"
             placeholder="alert when… (optional significance bar, e.g. 'GBP moves >1% intraday') — crossed = escalated 🚨"
-            style="grid-column: span 2;" />
+            style="grid-column: span 2;"
+          />
         </div>
+        {#if formError}<div role="alert" style="color: var(--red); font-size: 12px; margin-top: 8px;">
+            {formError}
+          </div>{/if}
         <div style="display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px;">
-          <button class="btn-ghost" onclick={() => (showForm = false)}>cancel</button>
-          <button class="btn-primary" onclick={create}>create runner</button>
+          <button
+            type="button"
+            class="btn-ghost"
+            onclick={() => {
+              showForm = false
+              formError = null
+            }}>cancel</button
+          >
+          <button type="submit" class="btn-primary" disabled={creating}
+            >{creating ? 'creating…' : 'create runner'}</button
+          >
         </div>
         <p class="text-muted" style="font-size: 11px; margin-top: 8px;">
-          Runners fire inside <code>bran serve</code>. Attaching to a project runs the agent with that project's memory.
+          Runners fire inside <code>bran serve</code>. Attaching to a project runs the agent with that
+          project's memory.
         </p>
-      </div>
+      </form>
     {/if}
 
     {#if !loaded}
       <Skeleton rows={5} />
     {:else if !runners.length}
-      <EmptyState title="no runners" hint="a runner is an agent on a schedule — your morning briefing, your weekly digest">
+      <EmptyState
+        title="no runners"
+        hint="a runner is an agent on a schedule — your morning briefing, your weekly digest"
+      >
         <button class="btn-primary" onclick={() => (showForm = true)}>+ create your first runner</button>
       </EmptyState>
     {:else}
@@ -193,30 +267,60 @@
         <table class="bran-table" style="min-width: 780px;">
           <thead>
             <tr>
-              <th>Name</th><th>Agent</th><th>Trigger</th><th>Next</th><th>Attached</th><th>State</th><th>Task</th><th></th>
+              <th>Name</th><th>Agent</th><th>Trigger</th><th>Next</th><th>Attached</th><th>State</th><th
+                >Task</th
+              ><th></th>
             </tr>
           </thead>
           <tbody>
-            {#each runners as r}
+            {#each runners as r (r.name)}
               <tr>
                 <td>
-                  <a href={href('/runners/' + encodeURIComponent(r.name))} use:link style="color: var(--fg-bright); text-decoration: none; font-weight: 500;">{r.name}</a>
+                  <a
+                    href={href('/runners/' + encodeURIComponent(r.name))}
+                    use:link
+                    style="color: var(--fg-bright); text-decoration: none; font-weight: 500;">{r.name}</a
+                  >
                   {#if lastRun[r.id]?.status === 'failed'}
-                    <span class="fail-dot" title="last run failed: {lastRun[r.id].error ?? 'unknown error'}">●</span>
+                    <span class="fail-dot" title="last run failed: {lastRun[r.id].error ?? 'unknown error'}"
+                      >●</span
+                    >
                   {/if}
                 </td>
                 <td class="mono" style="color: var(--accent-soft);">
                   {r.agent}
-                  {#if r.verify}<span class="mode-tag" title="outputs are reviewed by an evaluator">v</span>{/if}
-                  {#if r.delta}<span class="mode-tag" title="reports only what changed since the last run">Δ</span>{/if}
-                  {#if r.alert}<span class="mode-tag" title="sensing runner — alerts when: {r.alert}">🚨</span>{/if}
+                  {#if r.verify}<span class="mode-tag" title="outputs are reviewed by an evaluator">v</span
+                    >{/if}
+                  {#if r.delta}<span class="mode-tag" title="reports only what changed since the last run"
+                      >Δ</span
+                    >{/if}
+                  {#if r.alert}<span class="mode-tag" title="sensing runner — alerts when: {r.alert}">🚨</span
+                    >{/if}
                 </td>
                 <td class="mono" style="color: var(--fg-dim);">{r.run_at ? 'once' : r.cron}</td>
-                <td style="color: var(--fg-dim); white-space: nowrap;">{r.enabled && r.next_run ? localDateTime(r.next_run) : '—'}</td>
+                <td style="color: var(--fg-dim); white-space: nowrap;"
+                  >{r.enabled && r.next_run ? localDateTime(r.next_run) : '—'}</td
+                >
                 <td style="color: var(--fg-dim);">{projName(r.project_id) ?? '—'}</td>
-                <td><button class="state-btn" class:on={r.enabled} onclick={() => toggle(r)} title={r.enabled ? 'pause' : 'resume'}>{r.enabled ? 'on' : 'paused'}</button></td>
-                <td style="color: var(--fg-dim); max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{r.task}</td>
-                <td><button class="btn-ghost" onclick={() => remove(r.name)} aria-label="delete runner {r.name}">×</button></td>
+                <td
+                  ><button
+                    class="state-btn"
+                    class:on={r.enabled}
+                    onclick={() => toggle(r)}
+                    title={r.enabled ? 'pause' : 'resume'}>{r.enabled ? 'on' : 'paused'}</button
+                  ></td
+                >
+                <td
+                  style="color: var(--fg-dim); max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+                  >{r.task}</td
+                >
+                <td
+                  ><button
+                    class="btn-ghost"
+                    onclick={() => remove(r.name)}
+                    aria-label="delete runner {r.name}">×</button
+                  ></td
+                >
               </tr>
             {/each}
           </tbody>
@@ -240,8 +344,14 @@
     cursor: pointer;
     transition: all 0.12s var(--transition);
   }
-  .state-btn.on { color: var(--accent-soft); border-color: var(--accent-soft); background: var(--accent-glow); }
-  .state-btn:hover { border-color: var(--muted); }
+  .state-btn.on {
+    color: var(--accent-soft);
+    border-color: var(--accent-soft);
+    background: var(--accent-glow);
+  }
+  .state-btn:hover {
+    border-color: var(--muted);
+  }
   .fail-dot {
     color: var(--red);
     font-size: 9px;
@@ -257,8 +367,13 @@
     color: var(--fg-dim);
     cursor: pointer;
   }
-  .mode-check input { cursor: pointer; }
-  .mode-check strong { color: var(--fg-bright); font-weight: 500; }
+  .mode-check input {
+    cursor: pointer;
+  }
+  .mode-check strong {
+    color: var(--fg-bright);
+    font-weight: 500;
+  }
   .mode-tag {
     display: inline-block;
     margin-left: 6px;

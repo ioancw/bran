@@ -42,7 +42,18 @@
     if (n === 'webfetch' || n === 'mcp__tavily__tavily_extract') return i.url ? truncate(i.url, 60) : ''
     // Unknown tools (MCP etc.): surface the most informative string param, so
     // "fetch_url  https://feeds.bbci.co.uk/…" instead of a bare name.
-    for (const k of ['url', 'query', 'file_path', 'path', 'pattern', 'command', 'task', 'name', 'prompt', 'text']) {
+    for (const k of [
+      'url',
+      'query',
+      'file_path',
+      'path',
+      'pattern',
+      'command',
+      'task',
+      'name',
+      'prompt',
+      'text',
+    ]) {
       const v = i[k]
       if (typeof v === 'string' && v.trim()) return truncate(v, 60)
     }
@@ -78,20 +89,37 @@
   }
 
   const cat = $derived(category(tool.name))
-  const dotClass = $derived(tool.status === 'running' ? 'running' : tool.status === 'error' ? 'error' : 'done')
+  const dotClass = $derived(
+    tool.status === 'running' ? 'running' : tool.status === 'error' ? 'error' : 'done',
+  )
   const rows = $derived(paramRows(tool.input))
   const isAgent = $derived(['agent', 'task'].includes(lower(tool.name)))
 </script>
 
-<div class="tool-block tool-cat-{cat}" class:running={tool.status === 'running'} class:errored={tool.isError} class:expanded>
-  <button type="button" class="tool-header" onclick={() => (expanded = !expanded)}>
+<div
+  class="tool-block tool-cat-{cat}"
+  class:running={tool.status === 'running'}
+  class:errored={tool.isError}
+  class:expanded
+>
+  <button type="button" class="tool-header" aria-expanded={expanded} onclick={() => (expanded = !expanded)}>
     <span class="tool-status-dot {dotClass}"></span>
     <span class="tool-name" title={tool.name}>{toolDisplayName(tool.name)}</span>
     <span class="tool-summary">{summary(tool.name, tool.input)}</span>
-    <span class="tool-result-preview" class:error={tool.isError}>{preview(tool.name, tool.resultText, tool.isError)}</span>
-    <span class="tool-duration">{tool.durationMs != null ? `${(tool.durationMs / 1000).toFixed(1)}s` : ''}</span>
+    <span class="tool-result-preview" class:error={tool.isError}
+      >{preview(tool.name, tool.resultText, tool.isError)}</span
+    >
+    <span class="tool-duration"
+      >{tool.durationMs != null ? `${(tool.durationMs / 1000).toFixed(1)}s` : ''}</span
+    >
     <svg class="tool-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
-      <path d="M2 4l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+      <path
+        d="M2 4l3 3 3-3"
+        stroke="currentColor"
+        stroke-width="1.3"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
     </svg>
   </button>
   <div class="tool-body">
@@ -99,7 +127,7 @@
       <div class="tool-section">
         <div class="tool-section-label"><span>Params</span></div>
         <div class="tool-params">
-          {#each rows as [k, v]}
+          {#each rows as [k, v] (k)}
             <span class="tool-param-key">{k}</span><span class="tool-param-value">{v}</span>
           {/each}
         </div>
@@ -113,7 +141,9 @@
         {#if isAgent}
           <div class="tool-task-result">{tool.resultText}</div>
         {:else}
-          <div class="tool-code" style="color: {tool.isError ? 'var(--red)' : 'inherit'};">{tool.resultText}</div>
+          <div class="tool-code" style="color: {tool.isError ? 'var(--red)' : 'inherit'};">
+            {tool.resultText}
+          </div>
         {/if}
       </div>
     {/if}

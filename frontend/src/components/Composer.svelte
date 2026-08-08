@@ -41,6 +41,31 @@
     attachments?: Attachment[]
   } = $props()
 
+  // --- textarea: auto-grow with content, focusable from the parent ---
+  let taEl = $state<HTMLTextAreaElement | null>(null)
+  // Stable id base for the autocomplete's listbox/option wiring.
+  const uid = $props.id()
+
+  /** Parents (chat page) call this to put the caret in the input. */
+  export function focusInput() {
+    taEl?.focus()
+  }
+
+  // Grow with the message up to ~8 lines, then scroll — a paragraph should
+  // never be composed through a two-line letterbox. Runs on every value
+  // change, including programmatic ones (starters, drafts, plan actions).
+  const MAX_TA_HEIGHT = 220
+  function autosize() {
+    const el = taEl
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = Math.min(el.scrollHeight, MAX_TA_HEIGHT) + 'px'
+  }
+  $effect(() => {
+    void value
+    autosize()
+  })
+
   // --- attachments ---
   let attInput = $state<HTMLInputElement | null>(null)
   let attBusy = $state(false)
@@ -86,18 +111,29 @@
   }
 
   // --- autocomplete (/ commands, @ agents) ---
-  interface AcItem { trigger: string; name: string; description: string; token: string }
+  interface AcItem {
+    trigger: string
+    name: string
+    description: string
+    token: string
+  }
   let acOpen = $state(false)
   let acItems = $state<AcItem[]>([])
   let acIndex = $state(0)
   let acTokenStart = -1 // where the / or @ token being completed begins
 
   function refreshAc() {
-    if (!catalog) { acOpen = false; return }
+    if (!catalog) {
+      acOpen = false
+      return
+    }
     // Match the token at the cursor (start of line OR after whitespace), so
     // mentions complete mid-sentence — not only as the first character.
     const m = value.match(/(^|\s)([/@])(\S*)$/)
-    if (!m) { acOpen = false; return }
+    if (!m) {
+      acOpen = false
+      return
+    }
     const trigger = m[2]
     const query = m[3].toLowerCase()
     acTokenStart = (m.index ?? 0) + m[1].length
@@ -126,10 +162,26 @@
   }
   function onKeydown(e: KeyboardEvent) {
     if (acOpen) {
-      if (e.key === 'Escape') { e.preventDefault(); acOpen = false; return }
-      if (e.key === 'ArrowDown') { e.preventDefault(); acIndex = Math.min(acItems.length - 1, acIndex + 1); return }
-      if (e.key === 'ArrowUp') { e.preventDefault(); acIndex = Math.max(0, acIndex - 1); return }
-      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickAc(acIndex); return }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        acOpen = false
+        return
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        acIndex = Math.min(acItems.length - 1, acIndex + 1)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        acIndex = Math.max(0, acIndex - 1)
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        pickAc(acIndex)
+        return
+      }
     }
     // `isComposing` guards against submitting mid-IME: pressing Enter to
     // confirm a Japanese/Chinese conversion must not also send the message.
@@ -142,10 +194,22 @@
 
 <div class="composer-wrap">
   {#if acOpen}
-    <div class="ac-pop card elev-md" transition:fly={{ y: 4, duration: 120 }}>
-      {#each acItems as it, i}
-        <button type="button" class="ac-item" class:on={i === acIndex}
-                onmousedown={(e) => { e.preventDefault(); pickAc(i) }}>
+    <!-- Listbox semantics (as in CommandPalette): the textarea drives selection
+         via aria-activedescendant, so AT hears what the arrow keys are doing. -->
+    <div class="ac-pop card elev-md" role="listbox" id="{uid}-ac" transition:fly={{ y: 4, duration: 120 }}>
+      {#each acItems as it, i (it.trigger + it.name)}
+        <button
+          type="button"
+          class="ac-item"
+          class:on={i === acIndex}
+          role="option"
+          id="{uid}-ac-{i}"
+          aria-selected={i === acIndex}
+          onmousedown={(e) => {
+            e.preventDefault()
+            pickAc(i)
+          }}
+        >
           <code class="ac-name">{it.trigger}{it.name}</code>
           <span class="ac-desc text-dim">{it.description}</span>
         </button>
@@ -153,33 +217,90 @@
     </div>
   {/if}
   <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div class="composer" class:drag-over={dragOver}
-       ondragover={(e) => { if (attach) { e.preventDefault(); dragOver = true } }}
-       ondragleave={() => (dragOver = false)}
-       ondrop={onDrop}>
+  <div
+    class="composer"
+    class:drag-over={dragOver}
+    ondragover={(e) => {
+      if (attach) {
+        e.preventDefault()
+        dragOver = true
+      }
+    }}
+    ondragleave={() => (dragOver = false)}
+    ondrop={onDrop}
+  >
     {#if attachments.length || attError}
       <div class="att-row">
         {#each attachments as a, i (a.path)}
           <span class="att-chip mono" title={a.path}>
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            <svg
+              width="11"
+              height="11"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+              ><path
+                d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"
+              /></svg
+            >
             {a.name} <span class="text-muted">{a.size_human}</span>
             <button class="att-x" onclick={() => removeAtt(i)} aria-label="remove {a.name}">
-              <svg width="9" height="9" viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M2 2l6 6M8 2l-6 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+              <svg width="9" height="9" viewBox="0 0 10 10" fill="none" aria-hidden="true"
+                ><path
+                  d="M2 2l6 6M8 2l-6 6"
+                  stroke="currentColor"
+                  stroke-width="1.4"
+                  stroke-linecap="round"
+                /></svg
+              >
             </button>
           </span>
         {/each}
         {#if attError}<span style="color: var(--red); font-size: 11px;">{attError}</span>{/if}
       </div>
     {/if}
-    <textarea class="composer-input" bind:value oninput={refreshAc} onkeydown={onKeydown}
-              onpaste={onPaste} {rows} {placeholder}></textarea>
+    <textarea
+      class="composer-input"
+      bind:this={taEl}
+      bind:value
+      oninput={refreshAc}
+      onkeydown={onKeydown}
+      onpaste={onPaste}
+      {rows}
+      {placeholder}
+      aria-label={placeholder}
+      aria-controls={acOpen ? `${uid}-ac` : undefined}
+      aria-activedescendant={acOpen ? `${uid}-ac-${acIndex}` : undefined}
+      style="min-height: {rows * 1.5}em; max-height: {MAX_TA_HEIGHT}px; overflow-y: auto;"></textarea>
     <div class="composer-footer">
       {#if leading}{@render leading()}{/if}
       {#if attach}
-        <button class="att-btn" disabled={attBusy} onclick={() => attInput?.click()}
-                title="attach files (or drag/paste them)" aria-label="Attach files">
+        <button
+          class="att-btn"
+          disabled={attBusy}
+          onclick={() => attInput?.click()}
+          title="attach files (or drag/paste them)"
+          aria-label="Attach files"
+        >
           {#if attBusy}…{:else}
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+              ><path
+                d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"
+              /></svg
+            >
           {/if}
         </button>
         <input bind:this={attInput} type="file" multiple style="display: none;" onchange={onAttPick} />
@@ -187,15 +308,31 @@
       {#if hint}<span class="composer-hint">{hint}</span>{/if}
       {#if busy && onstop}
         <!-- Streaming and cancellable: the send button becomes Stop. -->
-        <button class="composer-send stop" onclick={onstop} aria-label="Stop generating" title="stop generating">
-          <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="1.5" y="1.5" width="9" height="9" rx="1.5" fill="currentColor"/></svg>
+        <button
+          class="composer-send stop"
+          onclick={onstop}
+          aria-label="Stop generating"
+          title="stop generating"
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"
+            ><rect x="1.5" y="1.5" width="9" height="9" rx="1.5" fill="currentColor" /></svg
+          >
         </button>
       {:else}
         <button class="composer-send" disabled={busy} onclick={submit} aria-label="Send">
           {#if busy}
             <span class="composer-spin"></span>
           {:else}
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.2"
+              stroke-linecap="round"
+              stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg
+            >
           {/if}
         </button>
       {/if}
@@ -204,8 +341,13 @@
 </div>
 
 <style>
-  .composer-wrap { position: relative; }
-  .composer.drag-over { outline: 2px dashed var(--accent-soft); outline-offset: -2px; }
+  .composer-wrap {
+    position: relative;
+  }
+  .composer.drag-over {
+    outline: 2px dashed var(--accent-soft);
+    outline-offset: -2px;
+  }
   .att-row {
     display: flex;
     align-items: center;
@@ -233,7 +375,9 @@
     padding: 0 2px;
     line-height: 1;
   }
-  .att-x:hover { color: var(--red); }
+  .att-x:hover {
+    color: var(--red);
+  }
   .att-btn {
     display: inline-flex;
     align-items: center;
@@ -245,7 +389,9 @@
     padding: 2px 4px;
     transition: color var(--dur-1) var(--transition);
   }
-  .att-btn:hover { color: var(--fg); }
+  .att-btn:hover {
+    color: var(--fg);
+  }
   .ac-pop {
     position: absolute;
     bottom: 100%;
@@ -269,7 +415,9 @@
     cursor: pointer;
     background: transparent;
   }
-  .ac-item.on { background: var(--accent-glow); }
+  .ac-item.on {
+    background: var(--accent-glow);
+  }
   .ac-name {
     font-family: var(--font-mono);
     font-size: 13px;
@@ -277,7 +425,9 @@
     flex-shrink: 0;
     color: var(--fg-bright);
   }
-  .ac-item.on .ac-name { color: var(--accent-soft); }
+  .ac-item.on .ac-name {
+    color: var(--accent-soft);
+  }
   .ac-desc {
     font-size: 12px;
     overflow: hidden;

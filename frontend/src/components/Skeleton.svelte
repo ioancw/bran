@@ -7,7 +7,7 @@
 </script>
 
 <div class="skel" role="status" aria-label="loading">
-  {#each Array(rows) as _, i}
+  {#each Array(rows) as _, i (i)}
     <div class="skel-line" style="height: {height}px; width: {widths[i % widths.length]}%;"></div>
   {/each}
 </div>
@@ -23,12 +23,21 @@
     animation: skel-shimmer 1.5s ease-in-out infinite;
     margin-bottom: 12px;
   }
-  .skel-line:last-child { margin-bottom: 0; }
+  .skel-line:last-child {
+    margin-bottom: 0;
+  }
   @keyframes skel-shimmer {
-    from { background-position: 200% 0; }
-    to   { background-position: -200% 0; }
+    from {
+      background-position: 200% 0;
+    }
+    to {
+      background-position: -200% 0;
+    }
   }
   @media (prefers-reduced-motion: reduce) {
-    .skel-line { animation: none; background: var(--surface2); }
+    .skel-line {
+      animation: none;
+      background: var(--surface2);
+    }
   }
 </style>

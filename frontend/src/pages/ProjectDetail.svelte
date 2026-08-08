@@ -7,7 +7,9 @@
   import { setScope } from '../lib/workspace.svelte'
   import { confirmDialog } from '../lib/confirm.svelte'
   import { errorText } from '../lib/errors'
+  import { toast } from '../lib/toast.svelte'
   import { relativeTime } from '../lib/time'
+  import ErrorBanner from '../components/ErrorBanner.svelte'
   import Page from '../components/Page.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import Composer from '../components/Composer.svelte'
@@ -37,7 +39,10 @@
     void load()
   })
   $effect(() => {
-    void api.catalog().then((c) => (catalog = c)).catch(() => {})
+    void api
+      .catalog()
+      .then((c) => (catalog = c))
+      .catch(() => {})
   })
 
   function launch() {
@@ -53,7 +58,7 @@
     try {
       await api.deleteProject(projectId)
     } catch (e) {
-      error = errorText(e)
+      toast(errorText(e), 'err') // action failure → toast, not the load banner
       return
     }
     setScope(null)
@@ -67,25 +72,43 @@
     <button class="btn-outline" onclick={deleteProject}>delete</button>
   {/snippet}
 
-  {#if error}<div class="card" style="color: var(--red);">{errorText(error)}</div>{/if}
-  {#if !data && !error}
+  {#if error}
+    <ErrorBanner {error} onretry={load} />
+  {:else if !data}
     <Skeleton rows={5} />
-  {/if}
-  {#if data}
+  {:else}
     <div class="ph-grid">
       <!-- Center: launcher + conversations (takes the remaining width) -->
       <div class="space-y-6">
-        <Composer bind:value={prompt} {catalog} hint="⏎ to start · ⇧⏎ newline"
-                  placeholder={`What would you like to work on in ${name}?`} rows={3} onsubmit={launch} />
+        <Composer
+          bind:value={prompt}
+          {catalog}
+          hint="⏎ to start · ⇧⏎ newline"
+          placeholder={`What would you like to work on in ${name}?`}
+          rows={3}
+          onsubmit={launch}
+        />
 
         <section>
           <div class="label-cap" style="margin-bottom: 10px;">Recents ({data.chats.length})</div>
           {#if data.chats.length}
             <div class="space-y-2">
-              {#each data.chats as c}
+              {#each data.chats as c (c.id)}
                 <a href={chatHref(c.id)} use:link class="conv-card card">
                   <span class="conv-icon" aria-hidden="true">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+                    <svg
+                      width="15"
+                      height="15"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.8"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      ><path
+                        d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"
+                      /></svg
+                    >
                   </span>
                   <div style="flex: 1; min-width: 0;">
                     <div class="conv-title">{c.title}</div>
@@ -96,7 +119,9 @@
               {/each}
             </div>
           {:else}
-            <div class="text-muted" style="font-size: 13px; font-style: italic;">No conversations yet — start one above.</div>
+            <div class="text-muted" style="font-size: 13px; font-style: italic;">
+              No conversations yet — start one above.
+            </div>
           {/if}
         </section>
       </div>
@@ -118,14 +143,18 @@
     align-items: start;
   }
   @media (max-width: 900px) {
-    .ph-grid { grid-template-columns: 1fr; }
+    .ph-grid {
+      grid-template-columns: 1fr;
+    }
   }
   .conv-card {
     display: flex;
     align-items: center;
     gap: 12px;
     text-decoration: none;
-    transition: border-color 0.15s var(--transition), transform 0.12s var(--transition);
+    transition:
+      border-color 0.15s var(--transition),
+      transform 0.12s var(--transition);
   }
   .conv-card:hover {
     transform: translateY(-1px);

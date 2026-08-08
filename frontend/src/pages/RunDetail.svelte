@@ -5,6 +5,8 @@
   import { navigate, href, link } from '../lib/router.svelte'
   import { fmtBytes, fmtCost, fmtDuration, localDateTime } from '../lib/time'
   import Page from '../components/Page.svelte'
+  import Skeleton from '../components/Skeleton.svelte'
+  import ErrorBanner from '../components/ErrorBanner.svelte'
   import StatusBadge from '../components/StatusBadge.svelte'
   import Prose from '../components/Prose.svelte'
   import ChatLog from '../chat/ChatLog.svelte'
@@ -18,6 +20,14 @@
   let artifacts = $state<ArtifactEntry[]>([])
   let error = $state<string | null>(null)
   let showTranscript = $state(false)
+  let cancelling = $state(false)
+  let rerunning = $state(false)
+  // Bumping this re-runs the load effect — the error banner's retry lever.
+  let reloadTick = $state(0)
+  function retry() {
+    error = null
+    reloadTick++
+  }
 
   // Most visits land here from Outputs to *read the answer* — so a finished
   // run leads with its result and tucks the transcript behind a toggle. A
@@ -49,6 +59,7 @@
   }
 
   $effect(() => {
+    void reloadTick // retry re-triggers the whole load/stream cycle
     let timer: ReturnType<typeof setInterval> | undefined
     const aborter = new AbortController()
     void (async () => {
@@ -123,20 +134,27 @@
   })
 
   async function cancel() {
+    if (cancelling) return
+    cancelling = true
     try {
       await api.cancelRun(runId)
       run = await api.run(runId)
     } catch (e) {
       toast(errorText(e), 'err')
+    } finally {
+      cancelling = false
     }
   }
   async function rerun() {
-    if (!run) return
+    if (!run || rerunning) return
+    rerunning = true
     try {
       const fresh = await api.newRun(run.agent, run.task)
       navigate('/runs/' + fresh.id)
     } catch (e) {
       toast(errorText(e), 'err')
+    } finally {
+      rerunning = false
     }
   }
 </script>
@@ -147,20 +165,30 @@
     {#if run}
       <StatusBadge status={run.status} />
       {#if run.status === 'running' || run.status === 'pending'}
-        <button class="btn-outline" onclick={cancel}>⊘ cancel</button>
+        <button class="btn-outline" disabled={cancelling} onclick={cancel}
+          >{cancelling ? 'cancelling…' : '⊘ cancel'}</button
+        >
       {:else}
-        <button class="btn-outline" onclick={rerun}>↻ re-run</button>
+        <button class="btn-outline" disabled={rerunning} onclick={rerun}
+          >{rerunning ? 'starting…' : '↻ re-run'}</button
+        >
       {/if}
     {/if}
   {/snippet}
 
-  {#if error}<div class="card" style="color: var(--red);">{error}</div>{/if}
+  {#if error}
+    <ErrorBanner {error} onretry={retry} />
+  {:else if !run}
+    <Skeleton rows={6} />
+  {/if}
   {#if run}
     <div class="grid grid-cols-4 gap-6">
       <aside class="col-span-1 space-y-3">
         <div class="card-quiet">
           <div class="label-cap" style="margin-bottom: 6px;">task</div>
-          <div class="text-fg" style="font-size: 13px; line-height: 1.5; white-space: pre-wrap;">{run.task}</div>
+          <div class="text-fg" style="font-size: 13px; line-height: 1.5; white-space: pre-wrap;">
+            {run.task}
+          </div>
         </div>
         <div class="card-quiet meta-list" style="font-size: 12.5px;">
           <div class="label-cap" style="margin-bottom: 8px;">details</div>
@@ -171,7 +199,9 @@
           {#if run.actor}
             <div><span class="label-cap">triggered by</span> {run.actor}</div>
           {/if}
-          <div class="mono text-dim" style="word-break: break-all; margin-top: 6px;">session: {run.session_id ?? '—'}</div>
+          <div class="mono text-dim" style="word-break: break-all; margin-top: 6px;">
+            session: {run.session_id ?? '—'}
+          </div>
         </div>
         {#if verification}
           <div class="card-quiet meta-list" style="font-size: 12.5px;">
@@ -184,18 +214,28 @@
               <div style="color: var(--amber);">✗ reviewer found issues</div>
               {#if verification.issues?.length}
                 <ul class="verif-issues">
-                  {#each verification.issues as issue}<li>{issue}</li>{/each}
+                  {#each verification.issues as issue, i (i)}<li>{issue}</li>{/each}
                 </ul>
               {/if}
               {#if verification.retried_run_id}
                 <div style="margin-top: 6px;">
-                  <a href={href('/runs/' + verification.retried_run_id)} use:link class="text-accent-soft" style="text-decoration: none;">↳ corrected attempt</a>
+                  <a
+                    href={href('/runs/' + verification.retried_run_id)}
+                    use:link
+                    class="text-accent-soft"
+                    style="text-decoration: none;">↳ corrected attempt</a
+                  >
                 </div>
               {/if}
             {/if}
             {#if verification.retry_of}
               <div style="margin-top: 6px;">
-                <a href={href('/runs/' + verification.retry_of)} use:link class="text-accent-soft" style="text-decoration: none;">↰ original attempt</a>
+                <a
+                  href={href('/runs/' + verification.retry_of)}
+                  use:link
+                  class="text-accent-soft"
+                  style="text-decoration: none;">↰ original attempt</a
+                >
               </div>
             {/if}
           </div>
@@ -207,13 +247,23 @@
               {#each artifacts as a (a.index)}
                 {#if a.exists}
                   <div class="art-row">
-                    <a href={'/spa/runs/' + encodeURIComponent(runId) + '/artifacts/' + a.index}
-                       download class="mono text-accent-soft art-name" title={a.path}>{a.name}</a>
-                    <span class="text-muted" style="font-size: 10px; white-space: nowrap;">{fmtBytes(a.size)}</span>
+                    <a
+                      href={'/spa/runs/' + encodeURIComponent(runId) + '/artifacts/' + a.index}
+                      download
+                      class="mono text-accent-soft art-name"
+                      title={a.path}>{a.name}</a
+                    >
+                    <span class="text-muted" style="font-size: 10px; white-space: nowrap;"
+                      >{fmtBytes(a.size)}</span
+                    >
                   </div>
                 {:else}
                   <div class="art-row">
-                    <span class="mono text-muted art-name" title="{a.path} (deleted or moved since the run)" style="text-decoration: line-through;">{a.name}</span>
+                    <span
+                      class="mono text-muted art-name"
+                      title="{a.path} (deleted or moved since the run)"
+                      style="text-decoration: line-through;">{a.name}</span
+                    >
                   </div>
                 {/if}
               {/each}
@@ -223,25 +273,51 @@
         <div class="card-quiet meta-list" style="font-size: 12.5px;">
           <div class="label-cap" style="margin-bottom: 8px;">origin</div>
           {#if run.project_id}
-            <div><a href={href('/projects/' + run.project_id)} use:link class="text-accent-soft" style="text-decoration: none;">↳ project</a></div>
+            <div>
+              <a
+                href={href('/projects/' + run.project_id)}
+                use:link
+                class="text-accent-soft"
+                style="text-decoration: none;">↳ project</a
+              >
+            </div>
           {:else}
             <div class="text-muted">standalone run</div>
           {/if}
           {#if run.session_id}
-            <div><a href={href('/chat/' + encodeURIComponent(run.session_id))} use:link class="text-accent-soft" style="text-decoration: none;">↳ conversation</a></div>
+            <div>
+              <a
+                href={href('/chat/' + encodeURIComponent(run.session_id))}
+                use:link
+                class="text-accent-soft"
+                style="text-decoration: none;">↳ conversation</a
+              >
+            </div>
           {/if}
         </div>
       </aside>
       <div class="col-span-3 space-y-3">
         {#if run.error}
-          <div class="card" style="color: var(--red); white-space: pre-wrap; border-color: color-mix(in srgb, var(--red) 30%, transparent);">{run.error}</div>
+          <div
+            class="card"
+            style="color: var(--red); white-space: pre-wrap; border-color: color-mix(in srgb, var(--red) 30%, transparent);"
+          >
+            {run.error}
+          </div>
         {/if}
         {#if resultFirst}
-          <div class="card"><div class="label-cap" style="margin-bottom: 6px;">result</div><div class="msg-prose"><Prose text={run.result ?? ''} /></div></div>
+          <div class="card">
+            <div class="label-cap" style="margin-bottom: 6px;">result</div>
+            <div class="msg-prose"><Prose text={run.result ?? ''} /></div>
+          </div>
           {#if transcript.length}
             <!-- The transcript repeats the final answer at its tail; it's the
                  debug view, collapsed by default once the result is on top. -->
-            <button class="transcript-toggle label-cap" onclick={() => (showTranscript = !showTranscript)}>
+            <button
+              class="transcript-toggle label-cap"
+              aria-expanded={showTranscript}
+              onclick={() => (showTranscript = !showTranscript)}
+            >
               {showTranscript ? '▾' : '▸'} transcript ({transcript.length} steps)
             </button>
             {#if showTranscript}
@@ -252,7 +328,10 @@
           <div class="label-cap">transcript</div>
           <div class="space-y-3"><ChatLog items={transcript} /></div>
         {:else if run.result}
-          <div class="card"><div class="label-cap" style="margin-bottom: 6px;">result</div><div class="msg-prose"><Prose text={run.result} /></div></div>
+          <div class="card">
+            <div class="label-cap" style="margin-bottom: 6px;">result</div>
+            <div class="msg-prose"><Prose text={run.result} /></div>
+          </div>
         {/if}
       </div>
     </div>
@@ -261,8 +340,12 @@
 
 <style>
   /* Roomier label/value rows in the run's metadata column. */
-  .meta-list > div { line-height: 1.85; }
-  .meta-list .label-cap { margin-right: 7px; }
+  .meta-list > div {
+    line-height: 1.85;
+  }
+  .meta-list .label-cap {
+    margin-right: 7px;
+  }
   .transcript-toggle {
     background: transparent;
     border: 0;
@@ -271,7 +354,9 @@
     color: var(--muted);
     transition: color 0.12s var(--transition);
   }
-  .transcript-toggle:hover { color: var(--accent-soft); }
+  .transcript-toggle:hover {
+    color: var(--accent-soft);
+  }
   .art-row {
     display: flex;
     align-items: baseline;
@@ -285,7 +370,9 @@
     white-space: nowrap;
     min-width: 0;
   }
-  a.art-name:hover { text-decoration: underline; }
+  a.art-name:hover {
+    text-decoration: underline;
+  }
   .verif-issues {
     margin: 6px 0 0;
     padding-left: 18px;
