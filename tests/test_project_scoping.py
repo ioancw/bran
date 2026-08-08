@@ -43,9 +43,10 @@ def test_loose_chats_vs_project_chats():
     pid = _project()
     loose = _chat(project_id=None)
     inproj = _chat(project_id=pid)
-    # list_chats() with no project = loose chats only
-    loose_ids = {c.id for c in list_chats(project_id=None)}
-    assert loose.id in loose_ids and inproj.id not in loose_ids
+    # list_chats() with no project = ALL chats (global Recents) — loose-only
+    # read as data loss when a project chat vanished from the sidebar.
+    all_ids = {c.id for c in list_chats(project_id=None)}
+    assert loose.id in all_ids and inproj.id in all_ids
     # scoped to the project = only its chats
     proj_ids = {c.id for c in list_chats(project_id=pid)}
     assert inproj.id in proj_ids and loose.id not in proj_ids

@@ -752,17 +752,16 @@ def touch_chat(chat_id: str) -> None:
 def list_chats(limit: int = 100, project_id: str | None = None) -> list[ChatRecord]:
     """Return chats sorted by most-recently updated.
 
-    `project_id` given → chats in that project. `project_id` None → **loose**
-    chats (no project) — the global Chat/Recents view. (There's no "all chats"
-    view: a chat is either loose or in exactly one project.)
+    `project_id` given → chats in that project. `project_id` None → **all**
+    chats — the global Recents view. (It used to mean loose-only, which read
+    as data loss: a chat started inside a project silently vanished from the
+    default sidebar until you re-scoped to that project.)
     """
     sql = "SELECT * FROM chats"
     params: list[Any] = []
     if project_id:
         sql += " WHERE project_id = ?"
         params.append(project_id)
-    else:
-        sql += " WHERE project_id IS NULL"
     sql += " ORDER BY updated_at DESC LIMIT ?"
     params.append(limit)
     with _lock, _conn() as conn:
