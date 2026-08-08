@@ -1,0 +1,5 @@
+node_modules/
+dist/
+../src/bran/web/spa/
+src/lib/api-types.ts
+package-lock.json
