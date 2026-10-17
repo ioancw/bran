@@ -70,7 +70,7 @@ from bran.project_files import (
 )
 from bran.runner import run_agent, stream_agent
 from bran.transcript import find_session_file, parse_transcript
-from bran.web.events import events_from_message, events_from_transcript_entry
+from bran.web.events import events_from_message, events_from_runs, events_from_transcript_entry
 
 
 async def _require_same_origin(request: Request) -> None:
@@ -313,11 +313,14 @@ async def run_transcript(run_id: str) -> dict[str, Any]:
     if rec is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"No run {run_id}")
     events: list[dict[str, Any]] = []
-    if rec.session_id:
-        path = find_session_file(rec.session_id)
-        if path is not None:
-            for entry in parse_transcript(path):
-                events.extend(events_from_transcript_entry(entry))
+    path = find_session_file(rec.session_id) if rec.session_id else None
+    if path is not None:
+        for entry in parse_transcript(path):
+            events.extend(events_from_transcript_entry(entry))
+    else:
+        # SDK transcript pruned (or never on this host): replay the copy the
+        # run kept, or at least its prompt + final result.
+        events = events_from_runs([rec])
     return {"run": asdict(rec), "events": events}
 
 
@@ -907,7 +910,10 @@ async def chat_history(chat_id: str) -> dict[str, Any]:
     """Replay a session as unified events (same schema as the live stream)."""
     path = find_session_file(chat_id)
     if path is None:
-        return {"session_id": chat_id, "events": []}
+        # Claude Code prunes session files after ~30 days; the turns live on
+        # as chat runs in bran's own database, so rebuild from those.
+        turns = list_runs(session_id=chat_id, limit=1000)
+        return {"session_id": chat_id, "events": events_from_runs(turns)}
     events: list[dict[str, Any]] = []
     for entry in parse_transcript(path):
         events.extend(events_from_transcript_entry(entry))

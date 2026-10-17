@@ -8,6 +8,7 @@ the Agent SDK session_id so callers can resume conversations.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import traceback
 from collections import deque
@@ -100,7 +101,41 @@ async def _drive(
     # SPA can watch it execute (/spa/runs/{id}/stream). events_from_message is
     # imported lazily to keep core module load free of the web layer (it's a
     # pure converter — no FastAPI/SDK imports).
-    from bran.web.events import events_from_message
+    from bran.web.events import STORED_EVENTS_MAX_CHARS, compact_for_storage, events_from_message
+
+    # Durable copy of the transcript. The SDK's JSONL file is Claude Code's,
+    # and it prunes old sessions — chat history and run transcripts used to
+    # vanish with it. Every event is kept on the run row (trimmed + capped) so
+    # /history and /transcript can replay without the file.
+    kept: list[dict[str, Any]] = []
+    kept_chars = 0
+    truncated = False
+
+    def _keep(events: list[dict[str, Any]]) -> None:
+        nonlocal kept_chars, truncated
+        if truncated:
+            return
+        for ev in events:
+            ev = compact_for_storage(ev)
+            size = len(json.dumps(ev, default=str))
+            if kept_chars + size > STORED_EVENTS_MAX_CHARS:
+                truncated = True
+                return
+            kept.append(ev)
+            kept_chars += size
+
+    def _finish(status: str | None = None, error: str | None = None) -> None:
+        if status is not None:
+            record.status = status
+        if error is not None:
+            record.error = error
+        record.duration_ms = int((time.perf_counter() - started) * 1000)
+        record.ended_at = utcnow_iso()
+        if kept:
+            record.metadata["events"] = kept
+            if truncated:
+                record.metadata["events_truncated"] = True
+        update_run(record)
 
     # Capture the CLI subprocess's stderr so a startup failure records WHY.
     # Without this, the SDK's ProcessError reads "Check stderr output for
@@ -146,7 +181,9 @@ async def _drive(
             if on_message is not None:
                 on_message(message)
             _absorb_message(record, message)
-            live_publish(record.id, events_from_message(message))
+            events = events_from_message(message)
+            _keep(events)
+            live_publish(record.id, events)
             yield message
 
         # query() iterator finished. If we never saw a ResultMessage the SDK
@@ -154,19 +191,13 @@ async def _drive(
         if record.status == "running":
             record.status = "failed"
             record.error = "Agent stream ended without a ResultMessage"
-        record.duration_ms = int((time.perf_counter() - started) * 1000)
-        record.ended_at = utcnow_iso()
-        update_run(record)
+        _finish()
     except asyncio.CancelledError:
         # A background run was cancelled (e.g. user hit stop, see
         # background.cancel_background). CancelledError is a BaseException, so it
         # bypasses the `except Exception` below — handle it explicitly to move
         # the run to a terminal state instead of leaving it stuck "running".
-        record.status = "cancelled"
-        record.error = "Run cancelled"
-        record.duration_ms = int((time.perf_counter() - started) * 1000)
-        record.ended_at = utcnow_iso()
-        update_run(record)
+        _finish("cancelled", "Run cancelled")
         raise
     except GeneratorExit:
         # The consumer abandoned this generator without cancelling us — e.g. the
@@ -175,32 +206,21 @@ async def _drive(
         # a BaseException, so without this arm the run row would sit "running"
         # until the next restart's reconciliation and the SDK subprocess would
         # be left to GC.
-        record.status = "cancelled"
-        record.error = "Run abandoned by client (stream consumer went away)"
-        record.duration_ms = int((time.perf_counter() - started) * 1000)
-        record.ended_at = utcnow_iso()
-        update_run(record)
+        _finish("cancelled", "Run abandoned by client (stream consumer went away)")
         try:
             await stream.aclose()
         except Exception:
             pass
         raise
     except RunTimeoutError as exc:
-        record.status = "failed"
-        record.error = str(exc)  # clean message — the traceback adds nothing here
-        record.duration_ms = int((time.perf_counter() - started) * 1000)
-        record.ended_at = utcnow_iso()
-        update_run(record)
+        _finish("failed", str(exc))  # clean message — the traceback adds nothing here
         raise
     except Exception as exc:
         record.status = "failed"
         detail = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
         if stderr_tail:
             detail += "\n--- CLI stderr (tail) ---\n" + "\n".join(stderr_tail)
-        record.error = _truncate_error(detail)
-        record.duration_ms = int((time.perf_counter() - started) * 1000)
-        record.ended_at = utcnow_iso()
-        update_run(record)
+        _finish("failed", _truncate_error(detail))
         raise
     finally:
         current_project_id.reset(proj_token)

@@ -38,6 +38,12 @@ from typing import Any
 
 from bran.transcript import Entry
 
+# Per-run stored events (runs.metadata["events"]). Tool results are the bulk
+# of a transcript; cap each so a chatty run can't balloon the SQLite row, and
+# cap the whole list so the UI replay stays snappy.
+STORED_RESULT_CHARS = 8_000
+STORED_EVENTS_MAX_CHARS = 1_500_000
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -48,6 +54,41 @@ def _with_ts(ev: dict[str, Any], ts: str | None) -> dict[str, Any]:
     if ts:
         ev["ts"] = ts
     return ev
+
+
+def compact_for_storage(ev: dict[str, Any]) -> dict[str, Any]:
+    """Trim one live event for persistence in the run row."""
+    if ev.get("type") == "tool_result":
+        text = ev.get("text") or ""
+        if len(text) > STORED_RESULT_CHARS:
+            ev = {**ev, "text": text[:STORED_RESULT_CHARS] + "\n[… result truncated …]"}
+    return ev
+
+
+def events_from_runs(runs: list[Any]) -> list[dict[str, Any]]:
+    """Rebuild a conversation from its chat-turn run rows when the SDK's
+    transcript file is gone (Claude Code prunes sessions after ~30 days).
+
+    Each turn becomes the user's prompt followed by the turn's stored events
+    when the run kept them (runs.metadata["events"], recorded live), else the
+    final reply text — or the error for a failed turn. Lower fidelity than the
+    transcript (no tool calls for pre-storage turns) but the conversation
+    itself survives.
+    """
+    out: list[dict[str, Any]] = []
+    for r in sorted(runs, key=lambda x: x.started_at or ""):
+        out.append(_with_ts({"type": "user", "text": r.task or ""}, r.started_at))
+        stored = (r.metadata or {}).get("events")
+        if stored:
+            out.extend(e for e in stored if e.get("type") not in ("session", "done"))
+            continue
+        if r.result:
+            out.append(_with_ts({"type": "text", "text": r.result}, r.ended_at or r.started_at))
+        if r.status == "failed":
+            out.append({"type": "error", "message": r.error or "Run failed"})
+        elif r.status == "cancelled":
+            out.append({"type": "error", "message": r.error or "Run cancelled"})
+    return out
 
 
 def _text_from_tool_result_content(content: Any) -> str:
