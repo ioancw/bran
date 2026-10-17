@@ -37,12 +37,25 @@ from bran.tools.schedules import RUNNER_TOOLS
 )
 async def spawn_agent(args: dict[str, Any]) -> dict[str, Any]:
     # Imported lazily to break the agents <-> runner <-> tools cycle.
-    from bran.persistence import RunRecord, insert_run
+    from bran.config import SETTINGS
+    from bran.persistence import RunRecord, get_run, insert_run
     from bran.runner import run_agent
 
     agent = args["agent"]
     task = args["task"]
     wait = bool(args.get("wait"))
+
+    # Depth guard: a spawn from a chat turn is depth 1; a spawned orchestrator
+    # spawning again is depth 2, and so on. Without a ceiling one prompt can
+    # grow into an unbounded tree of CLI processes.
+    parent_id = current_run_id.get()
+    parent = get_run(parent_id) if parent_id else None
+    depth = int((parent.metadata if parent else {}).get("depth", 0)) + 1
+    if depth > SETTINGS.max_spawn_depth:
+        return _err(
+            f"spawn depth {depth} exceeds the limit of {SETTINGS.max_spawn_depth} "
+            "(BRAN_MAX_SPAWN_DEPTH). Do this work yourself instead of delegating further."
+        )
 
     # Pre-create the run row so we can hand its ID back to the caller before
     # the actual run starts. The runner will pick up this same record (not
@@ -55,6 +68,7 @@ async def spawn_agent(args: dict[str, Any]) -> dict[str, Any]:
         project_id=current_project_id.get(),
         source="spawn",
     )
+    record.metadata["depth"] = depth
     if wait:
         # An inline spawn's result is consumed by the turn that made it — the
         # headless fan-in (bran.synthesis) must not count it as batch work.

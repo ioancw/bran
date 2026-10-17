@@ -25,7 +25,7 @@ from claude_agent_sdk import (
 )
 
 from bran.agents import build_options_for, get_agent
-from bran.background import current_project_id, current_run_id
+from bran.background import current_project_id, current_run_id, run_slots
 from bran.config import SETTINGS
 from bran.live import close as live_close
 from bran.live import publish as live_publish
@@ -270,8 +270,37 @@ async def run_agent(
     `record` is supplied — the caller already set the record's project).
     """
     agent_def = get_agent(agent)  # raises KeyError if unknown
-    record = _begin_run(agent, task, parent_run_id, record, project_id, source, schedule_id, actor)
 
+    # Background work (spawns, runners, manual, synthesis) queues behind the
+    # fleet's concurrency gate; the row sits 'pending' while it waits so the
+    # UI shows a queue, not a stall. Inline (wait=true) spawns are consumed by
+    # the turn that made them and must not wait on a slot that turn may hold.
+    effective_source = record.source if record is not None else source
+    gated = not (record is not None and record.metadata.get("inline"))
+    if gated:
+        if record is None:
+            record = RunRecord.new(
+                agent=agent, task=task, parent_run_id=parent_run_id,
+                project_id=project_id, source=effective_source,
+                schedule_id=schedule_id, actor=actor,
+            )
+            insert_run(record)
+        async with run_slots():
+            return await _execute(
+                agent_def, agent, task, record, resume_session, max_turns,
+                extra_options, append_system, on_message,
+            )
+    return await _execute(
+        agent_def, agent, task, record, resume_session, max_turns,
+        extra_options, append_system, on_message,
+    )
+
+
+async def _execute(
+    agent_def, agent, task, record, resume_session, max_turns,
+    extra_options, append_system, on_message,
+) -> RunRecord:
+    record = _begin_run(agent, task, record.parent_run_id, record)
     options = build_options_for(
         agent_def, resume=resume_session, max_turns=max_turns,
         append_system=append_system,

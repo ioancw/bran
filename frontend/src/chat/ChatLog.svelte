@@ -118,7 +118,7 @@
         <!-- bran's turn: prose flows on the canvas, no card chrome — the answer is
          the page, not a boxed message. Actions reveal on hover/focus. -->
         <div class="msg-assistant">
-          <Prose text={item.text} streaming={i === streamingIndex} />
+          <Prose text={item.text} streaming={i === streamingIndex} class="reading" />
           {#if i !== streamingIndex}
             <div class="row-actions">
               <button

@@ -106,7 +106,10 @@ class Agent:
     system_prompt: str
     tools: list[str] = field(default_factory=list)
     model: str | None = None  # "sonnet" | "opus" | "haiku" or a full model ID
-    permission_mode: str = "acceptEdits"
+    # dontAsk: tools in `tools` run (they're pre-approved), anything else that
+    # would prompt is denied outright — a fixed, explicit tool surface for a
+    # headless agent, with no reliance on "nobody is there to approve".
+    permission_mode: str = "dontAsk"
     # Sub-agents this agent can delegate to via the SDK's Agent tool. Keys
     # become the names visible to Claude as `subagent_type`.
     subagents: dict[str, AgentDefinition] = field(default_factory=dict)
@@ -149,6 +152,7 @@ RESEARCH_AGENT = AgentDefinition(
            "mcp__bran_docs__read_pdf", "mcp__bran_docs__save_document", *TAVILY_TOOLS],
     mcpServers=["bran_docs", "tavily"] if os.getenv("TAVILY_API_KEY") else ["bran_docs"],
     model="sonnet",
+    maxTurns=40,
 )
 
 
@@ -170,6 +174,7 @@ SUMMARISER_AGENT = AgentDefinition(
     tools=["Read", "Glob", "Grep", "mcp__bran_docs__read_pdf", "mcp__bran_docs__save_document"],
     mcpServers=["bran_docs"],
     model="haiku",
+    maxTurns=20,
 )
 
 
@@ -262,7 +267,28 @@ FINANCE_NEWS_AGENT = AgentDefinition(
            "mcp__bran_docs__fetch_url", *TAVILY_TOOLS],
     mcpServers=["bran_docs", "tavily"] if os.getenv("TAVILY_API_KEY") else ["bran_docs"],
     model="sonnet",
+    maxTurns=50,
 )
+
+
+# Built-in Claude Code tools an agent could reach even when not listed in its
+# `tools` — allowed_tools only PRE-APPROVES, it doesn't restrict. Anything in
+# this set that an agent doesn't list is removed from its request outright
+# (disallowed_tools), so e.g. no bran agent ever sees Bash.
+BUILTIN_TOOLS = (
+    "Bash", "Write", "Edit", "NotebookEdit",
+    "WebSearch", "WebFetch", "Agent", "Task",
+)
+
+
+def deny_list_for(tools: list[str]) -> list[str]:
+    '''Built-in tools to strip from an agent's request: every known built-in
+    it did not explicitly grant ("Agent" and "Task" are one tool across CLI
+    versions, so granting either keeps both).'''
+    granted = set(tools)
+    if "Agent" in granted or "Task" in granted:
+        granted |= {"Agent", "Task"}
+    return [t for t in BUILTIN_TOOLS if t not in granted]
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +336,9 @@ ORCHESTRATOR = Agent(
         "  scheduled and when it next fires. Never use spawn_agent for "
         "  scheduling.\n\n"
         "Other duties:\n"
+        "- You do not browse the web yourself: for anything that needs a search "
+        "  or a page fetch, delegate to the `research` subagent (quick) or spawn "
+        "  it (substantial) and relay what it finds.\n"
         "- To read a PDF (a filing, paper, or report — a local file path or an "
         "  http(s) URL the user gives you), use `mcp__bran_docs__read_pdf`; the "
         "  plain Read tool can't parse PDFs. Summarise/analyse the extracted text.\n"
@@ -324,8 +353,13 @@ ORCHESTRATOR = Agent(
         "  the surfaces (chat REPL, CLI, HTTP, schedules)."
         + _MATH_NOTATION_NOTE
     ),
+    # No WebSearch/WebFetch here on purpose: the orchestrator holds the
+    # runner-mutating tools, so it must never ingest raw web content itself —
+    # a prompt injection in a fetched page could otherwise schedule autonomous
+    # work. Web reading goes through the research subagent, whose final report
+    # Claude Code scans for instruction-shaped text before the parent sees it.
     tools=[
-        "Read", "Glob", "Grep", "WebSearch", "WebFetch",
+        "Read", "Glob", "Grep",
         "Agent",  # required to invoke subagents
         "mcp__bran__spawn_agent",
         "mcp__bran__get_run_result",
@@ -339,9 +373,9 @@ ORCHESTRATOR = Agent(
         "mcp__bran__pause_runner",
         "mcp__bran__resume_runner",
         "mcp__bran__delete_runner",
-        *_maybe_tavily_tools(),
     ],
     model=SETTINGS.default_model,
+    max_turns=60,
     subagents={
         "research": RESEARCH_AGENT,
         "summariser": SUMMARISER_AGENT,
@@ -362,6 +396,7 @@ RESEARCH = Agent(
            "mcp__bran_docs__read_pdf", "mcp__bran_docs__save_document", *_maybe_tavily_tools()],
     mcp_servers={"bran_docs": documents_server, **_maybe_tavily_servers()},
     model="sonnet",
+    max_turns=40,
     hooks=_WRITE_CONFINEMENT_HOOKS,
 )
 
@@ -373,6 +408,7 @@ SUMMARISER = Agent(
     tools=["Read", "Glob", "Grep", "mcp__bran_docs__read_pdf", "mcp__bran_docs__save_document"],
     mcp_servers={"bran_docs": documents_server},
     model="haiku",
+    max_turns=20,
 )
 
 
@@ -389,6 +425,7 @@ FINANCE_NEWS = Agent(
            "mcp__bran_docs__fetch_url", *_maybe_tavily_tools()],
     mcp_servers={"bran_docs": documents_server, **_maybe_tavily_servers()},
     model="sonnet",
+    max_turns=50,
     hooks=_WRITE_CONFINEMENT_HOOKS,
 )
 
@@ -443,6 +480,9 @@ def build_options_for(
     return ClaudeAgentOptions(
         system_prompt=system_prompt,
         allowed_tools=list(agent.tools),
+        # allowed_tools only pre-approves; this is what actually keeps the
+        # ungranted built-ins (Bash above all) out of the agent's reach.
+        disallowed_tools=deny_list_for(agent.tools),
         model=agent.model,
         permission_mode=agent.permission_mode,
         agents=dict(agent.subagents) if agent.subagents else None,
@@ -452,13 +492,23 @@ def build_options_for(
         max_turns=max_turns if max_turns is not None else agent.max_turns,
         cwd=str(SETTINGS.project_root),
         hooks=dict(agent.hooks) if agent.hooks else None,
-        # Load filesystem settings explicitly rather than relying on the SDK's
-        # default (which has changed across versions). bran depends on these for
-        # .claude/agents (filesystem subagents), .claude/commands (slash
-        # commands in chat), and .claude/skills discovery under cwd.
-        setting_sources=["user", "project", "local"],
+        # Project settings only. bran depends on .claude/ under cwd for
+        # filesystem subagents, slash commands and skills — but the USER's
+        # ~/.claude settings (permission allow rules, hooks, MCP servers) must
+        # never leak into unattended agent runs: a `Bash(*)` allow rule there
+        # would hand every bran agent a shell.
+        setting_sources=["project", "local"],
         # Raise the 1MB default so a single large tool result can't abort a run.
         max_buffer_size=SETTINGS.max_buffer_size,
+        # Spend ceiling for this run (client-side estimate; the query ends with
+        # error_max_budget_usd). Resumed-session history doesn't count.
+        max_budget_usd=SETTINGS.run_budget_usd if SETTINGS.run_budget_usd > 0 else None,
+        # Bound the inline Agent-tool tree inside this run. The Python SDK
+        # merges env into the inherited environment.
+        env={
+            "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": str(SETTINGS.subagent_depth),
+            "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": str(SETTINGS.subagent_concurrency),
+        },
     )
 
 

@@ -25,12 +25,13 @@ from __future__ import annotations
 
 import logging
 
-from bran.background import spawn_background
+from bran.background import session_lock, spawn_background
 from bran.persistence import (
     RunRecord,
     claim_fanout_synthesis,
     get_chat,
     get_run,
+    list_runs,
     list_spawns,
     touch_chat,
 )
@@ -111,17 +112,34 @@ async def maybe_synthesise(parent_run_id: str) -> str | None:
     from bran.runner import run_agent
     from bran.scheduler import _project_append_system
 
-    run = await run_agent(
-        chat.agent,
-        _synthesis_prompt(spawns),
-        resume_session=chat.id,
-        parent_run_id=parent_run_id,
-        project_id=chat.project_id,
-        source="synthesis",
-        append_system=_project_append_system(chat.project_id),
-    )
+    # The synthesis turn resumes the chat's SDK session. If the user is
+    # mid-turn in that same session, wait for them — two CLI processes
+    # appending to one transcript would interleave the conversation.
+    async with session_lock(chat.id):
+        run = await run_agent(
+            chat.agent,
+            _synthesis_prompt(spawns),
+            resume_session=chat.id,
+            parent_run_id=parent_run_id,
+            project_id=chat.project_id,
+            source="synthesis",
+            append_system=_project_append_system(chat.project_id),
+        )
     touch_chat(chat.id)
     return run.id
+
+
+def unclaimed_fanout_parents(session_id: str) -> list[str]:
+    """Chat turns in this session that spawned background work and have not
+    had their synthesis claimed yet. A later turn finishing re-checks these,
+    so a batch that completed while the user kept talking isn't stranded."""
+    out: list[str] = []
+    for r in list_runs(session_id=session_id, limit=200):
+        if r.source != "chat" or r.metadata.get("fanout_synthesis"):
+            continue
+        if any(not s.metadata.get("inline") for s in list_spawns(r.id)):
+            out.append(r.id)
+    return out
 
 
 def suppresses_notification(record: RunRecord) -> bool:
@@ -156,9 +174,10 @@ def check_after_run(record: RunRecord) -> None:
                 name=f"synthesis-check:{record.parent_run_id}",
             )
         elif record.source == "chat":
-            spawn_background(
-                maybe_synthesise(record.id),
-                name=f"synthesis-check:{record.id}",
-            )
+            parents = [record.id]
+            if record.session_id:
+                parents += [p for p in unclaimed_fanout_parents(record.session_id) if p != record.id]
+            for pid in parents:
+                spawn_background(maybe_synthesise(pid), name=f"synthesis-check:{pid}")
     except Exception:
         log.exception("failed to schedule synthesis check for run %s", record.id)

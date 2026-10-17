@@ -33,10 +33,12 @@ generic admin template.
   15 (chat), 17 (page title), 22 (empty-state headings). Weights 400/500/600.
 - **Geist Mono** only for identifiers: run ids, session ids, cron strings,
   code, and tabular numbers (cost, duration).
-- **Source Serif 4** only inside `.prose-md.reading`: the rendered output of an
-  agent on the Outputs page and the run result on RunDetail. This is the one
-  deliberately bookish moment: briefings read like print, the tool around
-  them reads like a tool.
+- **Source Serif 4** only inside `.prose-md.reading`: anything an agent wrote.
+  That is the rendered output on the Outputs page, the run result on
+  RunDetail, and the assistant's turns in chat. Your own messages and every
+  label the app writes stay sans. This is the one deliberately bookish moment:
+  what the agents produce reads like print, the tool around it reads like a
+  tool.
 - Sentence case everywhere. No uppercase tracking, no italic display type.
 
 ## Layout
@@ -78,7 +80,7 @@ generic admin template.
 - `table.bran-table`: 12px sentence-case headers, 13px cells, 40px rows.
 - `.field`: inputs, selects, textareas. 13px, radius 8.
 - `.composer`: the shared input surface.
-- `.prose-md` (sans, chat) and `.prose-md.reading` (serif, outputs).
+- `.prose-md` (sans) and `.prose-md.reading` (serif: outputs, run results, assistant chat turns).
 - `.tool-block`, `.tool-group`: chat tool rows.
 
 ## Writing

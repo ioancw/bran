@@ -33,6 +33,55 @@ current_run_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 )
 
 
+# ---------------------------------------------------------------------------
+# Run slots: a semaphore that bounds how many background runs execute at once.
+# asyncio primitives bind to the loop they're first used on; tests spin up a
+# fresh loop per asyncio.run(), so the primitives are rebuilt when the loop
+# changes (nothing can be held across loops anyway).
+# ---------------------------------------------------------------------------
+_slots: asyncio.Semaphore | None = None
+_slots_loop: asyncio.AbstractEventLoop | None = None
+_session_locks: dict[str, asyncio.Lock] = {}
+_session_locks_loop: asyncio.AbstractEventLoop | None = None
+
+
+def run_slots() -> asyncio.Semaphore:
+    """The process-wide concurrency gate for background runs (see
+    SETTINGS.max_concurrent_runs). Acquire it around the whole run."""
+    global _slots, _slots_loop
+    from bran.config import SETTINGS
+
+    loop = asyncio.get_running_loop()
+    if _slots is None or _slots_loop is not loop:
+        _slots = asyncio.Semaphore(SETTINGS.max_concurrent_runs)
+        _slots_loop = loop
+    return _slots
+
+
+def slots_in_use() -> int:
+    """How many background runs currently hold a slot (0 when idle)."""
+    from bran.config import SETTINGS
+
+    if _slots is None:
+        return 0
+    return SETTINGS.max_concurrent_runs - _slots._value  # noqa: SLF001 — informational only
+
+
+def session_lock(session_id: str) -> asyncio.Lock:
+    """One lock per SDK session. Everything that *resumes* a session (a chat
+    turn, the headless synthesis turn) must hold it: two CLI processes
+    appending to the same transcript would interleave the conversation."""
+    global _session_locks_loop
+    loop = asyncio.get_running_loop()
+    if _session_locks_loop is not loop:
+        _session_locks.clear()
+        _session_locks_loop = loop
+    lock = _session_locks.get(session_id)
+    if lock is None:
+        lock = _session_locks[session_id] = asyncio.Lock()
+    return lock
+
+
 def spawn_background(
     coro: Coroutine[Any, Any, Any], *, name: str | None = None
 ) -> asyncio.Task[Any]:

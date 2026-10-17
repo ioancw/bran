@@ -52,6 +52,21 @@ class Settings:
     # pass the same-origin check). Extend with BRAN_ALLOWED_HOSTS="lanbox,..."
     # when binding beyond localhost.
     allowed_hosts: tuple[str, ...]
+    # --- Fleet limits ------------------------------------------------------
+    # Client-side spend ceiling for ONE run (SDK max_budget_usd; the query
+    # ends with error_max_budget_usd). 0 disables. BRAN_RUN_BUDGET_USD.
+    run_budget_usd: float
+    # How many background runs (spawns, runners, manual, synthesis) may
+    # execute at once; the rest queue as 'pending'. Chat turns and inline
+    # (wait=true) spawns are never queued. BRAN_MAX_CONCURRENT_RUNS.
+    max_concurrent_runs: int
+    # How deep spawn_agent may nest (a chat turn's spawn is depth 1).
+    # BRAN_MAX_SPAWN_DEPTH.
+    max_spawn_depth: int
+    # Caps for the SDK's inline Agent-tool subagents inside ONE run, passed
+    # through the CLI environment. BRAN_SUBAGENT_DEPTH / BRAN_SUBAGENT_CONCURRENCY.
+    subagent_depth: int
+    subagent_concurrency: int
 
     @property
     def claude_dir(self) -> Path:
@@ -130,6 +145,11 @@ def load_settings() -> Settings:
         run_timeout_s=int(os.getenv("BRAN_RUN_TIMEOUT", "3600")),
         runner_retries=int(os.getenv("BRAN_RUNNER_RETRIES", "2")),
         allowed_hosts=_parse_allowed_hosts(os.getenv("BRAN_HOST", "127.0.0.1")),
+        run_budget_usd=float(os.getenv("BRAN_RUN_BUDGET_USD", "5")),
+        max_concurrent_runs=max(1, int(os.getenv("BRAN_MAX_CONCURRENT_RUNS", "4"))),
+        max_spawn_depth=max(1, int(os.getenv("BRAN_MAX_SPAWN_DEPTH", "2"))),
+        subagent_depth=max(1, int(os.getenv("BRAN_SUBAGENT_DEPTH", "1"))),
+        subagent_concurrency=max(1, int(os.getenv("BRAN_SUBAGENT_CONCURRENCY", "5"))),
     )
 
 

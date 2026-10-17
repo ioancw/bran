@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import FileResponse, StreamingResponse
 
 from bran.agents import get_agent, list_agents
-from bran.background import spawn_background
+from bran.background import session_lock, spawn_background
 from bran.config import SETTINGS
 from bran.persistence import (
     ChatRecord,
@@ -167,6 +167,16 @@ def _build_project_context(project: ProjectRecord) -> str:
     if workdir:
         parts.append(workdir)
     return "\n\n".join(parts)
+
+
+def delegation_prompt(agent: str, request: str) -> str:
+    """Turn an `@agent …` message into an orchestrator instruction that
+    delegates to that agent's subagent form — inside the SAME session, so the
+    conversation keeps its context instead of forking into a new chat."""
+    return (
+        f"Use the `{agent}` subagent (via the Agent tool) for the request below "
+        "and relay its answer to the user faithfully.\n\n" + request
+    )
 
 
 def _parse_agent_prefix(prompt: str) -> tuple[str, str]:
@@ -935,11 +945,24 @@ async def chat_stream(
     """
     sid = session_id or None
     mentioned_agent, actual_prompt = _parse_agent_prefix(prompt)
+    locked_agent = chat_agent if chat_agent in {a.name for a in list_agents()} else None
+    existing_chat = get_chat(sid) if sid else None
+    if existing_chat is not None:
+        locked_agent = existing_chat.agent
+    delegated = False
     if mentioned_agent != "orchestrator":
-        target_agent = mentioned_agent
-        sid = None  # don't resume across a different agent
-    elif chat_agent and chat_agent in {a.name for a in list_agents()}:
-        target_agent = chat_agent
+        orchestrator = get_agent("orchestrator")
+        if (locked_agent in (None, "orchestrator")) and mentioned_agent in orchestrator.subagents:
+            # An @mention in an orchestrator chat is a one-off delegation
+            # inside this conversation — not a fork into a new chat.
+            target_agent = "orchestrator"
+            actual_prompt = delegation_prompt(mentioned_agent, actual_prompt)
+            delegated = True
+        else:
+            target_agent = mentioned_agent
+            sid = None  # a chat is locked to one agent — switching starts a new one
+    elif locked_agent:
+        target_agent = locked_agent
     else:
         target_agent = "orchestrator"
 
@@ -965,7 +988,12 @@ async def chat_stream(
     async def event_gen():
         chat_initialised = False
         if mentioned_agent != "orchestrator":
-            yield sse({"type": "routed", "agent": target_agent})
+            yield sse({"type": "routed", "agent": mentioned_agent if delegated else target_agent})
+        # Resuming a session must be exclusive (see background.session_lock):
+        # a headless synthesis turn for this chat may be running right now.
+        lock = session_lock(sid) if sid else None
+        if lock is not None:
+            await lock.acquire()
         try:
             async for msg in stream_agent(
                 target_agent, actual_prompt, resume_session=sid,
@@ -985,6 +1013,9 @@ async def chat_stream(
                     yield sse(ev)
         except Exception as exc:  # noqa: BLE001 — surface any failure to the client
             yield sse({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
+        finally:
+            if lock is not None and lock.locked():
+                lock.release()
         yield sse({"type": "done"})
 
     return StreamingResponse(

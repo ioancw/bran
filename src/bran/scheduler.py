@@ -196,9 +196,16 @@ async def _verify_output(task: str, output: str) -> dict | None:
             "You are a strict but fair reviewer of agent-produced reports. "
             "You only ever reply with a single JSON verdict object."
         ),
+        # allowed_tools=[] would only mean "pre-approve nothing"; this removes
+        # every tool from the request. No filesystem settings either — a
+        # JSON-only critic must not inherit CLAUDE.md, hooks or MCP servers.
         allowed_tools=[],
+        disallowed_tools=["*"],
+        setting_sources=[],
+        permission_mode="dontAsk",
         model="haiku",
         max_turns=1,
+        max_budget_usd=0.5,
     )
     async def _collect() -> str:
         out = ""
