@@ -110,6 +110,7 @@ def _build_api_router(enable_scheduler: bool) -> APIRouter:
                 "model": p.model,
                 "tools": p.tools,
                 "subagents": list(p.subagents),
+                "file": p.source,
             }
             for p in list_agents()
         ]

@@ -80,12 +80,14 @@ export const api = {
       project_id?: string
       schedule_id?: string
       session_id?: string
+      parent_run_id?: string
       exclude_chats?: boolean
       limit?: number
       q?: string
     } = {},
   ) => {
     const p = new URLSearchParams()
+    if (q.parent_run_id) p.set('parent_run_id', q.parent_run_id)
     if (q.agent) p.set('agent', q.agent)
     if (q.status) p.set('status', q.status)
     if (q.project_id) p.set('project_id', q.project_id)

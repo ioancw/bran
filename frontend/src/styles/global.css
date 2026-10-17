@@ -582,7 +582,8 @@ kbd {
   color: var(--accent-soft);
 }
 .src-spawn,
-.src-synthesis {
+.src-synthesis,
+.src-subagent {
   background: var(--blue-soft);
   color: var(--blue);
 }

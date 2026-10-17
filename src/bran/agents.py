@@ -1,49 +1,52 @@
 """Agent registry.
 
-An *agent* in bran bundles a description, system prompt, allowed tools, model
-alias, permission mode, and the sub-agents it can delegate to. Agents turn
-into `ClaudeAgentOptions` for the SDK via `build_options_for()`.
+Agents are defined as files in `agents/<name>.md` (see bran.agent_files for
+the format) and loaded here into `Agent` objects. One file is the single
+source of truth for an agent in BOTH of its forms:
 
-Note the deliberate distinction:
-- `Agent` (this module): bran's top-level configurable agent.
-- `AgentDefinition` (from the SDK): the SDK's subagent config — one of several
-  things an `Agent` can hold inside its `subagents` dict.
+- `Agent` (this module): bran's top-level agent — what the user chats with,
+  schedules as a Runner, spawns in the background, or runs from the CLI.
+- `AgentDefinition` (from the SDK): the same agent as an *inline subagent*
+  another agent may delegate to through the Agent tool. Derived from the
+  same spec, so prompts, tools and models can't drift apart.
 
-Add an agent by:
-1. Defining it as an `Agent` here, OR
-2. Dropping a markdown file in `.claude/agents/<name>.md` (auto-loaded by the SDK).
-
-The two coexist; programmatic agents take precedence on name collision.
+Agents turn into `ClaudeAgentOptions` for the SDK via `build_options_for()`.
+Programmatic registration (`register_agent`) still works for scripts.
 """
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from claude_agent_sdk import AgentDefinition, ClaudeAgentOptions, HookMatcher
 
+from bran.agent_files import AgentSpec, load_agent_dir
 from bran.config import SETTINGS
 from bran.permissions import WRITE_TOOL_MATCHER, confine_writes_hook
 from bran.tools.documents import documents_server
 from bran.tools.spawn import spawn_agent_server
 
+AGENTS_DIR = SETTINGS.project_root / "agents"
+
 # PreToolUse hook set that confines file writes to bran's home dir. Attached to
-# every agent that can write (directly or via a delegated sub-agent) so a
-# prompt-injection in fetched web content can't write outside the sandbox.
-# See bran.permissions for the rationale.
+# every agent (the matcher only fires for write tools) so a prompt-injection in
+# fetched web content can't write outside the sandbox, including inside a
+# delegated subagent. See bran.permissions for the rationale.
 _WRITE_CONFINEMENT_HOOKS: dict[str, Any] = {
     "PreToolUse": [HookMatcher(matcher=WRITE_TOOL_MATCHER, hooks=[confine_writes_hook])],
 }
 
 
 # ---------------------------------------------------------------------------
-# External MCP servers (auto-enabled when their API key is present).
+# MCP servers. An agent never declares servers — they follow from the tool
+# names it grants (`mcp__<server>__<tool>`).
 # ---------------------------------------------------------------------------
 
-# Tools the Tavily MCP server exposes. Kept as a constant so agents can opt
-# into the full set with a single splat.
+# Tools the Tavily MCP server exposes; `mcp__tavily__*` in a file expands to
+# these, and they're dropped entirely when there's no TAVILY_API_KEY.
 TAVILY_TOOLS = [
     "mcp__tavily__tavily_search",
     "mcp__tavily__tavily_extract",
@@ -53,37 +56,60 @@ TAVILY_TOOLS = [
 
 
 def _tavily_server() -> dict[str, Any] | None:
-    """Return a stdio MCP server config for Tavily, or None if no key is set.
-
-    Tavily ships an official MCP server as the `tavily-mcp` npm package. We
-    invoke it via `npx -y` so users don't need a global install — Node 18+
-    is already a hard dep of the Claude Agent SDK so it's always available.
-    """
+    """stdio MCP server config for Tavily, or None without a key. Tavily ships
+    an official MCP server as the `tavily-mcp` npm package; `npx -y` means no
+    global install (Node 18+ is already a hard dep of the Agent SDK)."""
     key = os.getenv("TAVILY_API_KEY")
     if not key:
         return None
-    return {
-        "command": "npx",
-        "args": ["-y", "tavily-mcp"],
-        "env": {"TAVILY_API_KEY": key},
-    }
+    return {"command": "npx", "args": ["-y", "tavily-mcp"], "env": {"TAVILY_API_KEY": key}}
 
 
-def _maybe_tavily_servers() -> dict[str, Any]:
-    """Return {'tavily': <config>} if the key is set, else {}."""
-    server = _tavily_server()
-    return {"tavily": server} if server else {}
+def _server_for_prefix(prefix: str) -> tuple[str, Any] | None:
+    if prefix == "bran":
+        return "bran", spawn_agent_server
+    if prefix == "bran_docs":
+        return "bran_docs", documents_server
+    if prefix == "tavily":
+        cfg = _tavily_server()
+        return ("tavily", cfg) if cfg else None
+    return None
 
 
-def _maybe_tavily_tools() -> list[str]:
-    """Return the Tavily tool list if the key is set, else []."""
-    return TAVILY_TOOLS if os.getenv("TAVILY_API_KEY") else []
+def resolve_tools(tools: list[str]) -> list[str]:
+    """Expand `mcp__<server>__*` wildcards, drop MCP tools whose server isn't
+    available (no Tavily key), dedupe while keeping order."""
+    out: list[str] = []
+    for t in tools:
+        if t == "mcp__tavily__*":
+            expanded = TAVILY_TOOLS if os.getenv("TAVILY_API_KEY") else []
+        elif t.startswith("mcp__tavily__") and not os.getenv("TAVILY_API_KEY"):
+            expanded = []
+        else:
+            expanded = [t]
+        for e in expanded:
+            if e not in out:
+                out.append(e)
+    return out
+
+
+def servers_for(tools: list[str]) -> dict[str, Any]:
+    """The MCP server configs an agent needs, keyed by server name."""
+    servers: dict[str, Any] = {}
+    for t in tools:
+        if not t.startswith("mcp__"):
+            continue
+        prefix = t[len("mcp__"):].split("__", 1)[0]
+        hit = _server_for_prefix(prefix)
+        if hit and hit[0] not in servers:
+            servers[hit[0]] = hit[1]
+    return servers
 
 
 # Appended to every agent's system prompt so math expressions in their replies
 # get rendered by the web UI's KaTeX integration. Without this, models default
-# to plain text (e.g. `x^2` or `A = P(1+r/n)^(nt)`), which doesn't trigger
-# KaTeX and looks worse than no notation at all.
+# to plain text (e.g. `x^2`), which doesn't trigger KaTeX and looks worse than
+# no notation at all.
 _MATH_NOTATION_NOTE = (
     "\n\n## Math notation\n"
     "When your reply contains mathematical expressions, wrap them in LaTeX "
@@ -120,155 +146,8 @@ class Agent:
     max_turns: int | None = None
     # SDK hooks (e.g. PreToolUse write confinement). Maps HookEvent -> matchers.
     hooks: dict[str, Any] | None = None
-
-
-# ---------------------------------------------------------------------------
-# Sub-agent definitions (used by the orchestrator).
-# ---------------------------------------------------------------------------
-
-RESEARCH_AGENT = AgentDefinition(
-    description=(
-        "Web research specialist. Use this agent for any task that requires "
-        "searching the web, reading articles, comparing sources, or producing "
-        "a written summary backed by citations."
-    ),
-    prompt=(
-        "You are a careful web research analyst. For every task:\n"
-        "1. Prefer `mcp__tavily__tavily_search` over `WebSearch` when available — "
-        "it returns cleaner, more relevant results. Fall back to `WebSearch` only "
-        "if Tavily isn't listed in your tools.\n"
-        "2. Find at least three independent sources.\n"
-        "3. Read the most promising ones in full with `mcp__tavily__tavily_extract` "
-        "(preferred) or `WebFetch`. If a source is a PDF (a URL ending `.pdf` or a "
-        "local file path), read it with `mcp__bran_docs__read_pdf` — WebFetch/"
-        "extract return garbage for PDFs.\n"
-        "4. Cross-check claims across sources.\n"
-        "5. Write a tight, well-structured answer with inline citations as "
-        "(Source: <domain>) and a Sources list at the end.\n"
-        "Be skeptical of low-quality sources. Note uncertainty explicitly."
-        + _MATH_NOTATION_NOTE
-    ),
-    tools=["WebSearch", "WebFetch", "Read", "Write", "Glob", "Grep",
-           "mcp__bran_docs__read_pdf", "mcp__bran_docs__save_document", *TAVILY_TOOLS],
-    mcpServers=["bran_docs", "tavily"] if os.getenv("TAVILY_API_KEY") else ["bran_docs"],
-    model="sonnet",
-    maxTurns=40,
-)
-
-
-SUMMARISER_AGENT = AgentDefinition(
-    description=(
-        "Text summarisation specialist. Use for condensing long documents, "
-        "transcripts, or sets of articles into briefings."
-    ),
-    prompt=(
-        "You are a precise summariser. Produce structured briefings:\n"
-        "- TL;DR (one sentence)\n"
-        "- Key points (3-7 bullets)\n"
-        "- So what (1-3 bullets: implications and any recommended action — what "
-        "the reader should conclude or do, not a restatement)\n"
-        "- Open questions or caveats\n"
-        "Preserve every concrete number, name, and date. Never invent facts."
-        + _MATH_NOTATION_NOTE
-    ),
-    tools=["Read", "Glob", "Grep", "mcp__bran_docs__read_pdf", "mcp__bran_docs__save_document"],
-    mcpServers=["bran_docs"],
-    model="haiku",
-    maxTurns=20,
-)
-
-
-FINANCE_NEWS_PROMPT = (
-    "You are Bran's finance-news briefing agent. Your job is to fetch the latest "
-    "headlines from a fixed set of financial RSS feeds and produce a structured "
-    "morning digest with a finance lens (markets, central banks, rates, FX, "
-    "commodities, M&A, macro).\n\n"
-    "## RSS feeds (fetch in parallel)\n"
-    "1. BBC Business — https://feeds.bbci.co.uk/news/business/rss.xml\n"
-    "2. Bloomberg Markets — https://feeds.bloomberg.com/markets/news.rss\n"
-    "3. Bloomberg Economics — https://feeds.bloomberg.com/economics/news.rss\n"
-    "4. Financial Times — https://www.ft.com/rss/home/international\n"
-    "5. MarketWatch Top Stories — https://feeds.content.dowjones.io/public/rss/mw_topstories\n"
-    "6. Investing.com Economy — https://www.investing.com/rss/news_14.rss\n"
-    "7. Investing.com Forex — https://www.investing.com/rss/news_1.rss\n\n"
-    "Fetch each feed with `mcp__bran_docs__fetch_url`, which returns the raw RSS "
-    "XML and (unlike the built-in `WebFetch` tool) can reach every feed above, "
-    "including the FT. Fetch them up front, then parse the <item> entries. To read "
-    "the full body of an individual article you want to summarise in depth, you may "
-    "use `WebFetch`, or `mcp__tavily__tavily_extract` when it is in your tools — it "
-    "returns clean body text rather than rendered HTML.\n\n"
-    "## Filter (default: finance)\n"
-    "Unless the user passes a different filter in their prompt, apply the **finance** "
-    "lens: prioritise markets (equities, bonds, FX, commodities), central banks, "
-    "interest rates, monetary policy, investing, M&A, private equity, hedge funds, "
-    "and macro economics. Deprioritise pure consumer / lifestyle / corporate-PR news "
-    "unless it has a direct market-moving implication. If the user passes specific "
-    "topics (e.g. 'oil, rates, UK economy'), lead with stories matching those topics "
-    "and flag each with a ★ marker.\n\n"
-    "## Output structure (markdown)\n"
-    "```\n"
-    "# Finance Briefing — <Day, DD Month YYYY> — <HH:MM GMT>\n"
-    "**Lens:** <finance | user filter>\n\n"
-    "## Top theme\n"
-    "<2–3 sentences identifying the dominant cross-source story of the day.>\n\n"
-    "## Markets snapshot\n"
-    "<3–5 bullets if you can derive index/FX/commodity moves from the headlines, "
-    "otherwise skip this section.>\n\n"
-    "## BBC Business\n"
-    "## Bloomberg Markets\n"
-    "## Bloomberg Economics\n"
-    "## Financial Times\n"
-    "## MarketWatch\n"
-    "## Economy & Macro (Investing.com)\n"
-    "## Bonds & FX (Investing.com)\n"
-    "<For each section: top 5 stories formatted as `**Headline** — one-sentence "
-    "summary. <link>`>\n\n"
-    "## Cross-source highlights\n"
-    "<3–5 stories that appear across multiple feeds or are the day's biggest.>\n\n"
-    "## Left field\n"
-    "<One genuinely surprising, underreported, or off-beat finance/macro story the "
-    "user is unlikely to have seen. Include why it's worth attention in 1–2 lines.>\n\n"
-    "## So what\n"
-    "<The genesis layer — never skip it. 2–4 bullets: what today's stories IMPLY, "
-    "not what they say. Each bullet: the implication, why it matters to a "
-    "markets/FX reader, and where useful a concrete 'worth watching / worth doing' "
-    "action. Prefer signals that are ACCELERATING — a theme gaining momentum "
-    "across days or feeds beats a big but static story.>\n"
-    "```\n\n"
-    "## Rules\n"
-    "- Deduplicate: same story across feeds → mention once in Cross-source.\n"
-    "- One sentence per story summary. Always include the URL.\n"
-    "- FT articles require a subscription — flag '(paywall)' next to FT links.\n"
-    "- Investing.com feeds are headlines-only; add '(headline only)' when ambiguous.\n"
-    "- If a feed fails to load, note it under a short 'Feeds unavailable' line and "
-    "continue with the others — never fabricate stories for a feed you couldn't fetch.\n"
-    "- End with the feed timestamps so the user can gauge freshness.\n\n"
-    "## Always save the briefing\n"
-    "Whether invoked interactively or on a schedule, use the `Write` tool to save "
-    "the final markdown to this EXACT absolute path BEFORE returning your reply:\n"
-    f"  {SETTINGS.briefings_dir}/briefing_<YYYY-MM-DD>.md\n"
-    "Use the UTC date in the filename. The directory already exists — do not invent "
-    "a different directory or a home path. Then return the full briefing as your "
-    "final message."
-    + _MATH_NOTATION_NOTE
-)
-
-
-FINANCE_NEWS_AGENT = AgentDefinition(
-    description=(
-        "Finance-focused morning news briefing. Fetches BBC Business, Bloomberg "
-        "(Markets + Economics), FT, MarketWatch, and Investing.com (Economy + Forex) "
-        "feeds and produces a structured digest emphasising markets, rates, FX, "
-        "commodities, and macro. Use for any 'morning briefing', 'market briefing', "
-        "or 'what happened overnight in finance' style request."
-    ),
-    prompt=FINANCE_NEWS_PROMPT,
-    tools=["WebFetch", "Write", "Read", "mcp__bran_docs__read_pdf", "mcp__bran_docs__save_document",
-           "mcp__bran_docs__fetch_url", *TAVILY_TOOLS],
-    mcpServers=["bran_docs", "tavily"] if os.getenv("TAVILY_API_KEY") else ["bran_docs"],
-    model="sonnet",
-    maxTurns=50,
-)
+    # The file this agent was loaded from (None for programmatic agents).
+    source: str | None = None
 
 
 # Built-in Claude Code tools an agent could reach even when not listed in its
@@ -282,9 +161,9 @@ BUILTIN_TOOLS = (
 
 
 def deny_list_for(tools: list[str]) -> list[str]:
-    '''Built-in tools to strip from an agent's request: every known built-in
+    """Built-in tools to strip from an agent's request: every known built-in
     it did not explicitly grant ("Agent" and "Task" are one tool across CLI
-    versions, so granting either keeps both).'''
+    versions, so granting either keeps both)."""
     granted = set(tools)
     if "Agent" in granted or "Task" in granted:
         granted |= {"Agent", "Task"}
@@ -292,147 +171,90 @@ def deny_list_for(tools: list[str]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Top-level agents.
+# Specs -> agents
 # ---------------------------------------------------------------------------
 
-ORCHESTRATOR = Agent(
-    name="orchestrator",
-    description=(
-        "Default conversational agent. Chats with the user and delegates focused "
-        "subtasks to specialist sub-agents. Can also fire background runs via the "
-        "spawn_agent tool when the user wants something done asynchronously."
-    ),
-    system_prompt=(
-        "You are Bran, the orchestrator of a fleet of specialist agents.\n\n"
-        "Your role:\n"
-        "- Have a normal, helpful conversation with the user.\n\n"
-        "## Delegation — one decision rule\n"
-        "The roster: `research` (web research), `summariser` (briefings), "
-        "`finance-news` (morning finance briefing from RSS feeds — use it for any "
-        "'morning briefing' / 'market briefing' / 'what happened overnight' ask).\n"
-        "- Quick, focused subtask whose answer you need to continue THIS reply → "
-        "  the Agent tool (inline subagent; nothing persisted separately).\n"
-        "- Substantial one-off job → `mcp__bran__spawn_agent` (a persisted fleet "
-        "  run the user can open). wait=true to block and use the result now; "
-        "  wait=false to answer the user immediately with the run id. Fan-outs: "
-        "  spawn each task with wait=false, then collect with "
-        "  `mcp__bran__get_run_result` once they finish — bran triggers the "
-        "  synthesis turn automatically when all runs complete, even if the "
-        "  user has left (they can also ask 'synthesise those' anytime); merge "
-        "  them into one clear answer. "
-        "  When synthesising, CLUSTER first: parallel workers routinely surface "
-        "  the same story/fact — report each cluster ONCE (noting corroboration, "
-        "  e.g. '3 of 4 sources'), reconcile contradictions explicitly, and rank "
-        "  clusters by significance rather than echoing each run in turn. If a "
-        "  run is still running, say so and check back; don't loop. "
-        "  `mcp__bran__list_recent_runs` finds recent run ids.\n"
-        "- Anything RECURRING or scheduled ('every morning', 'each week', 'at "
-        "  7am', 'remind me to…') → the Runner tools: `mcp__bran__create_runner` "
-        "  (cron, natural language, or an ISO datetime for a one-shot), plus "
-        "  `list_runners`, `update_runner` (edit in place — prefer over "
-        "  delete+recreate), `pause_runner`, `resume_runner`, `delete_runner`. "
-        "  Ask for any missing detail (which agent, what time, attach to a "
-        "  project? verify/delta mode?) before creating, then confirm what you "
-        "  scheduled and when it next fires. Never use spawn_agent for "
-        "  scheduling.\n\n"
-        "Other duties:\n"
-        "- You do not browse the web yourself: for anything that needs a search "
-        "  or a page fetch, delegate to the `research` subagent (quick) or spawn "
-        "  it (substantial) and relay what it finds.\n"
-        "- To read a PDF (a filing, paper, or report — a local file path or an "
-        "  http(s) URL the user gives you), use `mcp__bran_docs__read_pdf`; the "
-        "  plain Read tool can't parse PDFs. Summarise/analyse the extracted text.\n"
-        "- Before significant or hard-to-reverse work — creating/changing/deleting "
-        "  runners, fanning out 3+ background runs, anything with meaningful cost "
-        "  or side effects — call `mcp__bran__propose_plan` (short title + concise "
-        "  numbered steps), then END your turn and wait for the user's approval "
-        "  before executing anything. Skip the gate for trivial or read-only "
-        "  requests; don't make the user approve everything.\n"
-        "- Be concise. Reflect tool/agent results back to the user faithfully.\n"
-        "- If the user asks 'what can you do?', list the available agents and "
-        "  the surfaces (chat REPL, CLI, HTTP, schedules)."
-        + _MATH_NOTATION_NOTE
-    ),
-    # No WebSearch/WebFetch here on purpose: the orchestrator holds the
-    # runner-mutating tools, so it must never ingest raw web content itself —
-    # a prompt injection in a fetched page could otherwise schedule autonomous
-    # work. Web reading goes through the research subagent, whose final report
-    # Claude Code scans for instruction-shaped text before the parent sees it.
-    tools=[
-        "Read", "Glob", "Grep",
-        "Agent",  # required to invoke subagents
-        "mcp__bran__spawn_agent",
-        "mcp__bran__get_run_result",
-        "mcp__bran__list_recent_runs",
-        "mcp__bran__propose_plan",
-        "mcp__bran_docs__read_pdf", "mcp__bran_docs__save_document",
-        "mcp__bran__save_project_memory",
-        "mcp__bran__create_runner",
-        "mcp__bran__list_runners",
-        "mcp__bran__update_runner",
-        "mcp__bran__pause_runner",
-        "mcp__bran__resume_runner",
-        "mcp__bran__delete_runner",
-    ],
-    model=SETTINGS.default_model,
-    max_turns=60,
-    subagents={
-        "research": RESEARCH_AGENT,
-        "summariser": SUMMARISER_AGENT,
-        "finance-news": FINANCE_NEWS_AGENT,
-    },
-    mcp_servers={"bran": spawn_agent_server, "bran_docs": documents_server, **_maybe_tavily_servers()},
-    # Gate writes by delegated research/finance-news sub-agents (they fetch
-    # untrusted web content). The orchestrator itself holds no Write tool.
-    hooks=_WRITE_CONFINEMENT_HOOKS,
-)
+def _render_prompt(spec: AgentSpec, specs: dict[str, AgentSpec]) -> str:
+    text = spec.prompt
+    if "{{roster}}" in text:
+        lines = []
+        for name in spec.subagents:
+            sub = specs.get(name)
+            if sub is not None:
+                lines.append(f"- `{name}`: {sub.description}")
+        text = text.replace("{{roster}}", "\n".join(lines) if lines else "(no specialists configured)")
+    text = text.replace("{{briefings_dir}}", str(SETTINGS.briefings_dir))
+    return text + _MATH_NOTATION_NOTE
 
 
-RESEARCH = Agent(
-    name="research",
-    description="One-shot web research agent. Same skill set as the sub-agent, callable directly.",
-    system_prompt=RESEARCH_AGENT.prompt,
-    tools=["WebSearch", "WebFetch", "Read", "Write", "Glob", "Grep",
-           "mcp__bran_docs__read_pdf", "mcp__bran_docs__save_document", *_maybe_tavily_tools()],
-    mcp_servers={"bran_docs": documents_server, **_maybe_tavily_servers()},
-    model="sonnet",
-    max_turns=40,
-    hooks=_WRITE_CONFINEMENT_HOOKS,
-)
+def _model_for(spec: AgentSpec) -> str | None:
+    if spec.model is None:
+        return None
+    if spec.model == "default":
+        return SETTINGS.default_model
+    return spec.model
 
 
-SUMMARISER = Agent(
-    name="summariser",
-    description="One-shot text summariser.",
-    system_prompt=SUMMARISER_AGENT.prompt,
-    tools=["Read", "Glob", "Grep", "mcp__bran_docs__read_pdf", "mcp__bran_docs__save_document"],
-    mcp_servers={"bran_docs": documents_server},
-    model="haiku",
-    max_turns=20,
-)
+def _subagent_definition(spec: AgentSpec, specs: dict[str, AgentSpec]) -> AgentDefinition:
+    tools = resolve_tools(spec.tools)
+    return AgentDefinition(
+        description=spec.description,
+        prompt=_render_prompt(spec, specs),
+        tools=tools,
+        mcpServers=list(servers_for(tools).keys()),
+        model=_model_for(spec),
+        maxTurns=spec.max_turns,
+    )
 
 
-FINANCE_NEWS = Agent(
-    name="finance-news",
-    description=(
-        "Morning finance briefing. Pulls BBC Business, Bloomberg (Markets + "
-        "Economics), FT, MarketWatch, and Investing.com feeds and produces a "
-        "structured digest. Saves to the briefings dir on every run — ideal for "
-        "scheduling with `bran schedule add morning-finance finance-news ... --cron '0 7 * * *'`."
-    ),
-    system_prompt=FINANCE_NEWS_PROMPT,
-    tools=["WebFetch", "Write", "Read", "mcp__bran_docs__read_pdf", "mcp__bran_docs__save_document",
-           "mcp__bran_docs__fetch_url", *_maybe_tavily_tools()],
-    mcp_servers={"bran_docs": documents_server, **_maybe_tavily_servers()},
-    model="sonnet",
-    max_turns=50,
-    hooks=_WRITE_CONFINEMENT_HOOKS,
-)
+def _source_label(path: Path | None) -> str | None:
+    if path is None:
+        return None
+    try:
+        return path.relative_to(SETTINGS.project_root).as_posix()
+    except ValueError:
+        return str(path)
 
 
-_REGISTRY: dict[str, Agent] = {
-    a.name: a for a in (ORCHESTRATOR, RESEARCH, SUMMARISER, FINANCE_NEWS)
-}
+def agent_from_spec(spec: AgentSpec, specs: dict[str, AgentSpec]) -> Agent:
+    tools = resolve_tools(spec.tools)
+    subagents: dict[str, AgentDefinition] = {}
+    for name in spec.subagents:
+        sub = specs.get(name)
+        if sub is None:
+            raise ValueError(f"agent {spec.name!r} lists unknown subagent {name!r}")
+        if sub.name == spec.name:
+            raise ValueError(f"agent {spec.name!r} cannot be its own subagent")
+        subagents[name] = _subagent_definition(sub, specs)
+    if subagents and "Agent" not in tools and "Task" not in tools:
+        tools = ["Agent", *tools]  # the SDK's delegation tool, required for subagents
+    return Agent(
+        name=spec.name,
+        description=spec.description,
+        system_prompt=_render_prompt(spec, specs),
+        tools=tools,
+        model=_model_for(spec),
+        permission_mode=spec.permission_mode,
+        subagents=subagents,
+        mcp_servers=servers_for(tools),
+        skills=list(spec.skills),
+        max_turns=spec.max_turns,
+        hooks=_WRITE_CONFINEMENT_HOOKS,
+        source=_source_label(spec.path),
+    )
+
+
+_REGISTRY: dict[str, Agent] = {}
+
+
+def load_agents(directory: Path | None = None) -> list[Agent]:
+    """(Re)load the registry from the agents directory. Programmatic agents
+    registered earlier are dropped — call register_agent again after."""
+    specs = {s.name: s for s in load_agent_dir(directory or AGENTS_DIR)}
+    _REGISTRY.clear()
+    for spec in specs.values():
+        _REGISTRY[spec.name] = agent_from_spec(spec, specs)
+    return list(_REGISTRY.values())
 
 
 def list_agents() -> list[Agent]:
@@ -449,6 +271,9 @@ def get_agent(name: str) -> Agent:
 def register_agent(agent: Agent) -> None:
     """Allow runtime registration — useful when extending bran in user scripts."""
     _REGISTRY[agent.name] = agent
+
+
+load_agents()
 
 
 def build_options_for(
@@ -492,11 +317,11 @@ def build_options_for(
         max_turns=max_turns if max_turns is not None else agent.max_turns,
         cwd=str(SETTINGS.project_root),
         hooks=dict(agent.hooks) if agent.hooks else None,
-        # Project settings only. bran depends on .claude/ under cwd for
-        # filesystem subagents, slash commands and skills — but the USER's
-        # ~/.claude settings (permission allow rules, hooks, MCP servers) must
-        # never leak into unattended agent runs: a `Bash(*)` allow rule there
-        # would hand every bran agent a shell.
+        # Project settings only. bran depends on .claude/ under cwd for slash
+        # commands and skills — but the USER's ~/.claude settings (permission
+        # allow rules, hooks, MCP servers) must never leak into unattended
+        # agent runs: a `Bash(*)` allow rule there would hand every bran agent
+        # a shell.
         setting_sources=["project", "local"],
         # Raise the 1MB default so a single large tool result can't abort a run.
         max_buffer_size=SETTINGS.max_buffer_size,

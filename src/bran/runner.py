@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import traceback
 from collections import deque
@@ -21,6 +22,7 @@ from claude_agent_sdk import (
     ResultMessage,
     SystemMessage,
     ToolUseBlock,
+    UserMessage,
     query,
 )
 
@@ -30,7 +32,13 @@ from bran.config import SETTINGS
 from bran.live import close as live_close
 from bran.live import publish as live_publish
 from bran.notify import notify_completion
-from bran.persistence import RunRecord, insert_run, update_run, utcnow_iso
+from bran.persistence import RunRecord, get_run, insert_run, update_run, utcnow_iso
+
+# Events produced INSIDE an inline subagent (messages carrying
+# parent_tool_use_id), buffered per child run until its tool result lands.
+# Single-process, like bran.live.
+_child_events: dict[str, list[dict[str, Any]]] = {}
+_AGENT_ID_RE = re.compile(r"agentId:\s*([\w-]+)")
 
 # Cap what we store in runs.error — a tool that dumps a huge page into an
 # exception message shouldn't bloat the DB row (or slow every list query).
@@ -136,6 +144,15 @@ async def _drive(
             if truncated:
                 record.metadata["events_truncated"] = True
         update_run(record)
+        # A subagent whose tool result never arrived (the parent died first)
+        # must not sit 'running' forever.
+        for child_id in (record.metadata.get("subagent_runs") or {}).values():
+            child = get_run(child_id)
+            if child is not None and child.status in ("running", "pending"):
+                _finish_subagent_run(
+                    child_id, "", True,
+                    error=f"Parent run ended ({record.status}) before this subagent returned",
+                )
 
     # Capture the CLI subprocess's stderr so a startup failure records WHY.
     # Without this, the SDK's ProcessError reads "Check stderr output for
@@ -182,8 +199,18 @@ async def _drive(
                 on_message(message)
             _absorb_message(record, message)
             events = events_from_message(message)
-            _keep(events)
-            live_publish(record.id, events)
+            # Messages from inside an inline subagent belong to its child run:
+            # its own transcript and live stream, not the parent's (where the
+            # subagent's prose would otherwise read as the parent's reply).
+            child_id = _child_run_for(record, message)
+            if child_id is not None:
+                buf = _child_events.setdefault(child_id, [])
+                if len(buf) < 4000:
+                    buf.extend(compact_for_storage(ev) for ev in events)
+                live_publish(child_id, events)
+            else:
+                _keep(events)
+                live_publish(record.id, events)
             yield message
 
         # query() iterator finished. If we never saw a ResultMessage the SDK
@@ -383,8 +410,96 @@ async def stream_agent(
         await gen.aclose()
 
 
+def _child_run_for(record: RunRecord, message: Any) -> str | None:
+    """The child run id for a message produced inside an inline subagent."""
+    ptid = getattr(message, "parent_tool_use_id", None)
+    if not ptid:
+        return None
+    return (record.metadata.get("subagent_runs") or {}).get(ptid)
+
+
+def _begin_subagent_run(record: RunRecord, block: ToolUseBlock) -> None:
+    """An Agent-tool call is a delegation: record it as a child run so the
+    fleet is visible — who was asked what, when, and what came back."""
+    inp = block.input or {}
+    child = RunRecord.new(
+        agent=str(inp.get("subagent_type") or "general-purpose"),
+        task=str(inp.get("prompt") or inp.get("description") or ""),
+        parent_run_id=record.id,
+        project_id=record.project_id,
+        source="subagent",
+    )
+    child.status = "running"
+    child.metadata["tool_use_id"] = block.id
+    child.metadata["depth"] = int(record.metadata.get("depth", 0)) + 1
+    insert_run(child)
+    record.metadata.setdefault("subagent_runs", {})[block.id] = child.id
+
+
+def _finish_subagent_run(child_id: str, text: str, is_error: bool, *, error: str | None = None) -> None:
+    child = get_run(child_id)
+    if child is None:
+        return
+    child.status = "failed" if is_error else "completed"
+    child.result = text or None
+    if is_error:
+        child.error = error or (text[:2000] if text else "Subagent reported an error")
+    child.ended_at = utcnow_iso()
+    try:
+        from datetime import datetime
+
+        child.duration_ms = int(
+            (datetime.fromisoformat(child.ended_at) - datetime.fromisoformat(child.started_at)).total_seconds() * 1000
+        )
+    except ValueError:
+        pass
+    m = _AGENT_ID_RE.search(text or "")
+    if m:
+        child.metadata["agent_id"] = m.group(1)  # resumable via the parent session
+    events = _child_events.pop(child_id, None)
+    if events:
+        child.metadata["events"] = events
+    update_run(child)
+    live_close(child_id)
+
+
+def _tool_results(message: Any) -> list[tuple[str, str, bool]]:
+    """(tool_use_id, text, is_error) for each tool_result block in a user
+    message — the SDK hands these as dicts, occasionally as typed blocks."""
+    from bran.web.events import _text_from_tool_result_content
+
+    content = getattr(message, "content", None)
+    if not isinstance(content, list):
+        return []
+    out: list[tuple[str, str, bool]] = []
+    for block in content:
+        if isinstance(block, dict):
+            if block.get("type") != "tool_result":
+                continue
+            out.append((
+                str(block.get("tool_use_id") or ""),
+                _text_from_tool_result_content(block.get("content")),
+                bool(block.get("is_error")),
+            ))
+        elif getattr(block, "tool_use_id", None):
+            out.append((
+                str(block.tool_use_id),
+                _text_from_tool_result_content(getattr(block, "content", None)),
+                bool(getattr(block, "is_error", False)),
+            ))
+    return out
+
+
 def _absorb_message(record: RunRecord, message: Any) -> None:
     """Pull useful fields out of an SDK message into the run record."""
+    if isinstance(message, UserMessage):
+        runs_map = record.metadata.get("subagent_runs") or {}
+        for tool_use_id, text, is_error in _tool_results(message):
+            if tool_use_id in runs_map:
+                _finish_subagent_run(runs_map[tool_use_id], text, is_error)
+        return
+    if getattr(message, "parent_tool_use_id", None):
+        return  # a subagent's own tool calls aren't the parent's delegations
     if isinstance(message, SystemMessage) and message.subtype == "init":
         # The init system message carries the session_id under data — capture
         # it as early as possible so callers can resume even if the run aborts.
@@ -407,7 +522,8 @@ def _absorb_message(record: RunRecord, message: Any) -> None:
                 if sub:
                     invoked = record.metadata.setdefault("subagents_invoked", [])
                     invoked.append(sub)
-                    update_run(record)
+                _begin_subagent_run(record, block)
+                update_run(record)
             elif block.name == "mcp__bran__spawn_agent":
                 target = (block.input or {}).get("agent")
                 if target:

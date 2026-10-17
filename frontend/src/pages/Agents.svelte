@@ -54,6 +54,7 @@
             <div class="agent-head">
               <span class="agent-name">{a.name}</span>
               <span class="agent-model">{a.model ?? 'default model'}</span>
+              {#if a.file}<span class="agent-model mono" title="Defined in {a.file}">{a.file}</span>{/if}
             </div>
             <p class="agent-desc">{a.description}</p>
             {#if a.tools.length}

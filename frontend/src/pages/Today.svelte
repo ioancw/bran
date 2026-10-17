@@ -41,7 +41,10 @@
   // Superseded = a failed-review run whose corrected attempt is also in the
   // list; show only the version worth reading.
   const outputs = $derived(
-    runs.filter((r) => r.status === 'completed' && (r.result ?? '').trim() && !isSuperseded(r)),
+    runs.filter(
+      (r) =>
+        r.status === 'completed' && (r.result ?? '').trim() && !isSuperseded(r) && r.source !== 'subagent',
+    ),
   )
   // Deliveries: today's outputs; quiet mornings fall back to the latest few so
   // the page never opens onto a void.

@@ -17,6 +17,8 @@
   let { runId }: { runId: string } = $props()
 
   let run = $state<RunRecord | null>(null)
+  // Inline subagents this run delegated to (recorded as child runs).
+  let children = $state<RunRecord[]>([])
   let transcript = $state<ChatItem[]>([])
   let artifacts = $state<ArtifactEntry[]>([])
   let error = $state<string | null>(null)
@@ -70,6 +72,10 @@
         error = String(e)
         return
       }
+      api
+        .runs({ parent_run_id: runId, limit: 50 })
+        .then((r) => (children = r))
+        .catch(() => {})
       if (run.status === 'running' || run.status === 'pending') {
         // Live: stream the run's events into the transcript as it executes
         // (replay-then-live, see /spa/runs/{id}/stream). A dropped connection
@@ -288,6 +294,20 @@
             {/if}
           </div>
         </div>
+        {#if children.length}
+          <div class="card">
+            <h2 class="card-title">Delegated work</h2>
+            <div class="space-y-1">
+              {#each children as c (c.id)}
+                <a href={href('/runs/' + c.id)} use:link class="origin-link child-row">
+                  <span class="src src-{c.source}">{c.source}</span>
+                  <span class="child-agent">{c.agent}</span>
+                  <StatusBadge status={c.status} />
+                </a>
+              {/each}
+            </div>
+          </div>
+        {/if}
       </aside>
       <div class="col-span-3 space-y-3">
         {#if run.error}
@@ -328,6 +348,18 @@
 </Page>
 
 <style>
+  .child-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .child-agent {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .card-title {
     font-size: 13px;
     font-weight: 600;

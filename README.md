@@ -47,14 +47,16 @@ bran serve  # the scheduler runs inside the server process
 
 ## Agents
 
-Agents are defined in `src/bran/agents.py` as `Agent` objects, plus an optional filesystem definition in `.claude/agents/<name>.md`. Out of the box:
+Every agent is one file in `agents/<name>.md`: frontmatter for the configuration (description, model, tools, `max_turns`, `subagents`), the body for the system prompt. The same file is the agent in both of its forms — the top-level agent you chat with, schedule or spawn, and the inline subagent another agent delegates to — so prompts and tools can't drift apart. MCP servers follow from tool names (`mcp__bran_docs__read_pdf` brings in the `bran_docs` server; `mcp__tavily__*` expands to every Tavily tool when `TAVILY_API_KEY` is set). Out of the box:
 
 | Name | Role | Tools |
 | --- | --- | --- |
 | `orchestrator` | Default conversational agent. Delegates to others and can spawn background runs. | Read, Glob, Grep, WebSearch, WebFetch, Agent, spawn_agent |
 | `research` | Web research + summarisation. | WebSearch, WebFetch, Read, Write |
 
-Add a new agent by editing `agents.py` or dropping a markdown file in `.claude/agents/`.
+Add a new agent by dropping a markdown file in `agents/` and restarting `bran serve`. List it under another agent's `subagents` to make it delegable there.
+
+Every run is bounded: a per-run spend ceiling (`BRAN_RUN_BUDGET_USD`, default $5), a per-agent turn ceiling (`max_turns`), at most `BRAN_MAX_CONCURRENT_RUNS` background runs at once (the rest queue as pending), spawn nesting capped at `BRAN_MAX_SPAWN_DEPTH`, and the inline Agent-tool tree capped by `BRAN_SUBAGENT_DEPTH` / `BRAN_SUBAGENT_CONCURRENCY`. No agent ever sees Bash; only the tools a file grants exist in its session.
 
 ## Skills
 

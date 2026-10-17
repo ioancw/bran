@@ -207,7 +207,7 @@ async def catalog() -> dict[str, Any]:
 async def agents() -> list[dict[str, Any]]:
     return [
         {"name": a.name, "description": a.description, "model": a.model,
-         "tools": a.tools, "subagents": list(a.subagents)}
+         "tools": a.tools, "subagents": list(a.subagents), "file": a.source}
         for a in list_agents()
     ]
 
@@ -225,7 +225,7 @@ async def runs(
     agent: str | None = None, status_: str | None = None,
     project_id: str | None = None, schedule_id: str | None = None,
     exclude_chats: bool = False, limit: int = 200, q: str | None = None,
-    session_id: str | None = None,
+    session_id: str | None = None, parent_run_id: str | None = None,
 ) -> list[dict[str, Any]]:
     from bran.persistence import list_artifacts_for_runs
 
@@ -233,7 +233,8 @@ async def runs(
                         project_id=project_id or None,
                         schedule_id=schedule_id or None,
                         exclude_chats=exclude_chats, limit=limit, q=q or None,
-                        session_id=session_id or None)
+                        session_id=session_id or None,
+                        parent_run_id=parent_run_id or None)
     ids = [r.id for r in records]
     artifacts = list_artifacts_for_runs(ids)
     states = get_output_states(ids)
@@ -999,6 +1000,11 @@ async def chat_stream(
                 target_agent, actual_prompt, resume_session=sid,
                 append_system=append_system, project_id=target_project_id,
             ):
+                # Inside-subagent messages belong to the child run (see
+                # runner._child_run_for) — the chat shows the Agent tool call
+                # and its result, not the subagent's inner monologue.
+                if getattr(msg, "parent_tool_use_id", None):
+                    continue
                 for ev in events_from_message(msg):
                     if not chat_initialised and ev.get("type") == "session" and ev.get("session_id"):
                         sid_now = ev["session_id"]

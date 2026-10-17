@@ -447,7 +447,7 @@ def list_runs(
     agent: str | None = None, limit: int = 50, status: str | None = None,
     project_id: str | None = None, exclude_chats: bool = False,
     schedule_id: str | None = None, q: str | None = None,
-    session_id: str | None = None,
+    session_id: str | None = None, parent_run_id: str | None = None,
 ) -> list[RunRecord]:
     sql = "SELECT * FROM runs"
     clauses: list[str] = []
@@ -455,6 +455,9 @@ def list_runs(
     if agent:
         clauses.append("agent = ?")
         params.append(agent)
+    if parent_run_id:
+        clauses.append("parent_run_id = ?")
+        params.append(parent_run_id)
     if q and q.strip():
         # Free-text search over the readable fields. LIKE (case-insensitive for
         # ASCII) is ample at single-user scale; revisit FTS5 only if the run

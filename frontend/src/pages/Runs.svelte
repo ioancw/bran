@@ -20,7 +20,7 @@
 
   // The Runs page is the fleet activity log — autonomous/managed executions.
   // Interactive chat turns live in Chat/Recents, so they're excluded here.
-  const SOURCES = ['all', 'runner', 'spawn', 'manual'] as const
+  const SOURCES = ['all', 'runner', 'spawn', 'subagent', 'manual'] as const
   type Source = (typeof SOURCES)[number]
   let filter = $state<Source>('all')
 

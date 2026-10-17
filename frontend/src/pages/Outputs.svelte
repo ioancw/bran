@@ -55,8 +55,13 @@
   // Only completed runs that actually produced text are "outputs". A run whose
   // failed review triggered a corrected attempt is superseded — the corrected
   // run appears instead, so you never read the rejected version by accident.
+  // Subagent runs are a turn's internal delegation; their result is folded
+  // into the parent's answer, so they aren't deliveries in their own right.
   const outputs = $derived(
-    runs.filter((r) => r.status === 'completed' && (r.result ?? '').trim() && !isSuperseded(r)),
+    runs.filter(
+      (r) =>
+        r.status === 'completed' && (r.result ?? '').trim() && !isSuperseded(r) && r.source !== 'subagent',
+    ),
   )
   // Starred-only narrows the pool; source chips + their counts then describe it.
   const base = $derived(starredOnly ? outputs.filter((r) => r.starred) : outputs)
