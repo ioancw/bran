@@ -199,10 +199,10 @@
           <span class="pal-meta label-cap">{cmd.meta}</span>
         </button>
       {:else}
-        <div class="pal-none text-muted">nothing matches “{q}”</div>
+        <div class="pal-none text-muted">Nothing matches “{q}”</div>
       {/each}
     </div>
-    <div class="pal-foot label-cap">↑↓ navigate · ⏎ run · esc close</div>
+    <div class="pal-foot"><kbd>↑</kbd><kbd>↓</kbd> navigate <kbd>↵</kbd> open <kbd>esc</kbd> close</div>
   </div>
 {/if}
 
@@ -229,8 +229,8 @@
     border: 0;
     border-bottom: 1px solid var(--border);
     padding: 10px 10px 12px;
-    font-family: var(--font-prose);
-    font-size: 17px;
+    font-family: var(--font-ui);
+    font-size: 15px;
     color: var(--fg-bright);
     outline: none;
   }
@@ -254,7 +254,7 @@
     padding: 8px 10px;
     cursor: pointer;
     color: var(--fg);
-    font-size: 13.5px;
+    font-size: 13px;
   }
   .pal-item.on {
     background: var(--accent-glow);
@@ -274,11 +274,18 @@
   .pal-none {
     padding: 14px 10px;
     font-size: 13px;
-    font-style: italic;
   }
   .pal-foot {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     padding: 8px 10px 4px;
     border-top: 1px solid var(--border);
     margin-top: 4px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .pal-foot kbd + kbd {
+    margin-left: -4px;
   }
 </style>

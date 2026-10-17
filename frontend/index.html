@@ -2,9 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- viewport-fit=cover lets the app paint under the notch and read the
+         safe-area insets (themes.css --safe-top/--safe-bottom). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>bran</title>
-    <meta name="theme-color" content="#0c0c0e" />
+    <meta name="theme-color" content="#0e0e10" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="bran" />
+    <link rel="manifest" href="/static/manifest.webmanifest" />
     <script>
       // Apply the saved theme before first paint — waiting for the JS bundle
       // would flash the default midnight palette at light/dracula/etc users on
@@ -14,11 +20,12 @@
         var t = localStorage.getItem('bran_theme')
         if (!t && matchMedia('(prefers-color-scheme: light)').matches) t = 'light'
         if (t && t !== 'midnight') document.documentElement.setAttribute('data-theme', t)
-        var bg = { light: '#faf0e6', dracula: '#282a36', solarized: '#002b36', nord: '#2e3440' }[t]
+        var bg = { light: '#fafaf9', dracula: '#282a36', solarized: '#002b36', nord: '#2e3440' }[t]
         if (bg) document.querySelector('meta[name="theme-color"]').setAttribute('content', bg)
       } catch (e) { /* private mode etc. — midnight is a fine fallback */ }
     </script>
     <link rel="icon" type="image/svg+xml" href="/static/crow.svg" />
+    <link rel="apple-touch-icon" href="/static/crow.svg" />
     <!-- Fonts are self-hosted (Fontsource, bundled by Vite) — no CDN. -->
   </head>
   <body>

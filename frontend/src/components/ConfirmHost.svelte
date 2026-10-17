@@ -68,7 +68,7 @@
     >
       <p class="confirm-msg" id="confirm-msg">{confirmState.message}</p>
       <div class="confirm-actions">
-        <button class="btn-outline" bind:this={cancelBtn} onclick={() => settleConfirm(false)}>cancel</button>
+        <button class="btn-outline" bind:this={cancelBtn} onclick={() => settleConfirm(false)}>Cancel</button>
         <button class="btn-danger" onclick={() => settleConfirm(true)}>{confirmState.confirmLabel}</button>
       </div>
     </div>

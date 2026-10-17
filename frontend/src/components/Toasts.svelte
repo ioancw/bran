@@ -75,10 +75,11 @@
     gap: 8px;
     background: var(--surface);
     border: 1px solid var(--border2);
-    border-radius: 999px;
-    padding: 7px 10px 7px 14px;
-    font-family: var(--font-mono);
-    font-size: 12px;
+    border-radius: 10px;
+    padding: 8px 10px 8px 14px;
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 500;
     color: var(--fg);
     max-width: min(480px, 90vw);
   }

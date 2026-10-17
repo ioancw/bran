@@ -1,7 +1,7 @@
 <script lang="ts">
-  // Shared page shell: a consistent header (title + optional subtitle/actions)
-  // and a content area that fades in via global.css's `.stagger-in`. Every page
-  // uses this so headers and spacing are uniform and navigation feels smooth.
+  // Shared page shell: one compact sticky header (title, optional subtitle and
+  // actions) over a padded body. Every page uses this so headers line up and
+  // spacing is uniform.
   import type { Snippet } from 'svelte'
 
   let {
@@ -30,22 +30,12 @@
     {#if actions}<div class="page-actions">{@render actions()}</div>{/if}
   </header>
 {/if}
-<div class="px-8 py-6 stagger-in" class:page-fill={fill}>
+<div class:page-body={!fill} class:page-fill={fill}>
   {@render children()}
 </div>
 
 <style>
-  /* A custom header bar (breadcrumb) drops the title/eyebrow grid for a simple
-     baseline-aligned row. Higher specificity than the global .page-header grid. */
-  .page-header.head-custom {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  /* Full-height pages (chat) let their own layout own the vertical space. Now
-     that <main> is a flex column (.app-main) and the header is flex-shrink:0,
-     this just fills the remaining height — no fragile calc(100vh - Npx). */
+  /* Full-height pages (chat) let their own layout own the vertical space. */
   .page-fill {
     flex: 1;
     min-height: 0;

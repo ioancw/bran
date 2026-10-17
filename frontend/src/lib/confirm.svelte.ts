@@ -11,11 +11,11 @@ export const confirmState = $state<{
 }>({
   open: false,
   message: '',
-  confirmLabel: 'delete',
+  confirmLabel: 'Delete',
   resolve: null,
 })
 
-export function confirmDialog(message: string, confirmLabel = 'delete'): Promise<boolean> {
+export function confirmDialog(message: string, confirmLabel = 'Delete'): Promise<boolean> {
   return new Promise((resolve) => {
     confirmState.message = message
     confirmState.confirmLabel = confirmLabel

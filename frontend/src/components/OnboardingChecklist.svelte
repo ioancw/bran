@@ -4,6 +4,7 @@
   // exist, has a chat happened, is a runner scheduled). Dismissible; hides once
   // every step is done.
   import { href, link } from '../lib/router.svelte'
+  import Icon from './Icon.svelte'
 
   let {
     projectDone,
@@ -40,7 +41,7 @@
     <div class="onboard-head">
       <span class="label-cap">Get to know bran</span>
       <span class="ml-auto label-cap">{doneCount}/{steps.length}</span>
-      <button class="btn-ghost onboard-x" onclick={dismiss} title="dismiss">×</button>
+      <button class="btn-icon onboard-x" onclick={dismiss} title="Dismiss" aria-label="Dismiss"><Icon name="x" size={12} /></button>
     </div>
     <div class="onboard-bar">
       <div class="onboard-fill" style="width: {(doneCount / steps.length) * 100}%;"></div>
@@ -48,7 +49,7 @@
     <div class="onboard-steps">
       {#each steps as s (s.label)}
         <a href={href(s.to)} use:link class="onboard-step" class:done={s.done}>
-          <span class="onboard-check" class:done={s.done}>{s.done ? '✓' : ''}</span>
+          <span class="onboard-check" class:done={s.done}>{#if s.done}<Icon name="check" size={9} stroke={3} />{/if}</span>
           <span style="text-decoration: {s.done ? 'line-through' : 'none'};">{s.label}</span>
         </a>
       {/each}
@@ -58,8 +59,7 @@
 
 <style>
   .onboard {
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: var(--radius-md);
     padding: 10px 12px;
     background: var(--surface2);
   }
@@ -69,8 +69,8 @@
     gap: 8px;
   }
   .onboard-x {
-    padding: 0 4px;
-    line-height: 1;
+    width: 20px;
+    height: 20px;
   }
   .onboard-bar {
     height: 3px;
@@ -116,8 +116,8 @@
     flex-shrink: 0;
   }
   .onboard-check.done {
-    background: var(--accent-soft);
-    border-color: var(--accent-soft);
-    color: var(--bg);
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-fg);
   }
 </style>

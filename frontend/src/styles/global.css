@@ -1,15 +1,12 @@
-/* bran global styles — the Svelte SPA's shared layer (originally adapted from
-   light_cc's global.css; the old Jinja+HTMX/Tailwind-CDN era is gone — layout
-   utilities live in utilities.css, tokens in themes.css).
+/* bran global styles — the Svelte SPA's shared layer. Layout utilities live in
+   utilities.css, tokens in themes.css, the rationale in DESIGN.md.
 
    Three layers here:
-     1. Base resets + body styling + scrollbars + selection + focus rings
-     2. Paper texture + vignette overlays
-     3. bran-specific semantic classes (.card, .btn-*, .label-cap, chat/tool
-        blocks…) that components use instead of hand-keyed styles.
+     1. Base resets, body, scrollbars, selection, focus rings
+     2. Shared component classes (.card, .btn-*, .pill, tables, chat/tool rows)
+     3. Responsive + print
 
-   Anything colour or font-family related goes through the theme tokens.
-*/
+   Anything colour or font-family related goes through the theme tokens. */
 
 @import './themes.css';
 
@@ -22,9 +19,6 @@
 html,
 body {
   height: 100%;
-  /* The old Tailwind preflight zeroed this; without it the browser's default
-     8px body margin insets the whole app and leaks a canvas-coloured strip
-     below the clipped 100vh shell. */
   margin: 0;
   overscroll-behavior-y: none;
 }
@@ -33,53 +27,46 @@ body {
   background: var(--bg);
   color: var(--fg);
   font-family: var(--font-ui);
-  font-size: 15px;
-  line-height: 1.6;
+  font-size: 14px;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   font-feature-settings:
     'kern' 1,
-    'liga' 1;
+    'liga' 1,
+    'ss01' 1;
   position: relative;
-  /* The app is a fixed-height shell: the body never scrolls (so the page can't
-     be "slightly taller than the viewport" and bob up/down). Scrolling happens
-     inside <main>. See .app-shell / .app-main below. */
+  /* Fixed-height shell: the body never scrolls, <main> does. */
   overflow: hidden;
 }
 
-/* Subtle grain overlay — gives the flat dark surface a paper-like texture
-   without competing with content. */
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 1000;
-  opacity: 0.042;
-  mix-blend-mode: overlay;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
-
-/* Paper-edge vignette: subtle radial darkening at the viewport corners that
-   turns the flat canvas into something with depth. Sits above content but
-   below the grain so it feels printed-on, not painted-over. */
-body::after {
-  content: '';
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 999;
-  background: radial-gradient(ellipse 120% 90% at 50% 50%, transparent 55%, rgba(0, 0, 0, 0.18) 100%);
+p {
+  margin: 0;
 }
-[data-theme='light'] body::after {
-  background: radial-gradient(ellipse 120% 90% at 50% 50%, transparent 55%, rgba(90, 60, 30, 0.08) 100%);
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+svg {
+  display: inline-block;
+  vertical-align: middle;
 }
 
 /* Reduced motion: one global kill-switch. The !important beats inline styles,
-   so it also neutralises Svelte's JS-driven transitions (they animate via
-   injected keyframes + inline animation properties). Individual components
-   don't need their own guards. */
+   so it also neutralises Svelte's JS-driven transitions. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -91,15 +78,10 @@ body::after {
   }
 }
 
-/* Selection */
-/* Translucent so any theme's own text colour stays readable — an opaque
-   accent + forced white was illegible on the pale nord/dracula accents. */
 ::selection {
-  background: color-mix(in srgb, var(--accent) 32%, transparent);
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
-/* Scrollbar — thin and themed in both engines. scrollbar-width/-color are
-   inherited, so the root declaration covers every scroll container. */
 html {
   scrollbar-width: thin;
   scrollbar-color: var(--border2) transparent;
@@ -123,31 +105,24 @@ html {
   border: 2px solid transparent;
 }
 
-/* Focus rings */
-button:focus-visible,
-select:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
-a:focus-visible,
-[tabindex]:focus-visible {
-  outline: 1.5px solid var(--accent);
-  outline-offset: 1px;
-  border-radius: 4px;
+/* Focus rings: visible, consistent, keyboard-only. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius);
 }
 
-/* Links — note: links inside .msg-prose are styled by the prose block. */
 a {
   color: var(--accent-soft);
   text-decoration: none;
 }
 a:hover {
   text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 /* ---------------------------------------------------------------------------
-   bran semantic utility classes
-   Used by templates instead of raw Tailwind colour utilities. Keeps the
-   palette in one place and lets the theme switcher work for free.
+   Semantic utilities
    --------------------------------------------------------------------------- */
 
 .surface {
@@ -180,7 +155,6 @@ a:hover {
 .text-accent-soft {
   color: var(--accent-soft);
 }
-
 .font-mono {
   font-family: var(--font-mono);
 }
@@ -191,155 +165,208 @@ a:hover {
   font-family: var(--font-prose);
 }
 
-/* The recurring "uppercase mono label" motif from light_cc's design — used
-   for section headers inside cards (e.g. "TOOLS", "DELEGATED TO"). */
+/* Section label: a quiet sentence-case heading for a group of content.
+   The first letter is capitalised here so call sites can stay lowercase. */
 .label-cap {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--muted);
-}
-
-/* Primary CTA button */
-.btn-primary {
-  background: var(--accent);
-  color: var(--accent-fg);
-  border: 1px solid var(--accent);
-  padding: 6px 14px;
-  border-radius: var(--radius);
+  display: inline-block;
   font-family: var(--font-ui);
   font-size: 12px;
   font-weight: 500;
-  cursor: pointer;
-  transition: background var(--dur-1) var(--transition);
+  line-height: 1.3;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
 }
-.btn-primary:hover:not(:disabled) {
-  background: var(--accent-soft);
-  border-color: var(--accent-soft);
+.label-cap::first-letter {
+  text-transform: uppercase;
+}
+/* Bookish alternative — now simply a muted 13px line. */
+.eyebrow {
+  font-size: 13px;
+  color: var(--muted);
 }
 
-/* One disabled recipe for every button flavour — a busy/blocked control must
-   look it, not just silently ignore clicks. */
+/* ---------------------------------------------------------------------------
+   Buttons. One height (32px), one radius, icon + label side by side.
+   --------------------------------------------------------------------------- */
+.btn-primary,
+.btn-outline,
+.btn-danger,
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--radius);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background var(--dur-1) var(--transition),
+    border-color var(--dur-1) var(--transition),
+    color var(--dur-1) var(--transition);
+}
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border: 1px solid transparent;
+}
+.btn-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, var(--fg-bright));
+}
+.btn-outline {
+  background: var(--surface);
+  color: var(--fg);
+  border: 1px solid var(--border2);
+}
+.btn-outline:hover:not(:disabled) {
+  background: var(--surface2);
+  color: var(--fg-bright);
+}
+.btn-danger {
+  background: var(--red);
+  color: #fff;
+  border: 1px solid transparent;
+}
+.btn-danger:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.btn-ghost {
+  background: transparent;
+  color: var(--fg-dim);
+  border: 1px solid transparent;
+  padding: 0 8px;
+}
+.btn-ghost:hover:not(:disabled) {
+  background: var(--surface2);
+  color: var(--fg-bright);
+}
+.btn-ghost.danger:hover:not(:disabled) {
+  color: var(--red);
+  background: var(--red-soft);
+}
 .btn-primary:disabled,
 .btn-outline:disabled,
 .btn-danger:disabled,
 .btn-ghost:disabled {
-  opacity: 0.55;
+  opacity: 0.5;
   cursor: not-allowed;
 }
-
-/* Secondary / outline button */
-.btn-outline {
-  background: transparent;
-  color: var(--fg);
-  border: 1px solid var(--border2);
-  padding: 5px 12px;
-  border-radius: var(--radius);
-  font-family: var(--font-ui);
+/* Small variant for dense rows. */
+.btn-sm {
+  height: 26px;
+  padding: 0 8px;
   font-size: 12px;
-  cursor: pointer;
-  transition: all var(--dur-1) var(--transition);
 }
-.btn-outline:hover {
+/* Square icon-only button. */
+.btn-icon {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background var(--dur-1) var(--transition),
+    color var(--dur-1) var(--transition);
+}
+.btn-icon:hover:not(:disabled) {
   background: var(--surface2);
   color: var(--fg-bright);
-  border-color: var(--muted);
+}
+.btn-icon.danger:hover:not(:disabled) {
+  color: var(--red);
+  background: var(--red-soft);
 }
 
-/* Destructive CTA — solid red so "delete" reads as consequential. Same
-   geometry as .btn-primary; lives here (not in a component) so every
-   destructive control shares one look. */
-.btn-danger {
-  background: var(--red);
-  color: #fff;
-  border: 1px solid var(--red);
-  padding: 6px 14px;
-  border-radius: var(--radius);
-  font-family: var(--font-ui);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: filter var(--dur-1) var(--transition);
-}
-.btn-danger:hover {
-  filter: brightness(1.12);
-}
-
-/* Quiet text button — mono accent link-as-button ("show result", "edit →").
-   The one primitive behind the app's various inline text actions. */
+/* Quiet inline text action (link-styled button). */
 .btn-text {
   background: transparent;
   border: 0;
   padding: 0;
   cursor: pointer;
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
   color: var(--accent-soft);
 }
 .btn-text:hover {
   text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
-/* Quiet ghost button (for "cancel", "remove" etc.) */
-.btn-ghost {
-  background: transparent;
-  color: var(--muted);
-  border: 1px solid transparent;
-  padding: 4px 8px;
-  border-radius: var(--radius);
-  font-size: 11px;
-  cursor: pointer;
-  transition: all var(--dur-1) var(--transition);
-}
-.btn-ghost:hover {
-  color: var(--fg);
-}
-.btn-ghost.danger:hover {
-  color: var(--red);
-}
-
-/* Form fields */
+/* ---------------------------------------------------------------------------
+   Form fields
+   --------------------------------------------------------------------------- */
 .field,
 input[type='text'].field,
 input[type='search'].field,
 input[type='email'].field,
 select.field,
 textarea.field {
-  background: var(--surface2);
+  background: var(--surface);
   color: var(--fg);
   border: 1px solid var(--border2);
-  border-radius: var(--radius);
-  padding: 6px 10px;
+  border-radius: 8px;
+  padding: 7px 10px;
   font-family: var(--font-ui);
   font-size: 13px;
+  line-height: 1.4;
   width: 100%;
-  transition: border-color var(--dur-1) var(--transition);
+  transition:
+    border-color var(--dur-1) var(--transition),
+    box-shadow var(--dur-1) var(--transition);
 }
-.field:focus {
+.field::placeholder {
+  color: var(--muted);
+}
+.field:focus,
+.field:focus-visible {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
-/* In the light theme the surface2 fill is a muddy tan on inputs — use the
-   lighter surface so fields read clean, with the border doing the defining.
-   (Dark themes keep the subtly-raised surface2 fill.) */
-[data-theme='light'] .field {
-  background: var(--surface);
+select.field {
+  appearance: none;
+  padding-right: 28px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2379746e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+input[type='checkbox'] {
+  accent-color: var(--accent);
+  width: 15px;
+  height: 15px;
+}
+kbd {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  line-height: 1.4;
 }
 
-/* Composer — the shared "type here" input: a solid rounded surface that lights
-   up (accent focus-ring) when you type, a footer control row, and a round
-   accent send button. Used by the chat, the project launcher, and "Run now".
+/* ---------------------------------------------------------------------------
+   Composer — the shared "type here" surface (chat, launcher, Run now).
    --------------------------------------------------------------------------- */
 .composer {
   background: var(--surface);
   border: 1px solid var(--border2);
-  border-radius: 18px;
-  padding: 10px 12px 8px;
-  /* The input is the room's anchor — it floats above the canvas even at rest,
-     and gains presence when engaged. */
+  border-radius: var(--radius-lg);
+  padding: 12px 12px 8px;
   box-shadow: var(--shadow-md);
   transition:
     border-color var(--dur-1) var(--transition),
@@ -356,17 +383,16 @@ textarea.field {
   background: transparent;
   border: 0;
   resize: none;
-  color: var(--fg);
-  font-family: var(--font-prose);
+  color: var(--fg-bright);
+  font-family: var(--font-ui);
   font-size: 15px;
   line-height: 1.5;
   outline: none;
+  padding: 0 2px;
 }
 .composer-input::placeholder {
   color: var(--muted);
 }
-/* The composer container shows the focus ring (:focus-within), so the inner
-   textarea must not draw its own — override the global :focus-visible outline. */
 .composer-input:focus,
 .composer-input:focus-visible {
   outline: none;
@@ -375,26 +401,23 @@ textarea.field {
 .composer-footer {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-top: 6px;
+  gap: 8px;
+  margin-top: 8px;
 }
 .composer-agent {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--accent-soft);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-dim);
 }
 .composer-hint {
-  font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
 }
 .composer-send {
   margin-left: auto;
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
   background: var(--accent);
   color: var(--accent-fg);
   border: 0;
@@ -408,13 +431,13 @@ textarea.field {
     transform 0.1s var(--transition);
 }
 .composer-send:hover:not(:disabled) {
-  background: var(--accent-soft);
+  background: color-mix(in srgb, var(--accent) 88%, var(--fg-bright));
 }
 .composer-send:active:not(:disabled) {
-  transform: scale(0.94);
+  transform: scale(0.96);
 }
 .composer-send:disabled {
-  opacity: 0.55;
+  opacity: 0.4;
   cursor: default;
 }
 .composer-spin {
@@ -432,183 +455,186 @@ textarea.field {
 }
 
 /* ---------------------------------------------------------------------------
-   Overlay recipe — the one visual language for every floating surface.
-   Backdrops: the shared scrim + blur. Panels: elevation via the shadow scale.
-   Components apply these classes instead of hand-rolling shadows/backdrops.
+   Overlays
    --------------------------------------------------------------------------- */
 .overlay-backdrop {
   position: fixed;
   inset: 0;
   background: var(--backdrop);
-  backdrop-filter: blur(5px);
-  -webkit-backdrop-filter: blur(5px);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
 }
-/* .elev-sm/md/lg live at the end of this file so they win over component
-   shadows (e.g. .card) when both classes sit on one element. */
 
-/* Status pill — for run states. Use with one of the modifier classes. */
+/* ---------------------------------------------------------------------------
+   Tags: pill (tinted), chip (neutral mono), src (run trigger), status dot
+   --------------------------------------------------------------------------- */
 .pill {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
+  gap: 5px;
+  padding: 1px 8px;
   border-radius: 999px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.04em;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
   border: 1px solid transparent;
+  white-space: nowrap;
 }
 .pill.ok {
   background: var(--green-soft);
   color: var(--green);
-  border-color: rgba(255, 255, 255, 0.04);
 }
 .pill.warn {
   background: var(--amber-soft);
   color: var(--amber);
-  border-color: rgba(255, 255, 255, 0.04);
 }
 .pill.err {
   background: var(--red-soft);
   color: var(--red);
-  border-color: rgba(255, 255, 255, 0.04);
 }
 .pill.info {
   background: var(--blue-soft);
   color: var(--blue);
-  border-color: rgba(255, 255, 255, 0.04);
 }
 .pill.mute {
   background: var(--surface2);
-  color: var(--muted);
-  border-color: var(--border2);
+  color: var(--fg-dim);
 }
 .pill.accent {
   background: var(--accent-glow);
   color: var(--accent-soft);
-  border-color: rgba(255, 255, 255, 0.04);
 }
 
-/* Chip — smaller, squared, used for tool names and tag-style lists */
+/* Status dot — colour alone is never the only signal; pair with a word. */
+.dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex-shrink: 0;
+}
+.dot.ok {
+  background: var(--green);
+}
+.dot.warn {
+  background: var(--amber);
+}
+.dot.err {
+  background: var(--red);
+}
+.dot.info {
+  background: var(--blue);
+}
+.dot.accent {
+  background: var(--accent);
+}
+
 .chip {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
-  border-radius: 4px;
+  padding: 1px 7px;
+  border-radius: 5px;
   background: var(--surface2);
   color: var(--fg-dim);
   border: 1px solid var(--border);
   font-family: var(--font-mono);
   font-size: 11px;
+  line-height: 1.6;
 }
 .chip.accent {
   background: var(--accent-glow);
   color: var(--accent-soft);
-  border-color: rgba(255, 255, 255, 0.04);
+  border-color: transparent;
 }
 
-/* Source pill — how a run was triggered, tinted to the semantic palette:
-   runner = accent (your automations), spawn = blue (delegated work),
-   manual/chat = muted. Shared by the Runs log + Agent/Runner detail pages.
-   Bare `.src` (no modifier) is a neutral tag, reused for tool names. */
+/* How a run was triggered. Sentence case, tinted by kind. */
 .src {
   display: inline-block;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  padding: 2px 6px;
-  border-radius: var(--radius);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.6;
+  letter-spacing: 0;
+  text-transform: none;
+  padding: 0 7px;
+  border-radius: 5px;
   background: var(--surface2);
-  color: var(--muted);
+  color: var(--fg-dim);
   white-space: nowrap;
+}
+.src::first-letter {
+  text-transform: uppercase;
 }
 .src-runner {
   background: var(--accent-glow);
   color: var(--accent-soft);
 }
-.src-spawn {
-  background: var(--blue-soft);
-  color: var(--blue);
-}
-.src-manual {
-  background: var(--surface2);
-  color: var(--muted);
-}
-.src-chat {
-  background: var(--surface2);
-  color: var(--fg-dim);
-}
-/* Server-triggered fan-in of a chat's spawned runs (bran.synthesis). */
+.src-spawn,
 .src-synthesis {
   background: var(--blue-soft);
   color: var(--blue);
 }
+.src-manual,
+.src-chat {
+  background: var(--surface2);
+  color: var(--fg-dim);
+}
 
-/* Card — the basic content container */
+/* ---------------------------------------------------------------------------
+   Cards and tables
+   --------------------------------------------------------------------------- */
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   padding: 16px;
-  /* A whisper of shadow so surfaces read as paper laid on the desk, not
-     lines drawn on it. */
-  box-shadow: var(--shadow-sm);
   transition:
-    border-color var(--dur-2) var(--transition),
-    background var(--dur-2) var(--transition),
-    box-shadow var(--dur-2) var(--transition),
-    transform var(--dur-2) var(--transition);
+    border-color var(--dur-1) var(--transition),
+    background var(--dur-1) var(--transition);
 }
 .card.flush {
   padding: 0;
 }
-/* Anchor cards (dashboard briefings, project tiles, outputs) lift on hover —
- * the whole card is the affordance, so the whole card responds. */
-a.card:hover,
-a.card.block:hover,
-a.card.project-card:hover,
-a.card.output-card:hover {
-  border-color: var(--accent-soft);
-  box-shadow: var(--shadow-md);
-  transform: translateY(-1px);
+a.card:hover {
+  border-color: var(--border2);
+  background: color-mix(in srgb, var(--surface) 70%, var(--surface2));
+  text-decoration: none;
 }
-
-/* Card-quiet — for action affordances that should feel secondary to the
-   primary content. No fill, just a soft border. Use when a regular .card
-   would visually compete with the page's main subject. */
+/* Flat tinted panel for forms and secondary groupings. */
 .card-quiet {
-  background: transparent;
-  border: 1px dashed var(--border2);
-  border-radius: var(--radius);
-  padding: 14px;
+  background: var(--surface2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  padding: 16px;
 }
 
-/* Table — replaces Tailwind's bg-white/divide-slate-200 cluster */
 table.bran-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   overflow: hidden;
 }
-table.bran-table thead {
-  background: var(--surface2);
-}
 table.bran-table th {
-  font-family: var(--font-mono);
-  font-size: 10px;
+  font-family: var(--font-ui);
+  font-size: 12px;
   font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--muted);
   text-align: left;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--border2);
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  white-space: nowrap;
 }
 table.bran-table td {
-  padding: 10px 14px;
+  padding: 9px 12px;
+  height: 40px;
   font-size: 13px;
   color: var(--fg);
   border-bottom: 1px solid var(--border);
@@ -630,9 +656,9 @@ table.bran-table .mono {
   color: var(--fg-dim);
 }
 
-/* Sidebar — sticky so it stays in the viewport while main content scrolls.
-   Without sticky positioning, a long runs table would push the theme picker
-   (anchored to the sidebar's bottom via mt-auto) below the fold. */
+/* ---------------------------------------------------------------------------
+   Sidebar
+   --------------------------------------------------------------------------- */
 .sidebar {
   width: var(--sidebar-w);
   background: var(--surface);
@@ -640,192 +666,108 @@ table.bran-table .mono {
   position: sticky;
   top: 0;
   height: 100vh;
-  overflow-y: auto; /* nav can scroll independently if it ever gets long */
+  height: 100dvh;
+  overflow-y: auto;
+  padding-top: var(--safe-top);
 }
 .sidebar .nav-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 12px;
+  gap: 10px;
+  height: 32px;
+  padding: 0 10px;
   border-radius: var(--radius);
   font-size: 13px;
+  font-weight: 500;
   color: var(--fg-dim);
   text-decoration: none;
-  transition: background var(--dur-1) var(--transition);
+  transition:
+    background var(--dur-1) var(--transition),
+    color var(--dur-1) var(--transition);
 }
 .sidebar .nav-item:hover {
   background: var(--surface2);
-  color: var(--fg);
+  color: var(--fg-bright);
+  text-decoration: none;
 }
 .sidebar .nav-item.active {
   background: var(--accent-glow);
   color: var(--accent-soft);
-  font-weight: 500;
-  /* Sharp accent bar — a crisp signal against the soft glow, no layout shift. */
-  box-shadow: inset 2px 0 0 var(--accent);
 }
 .sidebar .nav-item .count {
   margin-left: auto;
-  font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
   color: var(--muted);
 }
 .sidebar .nav-item.active .count {
   color: var(--accent-soft);
 }
 
-/* Header (per-page top bar) — rebuilt as a publication masthead.
-   Eyebrow (mono uppercase) sits above a 42px serif italic title with an
-   accent-coloured period; actions float right and anchor to the title's
-   baseline. The h1/subheading source order is preserved for screen readers,
-   CSS grid handles the visual placement.
-
-   Period treatment: `h1::after { content: '.' }` is bran's signature on
-   every page heading. Bookish, declarative — "Today.", "Projects.", "Runs.". */
+/* ---------------------------------------------------------------------------
+   Page header — one compact sticky bar.
+   --------------------------------------------------------------------------- */
 .page-header {
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-  padding: 26px 32px 22px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-rows: auto auto;
-  grid-template-areas:
-    'eyebrow actions'
-    'title   actions';
-  column-gap: 24px;
-  row-gap: 4px;
-  align-items: end;
-  /* Inside the flex-column <main>, the header is fixed chrome — never let it
-     compress when the content area below grows to fill. */
+  position: sticky;
+  top: 0;
+  z-index: 60;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: var(--header-h);
+  padding: 8px 28px;
+  background: color-mix(in srgb, var(--surface) 85%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
 }
 .page-header h1 {
-  grid-area: title;
-  font-family: var(--font-prose);
-  font-style: italic;
-  font-weight: 500;
-  font-size: 42px;
-  line-height: 1;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.2;
   color: var(--fg-bright);
-  letter-spacing: -0.018em;
-  margin: 0;
-  /* Trim the italic descender / kern that pushes the visual baseline below
-     the surrounding ascenders. */
-  padding-bottom: 2px;
-}
-.page-header h1::after {
-  content: '.';
-  color: var(--accent);
-  font-style: normal;
-  margin-left: 0.04em;
+  white-space: nowrap;
 }
 .page-header .subheading {
-  grid-area: eyebrow;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.2em;
+  font-size: 13px;
   color: var(--muted);
-  /* Lift slightly above the title so the rag-bottom of mono caps sits
-     comfortably above the italic ascenders. */
-  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
-/* Condensing masthead — the publication header stays put but earns its keep:
-   as the page scrolls, it pins to the top and scrubs (scroll-driven, no JS)
-   from the full 42px editorial title down to a compact glass bar. Browsers
-   without scroll-timeline support just keep the static header — nothing
-   breaks, nothing half-animates. The chat breadcrumb (head-custom) is
-   excluded: chat scrolls internally, the bar never moves. */
-@supports (animation-timeline: scroll()) {
-  .page-header:not(.head-custom) {
-    position: sticky;
-    top: 0;
-    z-index: 60;
-    animation: masthead-condense linear both;
-    animation-timeline: scroll(nearest);
-    animation-range: 0px 140px;
-  }
-  .page-header:not(.head-custom) h1 {
-    animation: masthead-title linear both;
-    animation-timeline: scroll(nearest);
-    animation-range: 0px 140px;
-  }
-  .page-header:not(.head-custom) .subheading {
-    animation: masthead-eyebrow linear both;
-    animation-timeline: scroll(nearest);
-    animation-range: 0px 100px;
-  }
-}
-@keyframes masthead-condense {
-  to {
-    padding-top: 10px;
-    padding-bottom: 9px;
-    background: color-mix(in srgb, var(--surface) 74%, transparent);
-    -webkit-backdrop-filter: blur(14px);
-    backdrop-filter: blur(14px);
-    box-shadow: var(--shadow-sm);
-  }
-}
-@keyframes masthead-title {
-  to {
-    font-size: 21px;
-  }
-}
-@keyframes masthead-eyebrow {
-  to {
-    opacity: 0;
-    font-size: 1px;
-    margin-bottom: 0;
-    letter-spacing: 0;
-  }
-}
-
 .page-header .page-actions {
-  grid-area: actions;
-  align-self: end;
-  /* Sit on the title's baseline rather than the bottom of the grid cell,
-     so a tall stack of buttons doesn't unbalance the row. */
-  margin-bottom: 6px;
+  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
 }
-
-@media (max-width: 768px) {
-  .page-header {
-    padding: 18px 20px 14px;
-    row-gap: 2px;
-  }
-  .page-header h1 {
-    font-size: 30px;
-  }
-  .page-header .subheading {
-    letter-spacing: 0.14em;
-    font-size: 10px;
-  }
+/* Page body padding (Page.svelte). */
+.page-body {
+  padding: 24px 28px 40px;
 }
 
 /* ---------------------------------------------------------------------------
-   Prose styling for rendered markdown — adapted from light_cc .msg-prose
-   so briefings + transcript assistant messages look like actual reading
-   material rather than a debug dump.
+   Prose — rendered markdown. Sans in conversation; `.reading` adds the serif
+   for agent output on Outputs and RunDetail (the briefing is the product).
    --------------------------------------------------------------------------- */
-
 .prose-md {
-  font-family: var(--font-prose);
-  font-size: 17px;
-  line-height: 1.7;
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.65;
   color: var(--fg);
   word-break: break-word;
   overflow-wrap: anywhere;
-  letter-spacing: 0.006em;
+}
+.prose-md.reading {
+  font-family: var(--font-prose);
+  font-size: 16.5px;
+  line-height: 1.7;
 }
 .prose-md p {
-  margin: 14px 0 6px;
-}
-.prose-md p:first-child {
-  margin-top: 0;
+  margin: 0 0 12px;
 }
 .prose-md p:last-child {
   margin-bottom: 0;
@@ -835,40 +777,35 @@ table.bran-table .mono {
 .prose-md h3,
 .prose-md h4 {
   color: var(--fg-bright);
-  margin: 28px 0 12px;
-  font-family: var(--font-prose);
+  margin: 24px 0 10px;
   font-weight: 600;
-  letter-spacing: -0.015em;
-}
-.prose-md h1 {
-  font-size: 26px;
+  letter-spacing: -0.01em;
   line-height: 1.3;
 }
+.prose-md h1 {
+  font-size: 1.5em;
+}
 .prose-md h2 {
-  font-size: 21px;
-  line-height: 1.35;
+  font-size: 1.25em;
 }
 .prose-md h3 {
-  font-size: 18px;
-  line-height: 1.4;
+  font-size: 1.1em;
 }
 .prose-md h4 {
-  font-size: 15px;
-  line-height: 1.4;
+  font-size: 1em;
 }
 .prose-md h1:first-child,
 .prose-md h2:first-child,
 .prose-md h3:first-child {
   margin-top: 0;
 }
-
 .prose-md ul,
 .prose-md ol {
-  padding-left: 20px;
-  margin: 8px 0 14px;
+  padding-left: 22px;
+  margin: 6px 0 12px;
 }
 .prose-md li {
-  margin-bottom: 5px;
+  margin-bottom: 4px;
 }
 .prose-md li::marker {
   color: var(--muted);
@@ -879,9 +816,7 @@ table.bran-table .mono {
 }
 .prose-md em {
   font-style: italic;
-  color: var(--fg-dim);
 }
-
 .prose-md a {
   color: var(--accent-soft);
   text-decoration: underline;
@@ -890,131 +825,99 @@ table.bran-table .mono {
 .prose-md a:hover {
   color: var(--accent);
 }
-
 .prose-md code {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 0.85em;
   background: var(--surface2);
-  border: 1px solid var(--border2);
-  padding: 2px 6px;
+  border: 1px solid var(--border);
+  padding: 1px 5px;
   border-radius: 4px;
   color: var(--fg-bright);
-  font-weight: 500;
 }
-
 .prose-md pre {
-  background: var(
-    --surface2
-  ); /* surface2 has stronger contrast against bg
-                                   in light theme; same effect on dark */
-  border: 1px solid var(--border2);
+  background: var(--surface2);
+  border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
-  margin: 16px 0;
+  margin: 14px 0;
   font-family: var(--font-mono);
 }
 .prose-md pre code {
   display: block;
-  padding: 14px 16px;
+  padding: 12px 14px;
   background: none !important;
   border: none;
   color: var(--fg);
-  font-size: 12px;
-  line-height: 1.65;
+  font-size: 12.5px;
+  line-height: 1.6;
   overflow-x: auto;
   white-space: pre;
   word-break: normal;
 }
-
 .prose-md blockquote {
-  margin: 16px 0;
-  padding: 14px 20px;
+  margin: 14px 0;
+  padding: 2px 16px;
   border-left: 3px solid var(--border2);
   color: var(--fg-dim);
-  font-size: 16px;
-  font-style: italic;
 }
-
 .prose-md hr {
   border: none;
-  border-top: 1px solid var(--border2);
+  border-top: 1px solid var(--border);
   margin: 20px 0;
 }
-
 .prose-md img {
   max-width: 100%;
-  border-radius: 6px;
-  margin: 16px 0;
-  border: 1px solid var(--border2);
+  border-radius: 8px;
+  margin: 14px 0;
+  border: 1px solid var(--border);
 }
-
-/* Tables scroll sideways in their own wrapper (added by markdown.ts) — the
-   prose column's overflow-wrap:anywhere would otherwise crush a wide table
-   into one-letter-per-line cells. */
 .prose-md .md-table-wrap {
   overflow-x: auto;
   margin: 14px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
 }
 .prose-md table {
-  width: max-content; /* grow to content… */
-  min-width: 100%; /* …but never narrower than the column */
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
   margin: 0;
-  font-size: 12px;
-  font-family: var(--font-mono);
+  font-size: 0.85em;
+  font-family: var(--font-ui);
 }
 .prose-md th,
 .prose-md td {
-  padding: 8px 12px;
-  border: 1px solid var(--border2);
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
   text-align: left;
-  max-width: 340px; /* prose-heavy cells wrap instead of running forever */
+  max-width: 340px;
+}
+.prose-md tr:last-child td {
+  border-bottom: none;
 }
 .prose-md th {
   background: var(--surface2);
-  color: var(--fg-bright);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  font-size: 11px;
-}
-.prose-md tr:hover td {
-  background: var(--surface);
+  color: var(--fg-dim);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 @media (max-width: 768px) {
-  .prose-md {
+  .prose-md.reading {
     font-size: 16px;
     line-height: 1.65;
   }
-  .prose-md h1 {
-    font-size: 22px;
-  }
-  .prose-md h2 {
-    font-size: 18px;
-  }
-  .prose-md h3 {
-    font-size: 16px;
-  }
 }
 
-/* ---------------------------------------------------------------------------
-   KaTeX integration
-   Math expressions are rendered client-side inside .prose-md content. KaTeX
-   defaults to black-on-white styling so we override to follow our theme
-   tokens — works automatically across all five themes. Display math gets
-   its own spacing block; inline math stays in the flow.
-   --------------------------------------------------------------------------- */
-
+/* KaTeX follows the theme. */
 .prose-md .katex {
   color: var(--fg-bright);
   font-size: 1.02em;
 }
-
-/* Display-math block (centered, generous vertical spacing) */
 .prose-md .katex-display {
-  margin: 20px 0;
-  padding: 8px 0;
+  margin: 18px 0;
+  padding: 6px 0;
   overflow-x: auto;
   overflow-y: hidden;
   text-align: center;
@@ -1023,59 +926,32 @@ table.bran-table .mono {
   display: inline-block;
   font-size: 1.1em;
 }
-
-/* Inline math sits flush with surrounding prose */
-.prose-md .katex .mord,
-.prose-md .katex .mbin,
-.prose-md .katex .mrel,
-.prose-md .katex .mopen,
-.prose-md .katex .mclose,
-.prose-md .katex .mpunct,
-.prose-md .katex .mop {
-  color: var(--fg-bright);
-}
-
-.prose-md .katex .mfrac .frac-line {
-  border-color: var(--fg-dim);
-}
-.prose-md .katex .sqrt > .root {
-  color: var(--fg-bright);
-}
+.prose-md .katex .mfrac .frac-line,
 .prose-md .katex .overline .overline-line,
 .prose-md .katex .underline .underline-line {
   border-color: var(--fg-dim);
 }
 
-/* ===========================================================================
-   Library aesthetic — typographic ornaments, drop caps, numerals, motion.
-   These are bran's "voice" elements: nothing functional, everything saying
-   "this surface is print, not chrome".
-   =========================================================================== */
-
-/* Wordmark: bran in serif, paired with the perched crow mark in copper.
-   The crow is "bran" in Welsh — naming the project after the bird makes
-   the mark inevitable. Used in sidebar header. */
+/* ---------------------------------------------------------------------------
+   Brand
+   --------------------------------------------------------------------------- */
 .wordmark {
-  font-family: var(--font-prose);
-  font-size: 22px;
-  font-weight: 500;
+  font-family: var(--font-ui);
+  font-size: 15px;
+  font-weight: 600;
   letter-spacing: -0.01em;
   color: var(--fg-bright);
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   line-height: 1;
 }
 .wordmark-crow {
-  /* 24x24 viewBox (Material Symbols), so square again. */
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
   color: var(--accent);
   flex-shrink: 0;
 }
-/* `.glyph` is the raven mark as a CSS-only element. Add the class to any
-   empty <span>/<div> and you get the raven, themed via CSS, sized via
-   font-size (icon scales with surrounding text). */
 .glyph {
   display: inline-block;
   width: 1.6em;
@@ -1086,95 +962,41 @@ table.bran-table .mono {
   vertical-align: middle;
 }
 
-/* Section label in serif italic — quieter alternative to label-cap when you
-   want bookish rather than command-line. */
-.eyebrow {
-  font-family: var(--font-prose);
-  font-style: italic;
-  font-size: 13px;
-  color: var(--muted);
-  letter-spacing: 0.01em;
-}
-
-/* Empty-state with bracket marks + serif title + uppercase meta CTA.
-   Compose:
-     <div class="empty-state">
-       <div class="brackets">[  ]</div>
-       <h3>nothing here yet</h3>
-       <p class="cta">try: bran run research --task "..."</p>
-     </div>
-*/
+/* Empty state: say what will appear here and offer the action that fills it. */
 .empty-state {
   text-align: center;
   padding: 56px 24px;
+  max-width: 440px;
+  margin: 0 auto;
 }
-.empty-state .brackets {
-  font-family: var(--font-mono);
-  font-size: 28px;
-  color: var(--border2);
-  letter-spacing: 0.3em;
-  margin-bottom: 12px;
+.empty-state .empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--surface2);
+  color: var(--muted);
+  margin-bottom: 14px;
 }
 .empty-state h3 {
-  font-family: var(--font-prose);
-  font-size: 22px;
-  font-weight: 400;
-  font-style: italic;
-  color: var(--fg-dim);
-  letter-spacing: -0.01em;
-  margin-bottom: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg-bright);
+  margin-bottom: 6px;
 }
 .empty-state .cta {
-  font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 13px;
   color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
+  line-height: 1.5;
 }
 .empty-state .cta code {
   font-family: var(--font-mono);
-  color: var(--accent-soft);
-  text-transform: none;
-  letter-spacing: 0;
+  color: var(--fg-dim);
 }
 
-/* Restrained motion. Library aesthetic = printed feel = subtle fades,
-   never bounces. Page-load stagger on direct children of .stagger-in. */
-@keyframes brn-fade-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-.stagger-in > * {
-  opacity: 0;
-  animation: brn-fade-in 380ms var(--transition) forwards;
-}
-.stagger-in > *:nth-child(1) {
-  animation-delay: 40ms;
-}
-.stagger-in > *:nth-child(2) {
-  animation-delay: 110ms;
-}
-.stagger-in > *:nth-child(3) {
-  animation-delay: 180ms;
-}
-.stagger-in > *:nth-child(4) {
-  animation-delay: 250ms;
-}
-.stagger-in > *:nth-child(5) {
-  animation-delay: 320ms;
-}
-.stagger-in > *:nth-child(n + 6) {
-  animation-delay: 380ms;
-}
-
-/* "Live" pulse — used on the indicator dot for running runs. Slow, calm,
-   like a heartbeat at rest. */
+/* Live pulse for running things. */
 @keyframes brn-pulse {
   0%,
   100% {
@@ -1186,8 +1008,8 @@ table.bran-table .mono {
 }
 .live-dot {
   display: inline-block;
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 999px;
   background: var(--amber);
   animation: brn-pulse 1.6s ease-in-out infinite;
@@ -1197,47 +1019,32 @@ table.bran-table .mono {
   height: 6px;
 }
 
-/* App shell — a fixed full-viewport frame. The shell is exactly the viewport
-   height and <main> is the single scroll container, so the body never grows
-   past the viewport (no "slightly too tall" bob). The sidebar is a fixed-height
-   sibling; only main's content scrolls. */
+/* App shell: the viewport-height frame; <main> is the one scroll container. */
 .app-shell {
   height: 100vh;
-  height: 100dvh; /* track the dynamic viewport on mobile browsers */
+  height: 100dvh;
 }
 .app-main {
   display: flex;
   flex-direction: column;
-  min-height: 0; /* a flex child that's allowed to scroll, not grow */
+  min-height: 0;
   overflow-y: auto;
 }
 
-/* ---------------------------------------------------------------------------
- * Collapsible sidebar (desktop). Toggled by the panel button / Ctrl+B; the
- * rail narrows to an icon strip (var(--sidebar-rail-w)) rather than leaving
- * the screen — nav and new-chat stay one click away. The icon-mode styling
- * of the rail's contents lives in Sidebar.svelte (.collapsed). Below 768px
- * the off-canvas drawer owns the show/hide story, so none of this applies.
- * ------------------------------------------------------------------------- */
+/* Collapsible sidebar (desktop). Icon-mode styling lives in Sidebar.svelte. */
 @media (min-width: 769px) {
   .sidebar {
     transition: width var(--dur-3) var(--transition);
-    overflow-x: hidden; /* clip content while the width animates */
+    overflow-x: hidden;
   }
   .app-shell.sidebar-collapsed .sidebar {
     width: var(--sidebar-rail-w);
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .sidebar {
-    transition: none;
-  }
-}
 
 /* ===========================================================================
- * Chat: code-block copy buttons (every <pre> from markdown-it gets a header).
- * ========================================================================= */
-
+   Chat: code-block copy header (every <pre> from markdown-it gets one).
+   ========================================================================= */
 .md-code {
   position: relative;
 }
@@ -1245,43 +1052,37 @@ table.bran-table .mono {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 12px;
+  padding: 4px 8px 4px 12px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-family: var(--font-ui);
+  font-size: 11px;
 }
 .md-code-lang {
   color: var(--muted);
+  font-family: var(--font-mono);
 }
 .md-copy-btn {
   background: transparent;
   border: 1px solid transparent;
   color: var(--muted);
   padding: 2px 8px;
-  border-radius: 3px;
+  border-radius: 4px;
   cursor: pointer;
   font: inherit;
-  letter-spacing: 0.08em;
   transition:
-    color 0.12s,
-    background 0.12s,
-    border-color 0.12s;
+    color var(--dur-1),
+    background var(--dur-1);
 }
 .md-copy-btn:hover {
-  color: var(--fg-dim);
-  border-color: var(--border2);
+  color: var(--fg-bright);
   background: var(--surface2);
 }
 .md-copy-btn.copied {
-  color: var(--accent-soft);
-  border-color: transparent;
+  color: var(--green);
 }
 
-/* Prism syntax-highlight tokens, mapped to bran's theme palette so they recolour
-   with every theme (no fixed light/dark syntax theme). */
+/* Prism tokens mapped to the theme palette. */
 .md-code .token.comment,
 .md-code .token.prolog,
 .md-code .token.doctype,
@@ -1333,51 +1134,31 @@ table.bran-table .mono {
 }
 
 /* ===========================================================================
- * Chat: tool blocks. One block per tool call (call + result paired).
- *
- * Visual: a thin coloured left border keyed to the tool category, a header
- * row that's always visible (status dot, name, summary, result preview,
- * duration, chevron), and a body that expands on click. Inspired by
- * lightcc's ToolCall.svelte but rebuilt for vanilla DOM.
- * ========================================================================= */
-
-/* Tool calls render as quiet, left-ticked log rows so a long run of them
-   doesn't wall off the actual answer; expanding one promotes it to a panel. */
+   Chat: tool rows. Quiet log lines; expanding one promotes it to a panel.
+   ========================================================================= */
 .tool-block {
   --tool-color: var(--muted);
   border: 1px solid transparent;
-  border-left: 2px solid color-mix(in srgb, var(--tool-color) 40%, transparent);
-  border-radius: var(--radius);
+  border-radius: 8px;
   background: transparent;
-  font-family: var(--font-mono);
   margin: 1px 0;
   overflow: hidden;
   transition:
-    background 0.15s ease,
-    border-color 0.15s ease;
+    background var(--dur-1) var(--transition),
+    border-color var(--dur-1) var(--transition);
 }
 .tool-block:hover {
   background: var(--surface2);
-  border-left-color: var(--tool-color);
 }
 .tool-block.expanded {
   background: var(--surface);
   border-color: var(--border);
-  border-left-color: var(--tool-color);
-  margin: 5px 0;
-}
-.tool-block.errored {
-  border-left-color: var(--red);
-  background: color-mix(in srgb, var(--red) 4%, transparent);
-}
-.tool-block.errored.expanded {
-  background: color-mix(in srgb, var(--red) 5%, var(--surface));
+  margin: 6px 0;
 }
 .tool-block.errored .tool-name {
   color: var(--red);
 }
 
-/* Category colors */
 .tool-cat-search {
   --tool-color: var(--accent-soft);
 }
@@ -1400,8 +1181,8 @@ table.bran-table .mono {
 .tool-header {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 4px 10px;
+  gap: 8px;
+  padding: 5px 10px;
   cursor: pointer;
   background: none;
   border: none;
@@ -1409,13 +1190,8 @@ table.bran-table .mono {
   font: inherit;
   width: 100%;
   text-align: left;
-  min-height: 27px;
-  transition: background 0.12s ease;
+  min-height: 30px;
 }
-.tool-header:hover {
-  background: var(--surface2);
-}
-
 .tool-status-dot {
   width: 7px;
   height: 7px;
@@ -1425,7 +1201,7 @@ table.bran-table .mono {
 }
 .tool-status-dot.running {
   background: var(--amber);
-  animation: tool-dot-pulse 1.2s ease-in-out infinite;
+  animation: brn-pulse 1.2s ease-in-out infinite;
 }
 .tool-status-dot.done {
   background: var(--green);
@@ -1433,24 +1209,16 @@ table.bran-table .mono {
 .tool-status-dot.error {
   background: var(--red);
 }
-@keyframes tool-dot-pulse {
-  0%,
-  100% {
-    opacity: 0.3;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
 .tool-name {
-  font-size: 11px;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
   font-weight: 500;
-  color: var(--muted);
+  color: var(--fg-dim);
   flex-shrink: 0;
 }
 .tool-summary {
-  font-size: 11px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
   color: var(--muted);
   flex: 1;
   min-width: 0;
@@ -1459,66 +1227,59 @@ table.bran-table .mono {
   white-space: nowrap;
 }
 .tool-result-preview {
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--muted);
   flex-shrink: 0;
-  letter-spacing: 0.04em;
 }
 .tool-result-preview.error {
   color: var(--red);
 }
 .tool-duration {
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--muted);
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
 }
 .tool-chevron {
   color: var(--muted);
-  transition: transform 0.2s ease;
+  transition: transform var(--dur-2) var(--transition);
   flex-shrink: 0;
 }
 .tool-block.expanded .tool-chevron {
   transform: rotate(180deg);
 }
-
 .tool-body {
   display: none;
   border-top: 1px solid var(--border);
-  padding: 0;
 }
 .tool-block.expanded .tool-body {
   display: block;
 }
-
 .tool-section {
-  padding: 10px 14px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--border);
 }
 .tool-section:last-child {
   border-bottom: none;
 }
 .tool-section-label {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 500;
   color: var(--muted);
   margin-bottom: 6px;
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
-
 .tool-params {
   display: grid;
   grid-template-columns: minmax(80px, max-content) 1fr;
   gap: 4px 14px;
-  font-size: 11px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
 }
 .tool-param-key {
   color: var(--muted);
-  font-weight: 500;
 }
 .tool-param-value {
   color: var(--fg-dim);
@@ -1526,15 +1287,14 @@ table.bran-table .mono {
   word-break: break-word;
   white-space: pre-wrap;
 }
-
 .tool-code {
   font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.65;
+  font-size: 11.5px;
+  line-height: 1.6;
   color: var(--fg-dim);
-  background: var(--bg);
-  border: 1px solid var(--border2);
-  border-radius: 4px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
   padding: 10px 12px;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1547,24 +1307,22 @@ table.bran-table .mono {
 .tool-code.full {
   max-height: none;
 }
-
 .tool-bash-cmd {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--fg-bright);
-  font-weight: 600;
+  font-weight: 500;
   padding: 4px 0;
   white-space: pre-wrap;
   word-break: break-word;
 }
-
 .tool-diff {
-  border: 1px solid var(--border2);
-  border-radius: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
   overflow: hidden;
   font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.65;
+  font-size: 11.5px;
+  line-height: 1.6;
 }
 .tool-diff-del,
 .tool-diff-add {
@@ -1575,39 +1333,34 @@ table.bran-table .mono {
 .tool-diff-del {
   background: color-mix(in srgb, var(--red) 10%, var(--surface));
   color: var(--red);
-  border-bottom: 1px solid var(--border2);
+  border-bottom: 1px solid var(--border);
 }
 .tool-diff-del::before {
   content: '- ';
-  font-weight: 600;
   opacity: 0.6;
-} /* 600 = Geist Mono's heaviest loaded weight */
+}
 .tool-diff-add {
   background: color-mix(in srgb, var(--green) 10%, var(--surface));
   color: var(--green);
 }
 .tool-diff-add::before {
   content: '+ ';
-  font-weight: 600;
   opacity: 0.6;
 }
-
 .tool-task-prompt {
-  font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 1.55;
   color: var(--fg-dim);
   padding: 8px 12px;
   background: var(--surface2);
   border-left: 2px solid var(--accent-soft);
-  border-radius: 3px;
+  border-radius: 4px;
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 160px;
   overflow-y: auto;
 }
 .tool-task-result {
-  font-family: var(--font-ui);
   font-size: 13px;
   line-height: 1.6;
   color: var(--fg);
@@ -1616,72 +1369,59 @@ table.bran-table .mono {
   max-height: 360px;
   overflow-y: auto;
 }
-
 .tool-meta {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.08em;
+  font-size: 11px;
   color: var(--muted);
   margin-top: 6px;
 }
-
-.tool-copy-btn {
+.tool-copy-btn,
+.tool-expand-btn {
   background: transparent;
   border: 1px solid transparent;
   color: var(--muted);
   padding: 2px 8px;
-  border-radius: 3px;
+  border-radius: 4px;
   cursor: pointer;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.08em;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 500;
   transition:
-    color 0.12s,
-    background 0.12s,
-    border-color 0.12s;
+    color var(--dur-1),
+    background var(--dur-1);
 }
-.tool-copy-btn:hover {
-  color: var(--fg-dim);
-  border-color: var(--border2);
+.tool-copy-btn:hover,
+.tool-expand-btn:hover {
+  color: var(--fg-bright);
   background: var(--surface2);
 }
-
 .tool-expand-btn {
   width: 100%;
-  background: none;
-  border: none;
+  border-radius: 0;
   border-top: 1px solid var(--border);
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
   padding: 6px 0;
-  cursor: pointer;
-  transition:
-    color 0.12s,
-    background 0.12s;
-}
-.tool-expand-btn:hover {
-  color: var(--fg-dim);
-  background: var(--surface2);
 }
 
-/* Tool group: collapses runs of 3+ same-name calls. */
+/* Tool group: a run of several calls folded into one row. */
 .tool-group {
-  border: 1px solid var(--border);
-  border-left: 2px solid color-mix(in srgb, var(--tool-color, var(--muted)) 45%, transparent);
-  border-radius: var(--radius);
-  background: var(--surface);
-  margin: 4px 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  margin: 1px 0;
   overflow: hidden;
-  font-family: var(--font-mono);
+}
+.tool-group:hover {
+  background: var(--surface2);
+}
+.tool-group.expanded {
+  background: var(--surface);
+  border-color: var(--border);
+  margin: 6px 0;
 }
 .tool-group-header {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
+  gap: 8px;
+  padding: 5px 10px;
   cursor: pointer;
   background: none;
   border: none;
@@ -1689,10 +1429,7 @@ table.bran-table .mono {
   font: inherit;
   width: 100%;
   text-align: left;
-  min-height: 34px;
-}
-.tool-group-header:hover {
-  background: var(--surface2);
+  min-height: 30px;
 }
 .tool-group-body {
   display: none;
@@ -1706,18 +1443,17 @@ table.bran-table .mono {
   transform: rotate(180deg);
 }
 .tool-group-count {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   flex: 1;
 }
 
 /* ===========================================================================
- * Chat: assistant message hover actions + streaming cursor.
- * ========================================================================= */
-
+   Chat: hover actions + streaming cursor.
+   ========================================================================= */
 .msg-actions {
   display: flex;
-  gap: 4px;
+  gap: 2px;
   margin-left: auto;
   opacity: 0;
   transition: opacity var(--dur-1) var(--transition);
@@ -1732,30 +1468,29 @@ table.bran-table .mono {
   }
 }
 .msg-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   background: transparent;
   border: 1px solid transparent;
   color: var(--muted);
-  padding: 3px 8px;
-  border-radius: 4px;
+  padding: 3px 7px;
+  border-radius: 5px;
   cursor: pointer;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
   transition:
-    color 0.12s,
-    background 0.12s,
-    border-color 0.12s;
+    color var(--dur-1),
+    background var(--dur-1);
 }
 .msg-action-btn:hover {
-  color: var(--fg-dim);
+  color: var(--fg-bright);
   background: var(--surface2);
-  border-color: var(--border2);
 }
 .msg-action-btn.done {
-  color: var(--accent-soft);
+  color: var(--green);
 }
-
 .stream-cursor {
   display: inline-block;
   width: 2px;
@@ -1776,20 +1511,17 @@ table.bran-table .mono {
 }
 
 /* ===========================================================================
- * Responsive layout. Below 768px the fixed sidebar becomes an off-canvas
- * drawer behind a hamburger, multi-column page grids stack, and the chat's
- * project rail hides (it has its own page via the breadcrumb).
- * ========================================================================= */
-
-/* Hamburger — hidden on desktop; fixed top-left on small screens. */
+   Responsive. Below 768px the sidebar is an off-canvas drawer behind a
+   hamburger, page grids stack, and the chat's project rail hides.
+   ========================================================================= */
 .nav-burger {
   display: none;
   position: fixed;
-  top: 12px;
+  top: calc(8px + var(--safe-top));
   left: 12px;
   z-index: 240;
-  width: 38px;
-  height: 38px;
+  width: 36px;
+  height: 36px;
   align-items: center;
   justify-content: center;
   background: var(--surface);
@@ -1815,7 +1547,6 @@ table.bran-table .mono {
   .nav-overlay {
     display: block;
   }
-
   .sidebar {
     position: fixed;
     top: 0;
@@ -1826,17 +1557,18 @@ table.bran-table .mono {
     transform: translateX(-105%);
     transition: transform var(--dur-3) var(--transition);
     box-shadow: var(--shadow-lg);
+    padding-bottom: var(--safe-bottom);
   }
   .sidebar.open {
     transform: translateX(0);
   }
-
-  /* Clear the floating hamburger. */
   .page-header {
-    padding-left: 64px;
+    padding: 8px 16px 8px 60px;
+    padding-top: calc(8px + var(--safe-top));
   }
-
-  /* Stack the multi-column page grids (Today, run/runner/project detail). */
+  .page-body {
+    padding: 16px 16px 32px;
+  }
   .grid-cols-2,
   .grid-cols-3,
   .grid-cols-4 {
@@ -1846,18 +1578,26 @@ table.bran-table .mono {
   .col-span-3 {
     grid-column: auto;
   }
+  /* Comfortable touch targets. */
+  .btn-primary,
+  .btn-outline,
+  .btn-danger,
+  .btn-ghost {
+    min-height: 40px;
+  }
+  .btn-icon {
+    width: 36px;
+    height: 36px;
+  }
+  table.bran-table td {
+    height: 44px;
+  }
 }
-
 @media (min-width: 769px) {
   .sidebar.open {
     transform: none;
-  } /* drawer class is inert on desktop */
+  }
 }
-
-/* Mid-width laptops/split screens: below ~1100px the 320px project rail would
-   squeeze the chat column to a sliver (sidebar 240 + rail 320 + gutters), and
-   3/4-column detail grids yield ~130px columns — stack both well before the
-   phone breakpoint. The project page stays one click away via the breadcrumb. */
 @media (max-width: 1100px) {
   .chat-rail {
     display: none;
@@ -1874,10 +1614,7 @@ table.bran-table .mono {
   }
 }
 
-/* ===========================================================================
- * Elevation helpers — LAST in the file on purpose: an .elev-* class on a
- * .card (modal, palette, popover) must win over the card's resting shadow.
- * ========================================================================= */
+/* Elevation helpers — last so they win over a component's resting shadow. */
 .elev-sm {
   box-shadow: var(--shadow-sm);
 }
@@ -1889,13 +1626,9 @@ table.bran-table .mono {
 }
 
 /* ===========================================================================
- * Print. Briefings and run results are this product's headline output, so
- * Ctrl+P must produce readable pages — not one dark viewport under a grain
- * overlay. Ink-friendly palette regardless of theme, chrome stripped, and
- * the fixed-height app shell unlocked so content paginates.
- * ========================================================================= */
+   Print: readable pages, chrome stripped, fixed shell unlocked.
+   ========================================================================= */
 @media print {
-  /* html[data-theme] outranks every theme's variable set (element + attr). */
   html,
   html[data-theme] {
     --bg: #fff;
@@ -1908,8 +1641,8 @@ table.bran-table .mono {
     --fg-dim: #333;
     --dim: #444;
     --muted: #555;
-    --accent: #8a4a2f;
-    --accent-soft: #8a4a2f;
+    --accent: #8a2f48;
+    --accent-soft: #8a2f48;
     --accent-glow: transparent;
     --shadow-sm: none;
     --shadow-md: none;
@@ -1921,12 +1654,6 @@ table.bran-table .mono {
     height: auto;
     background: #fff;
   }
-  body::before,
-  body::after {
-    display: none;
-  } /* grain + vignette overlays */
-
-  /* Unlock the fixed-height shell so content flows across pages. */
   .app-shell {
     display: block;
     height: auto;
@@ -1940,9 +1667,7 @@ table.bran-table .mono {
   }
   .chat-scroll {
     overflow: visible !important;
-  } /* beats its inline style */
-
-  /* Screen chrome that has no business on paper. */
+  }
   .sidebar,
   .nav-burger,
   .nav-overlay,
@@ -1954,11 +1679,12 @@ table.bran-table .mono {
   .chat-rail {
     display: none !important;
   }
-
   .page-header {
+    position: static;
     background: #fff;
     border-bottom: 1px solid #ccc;
     padding-left: 0;
+    backdrop-filter: none;
   }
   .card,
   .card-quiet {

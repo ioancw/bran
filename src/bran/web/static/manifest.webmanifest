@@ -1,0 +1,13 @@
+{
+  "name": "bran",
+  "short_name": "bran",
+  "description": "Your agents, their outputs, and a place to talk to them.",
+  "start_url": "/app/",
+  "scope": "/app/",
+  "display": "standalone",
+  "background_color": "#fafaf9",
+  "theme_color": "#b0405e",
+  "icons": [
+    { "src": "/static/crow.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

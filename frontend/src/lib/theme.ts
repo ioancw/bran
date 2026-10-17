@@ -1,5 +1,6 @@
-// Theme handling, ported from base.html's inline script. Persists choice to
-// localStorage, auto-detects OS preference, applies before paint to avoid flash.
+// Theme handling. Persists the choice to localStorage, auto-detects the OS
+// preference, and applies before paint (index.html mirrors this) to avoid a
+// flash of the wrong palette.
 
 export interface Theme {
   name: string
@@ -13,24 +14,10 @@ export interface Theme {
 }
 
 export const THEMES: Theme[] = [
-  {
-    name: 'midnight',
-    label: 'Midnight',
-    bg: '#0c0c0e',
-    surface: '#15151b',
-    fg: '#c4c4d4',
-    accent: '#c17b5b',
-  },
-  { name: 'light', label: 'Light', bg: '#faf0e6', surface: '#fdf5ec', fg: '#4a4138', accent: '#a04a5f' },
+  { name: 'midnight', label: 'Midnight', bg: '#0e0e10', surface: '#151517', fg: '#d6d3d1', accent: '#d9748e' },
+  { name: 'light', label: 'Light', bg: '#fafaf9', surface: '#ffffff', fg: '#1c1917', accent: '#b0405e' },
   { name: 'dracula', label: 'Dracula', bg: '#282a36', surface: '#2d2f3d', fg: '#cdd6f4', accent: '#bd93f9' },
-  {
-    name: 'solarized',
-    label: 'Solarized',
-    bg: '#002b36',
-    surface: '#073642',
-    fg: '#93a1a1',
-    accent: '#268bd2',
-  },
+  { name: 'solarized', label: 'Solarized', bg: '#002b36', surface: '#073642', fg: '#93a1a1', accent: '#268bd2' },
   { name: 'nord', label: 'Nord', bg: '#2e3440', surface: '#3b4252', fg: '#d8dee9', accent: '#88c0d0' },
 ]
 
