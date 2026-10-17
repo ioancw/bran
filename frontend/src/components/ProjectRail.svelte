@@ -11,9 +11,11 @@
   import { toast } from '../lib/toast.svelte'
   import { errorText } from '../lib/errors'
   import Section from './Section.svelte'
+  import Icon from './Icon.svelte'
   import Skeleton from './Skeleton.svelte'
   import StatusBadge from './StatusBadge.svelte'
   import CronField from './CronField.svelte'
+  import { describeCron } from '../lib/schedule'
   import type { AgentInfo, ProjectDetail, RunRecord } from '../lib/types'
 
   // `home` = the project page (configure: editable Knowledge + Scheduled open,
@@ -104,6 +106,14 @@
   })
   // Chat-scoped Progress: this conversation's background runs only (reloads when
   // a turn finishes via activityTick). Empty for a brand-new, unsaved chat.
+  async function loadChatRuns(sid: string) {
+    try {
+      const r = await api.runs({ session_id: sid, exclude_chats: true, limit: 8 })
+      if (sessionId === sid) chatRuns = r
+    } catch {
+      /* keep what we have */
+    }
+  }
   $effect(() => {
     void workspace.activityTick
     const sid = sessionId
@@ -111,10 +121,19 @@
       chatRuns = []
       return
     }
-    void api
-      .runs({ session_id: sid, exclude_chats: true, limit: 8 })
-      .then((r) => (chatRuns = r))
-      .catch(() => {})
+    void loadChatRuns(sid)
+  })
+  // While any listed run is still going, poll so the rail advances on its own
+  // (spawned runs finish without a chat turn to bump activityTick). The timer
+  // stops as soon as nothing is live, on unmount, and while the tab is hidden.
+  const anyLive = $derived(chatRuns.some((r) => r.status === 'running' || r.status === 'pending'))
+  $effect(() => {
+    const sid = sessionId
+    if (mode !== 'chat' || !sid || !anyLive) return
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') void loadChatRuns(sid)
+    }, 5000)
+    return () => clearInterval(timer)
   })
 
   async function save() {
@@ -127,7 +146,7 @@
       seeded = { name, description, instructions, workDir } // form is clean again
     } catch (e) {
       // Most commonly a 400 from working-folder validation (bad/missing path).
-      saveError = e instanceof Error ? e.message : 'save failed'
+      saveError = e instanceof Error ? e.message : 'Save failed'
       return
     } finally {
       saving = false
@@ -186,7 +205,13 @@
     await load()
   }
   async function removeSchedule(n: string) {
-    if (!(await confirmDialog(`Delete runner "${n}"?`))) return
+    if (
+      !(await confirmDialog(
+        `Delete runner "${n}"? Its schedule stops. Past runs and outputs are kept.`,
+        'Delete runner',
+      ))
+    )
+      return
     try {
       await api.deleteSchedule(n)
     } catch (e) {
@@ -210,7 +235,7 @@
       await api.uploadFiles(projectId, files)
       await load()
     } catch (e) {
-      fileError = e instanceof Error ? e.message : 'upload failed'
+      fileError = e instanceof Error ? e.message : 'Upload failed'
     } finally {
       uploading = false
     }
@@ -231,7 +256,13 @@
     return `/spa/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(name)}`
   }
   async function removeFile(name: string) {
-    if (!(await confirmDialog(`Remove "${name}" from this project?`))) return
+    if (
+      !(await confirmDialog(
+        `Remove "${name}" from this project? The file is deleted from the project folder.`,
+        'Remove file',
+      ))
+    )
+      return
     try {
       await api.deleteFile(projectId, name)
     } catch (e) {
@@ -250,26 +281,20 @@
          setup, so it leads with editable config instead. -->
     {#if mode === 'chat'}
       <Section label="Progress">
-        <p class="text-muted" style="font-size: 11px; margin-bottom: 8px;">
-          Background runs from this conversation.
-        </p>
+        <p class="rail-help">Background runs from this conversation.</p>
         {#if workspace.streaming}
           <div class="prog-live">
             <span class="live-dot sm"></span>
-            <span class="text-bright" style="font-size: 12px;">{workspace.liveLabel || 'working…'}</span>
+            <span class="text-bright" style="font-size: 12px;">{workspace.liveLabel || 'Working…'}</span>
           </div>
         {/if}
         {#if chatRuns.length}
-          <div class="space-y-2">
+          <div class="space-y-1">
             {#each chatRuns.slice(0, 8) as r (r.id)}
-              <a href={href('/runs/' + r.id)} use:link class="prog-row" style="text-decoration: none;">
-                <span
-                  class="text-bright"
-                  style="font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
-                  >{r.agent}</span
-                >
+              <a href={href('/runs/' + r.id)} use:link class="prog-row">
+                <span class="prog-name">{r.agent}</span>
                 <StatusBadge status={r.status} />
-                <span class="text-muted" style="font-size: 10px; white-space: nowrap;"
+                <span class="prog-meta"
                   >{relativeTime(r.started_at)}{#if r.total_cost_usd}
                     · {fmtCost(r.total_cost_usd)}{/if}</span
                 >
@@ -277,7 +302,7 @@
             {/each}
           </div>
         {:else if !workspace.streaming}
-          <div class="text-muted" style="font-size: 12px; font-style: italic;">no activity yet</div>
+          <div class="rail-empty">No background runs yet.</div>
         {/if}
       </Section>
     {/if}
@@ -288,54 +313,50 @@
     <Section label="Knowledge" open={mode === 'home'}>
       {#if mode === 'home'}
         <!-- Project page: full editable config. -->
-        <p class="text-muted" style="font-size: 11px; margin-bottom: 10px;">
-          What the agent always knows here — applied to every chat & attached runner.
-        </p>
+        <p class="rail-help">What the agent always knows here — applied to every chat and attached runner.</p>
 
         <div class="label-cap" style="margin-bottom: 6px;">Instructions · always on</div>
         <textarea
           class="field"
           bind:value={instructions}
           rows="7"
-          aria-label="project instructions"
+          aria-label="Project instructions"
           placeholder="How the agent should behave in this project…"
-          style="resize: vertical; font-family: var(--font-mono); font-size: 12px;"></textarea>
+          style="resize: vertical; font-size: 13px;"></textarea>
         <div style="display: flex; align-items: center; gap: 10px; margin-top: 8px;">
-          <button class="btn-primary" disabled={saving} onclick={save}>{saving ? 'saving…' : 'save'}</button>
-          {#if savedFlash}<span class="label-cap" style="color: var(--accent-soft);">saved ✓</span>{/if}
+          <button class="btn-primary" disabled={saving} onclick={save}>{saving ? 'Saving…' : 'Save'}</button>
+          {#if savedFlash}<span class="saved-flash"><Icon name="check" size={13} />Saved</span>{/if}
         </div>
 
         <div class="rail-divider"></div>
 
         <div class="label-cap" style="margin-bottom: 6px;">Pinned facts</div>
-        <p class="text-muted" style="font-size: 11px; margin-bottom: 8px;">
-          Discrete facts — added here, via "remember that…", or /remember.
-        </p>
+        <p class="rail-help">Discrete facts — added here, via "remember that…", or /remember.</p>
         {#if data.memories.length}
           <div class="space-y-2" style="margin-bottom: 8px;">
             {#each data.memories as m (m.id)}
-              <div style="display: flex; gap: 8px; align-items: flex-start; font-size: 12px;">
-                <span class="text-fg" style="flex: 1; line-height: 1.4;">{m.text}</span>
+              <div class="mem-row">
+                <span class="mem-text">{m.text}</span>
                 <button
-                  class="btn-ghost"
+                  class="btn-icon danger"
                   onclick={() => removeMem(m.id)}
-                  title="forget"
-                  aria-label="forget this fact">×</button
+                  title="Forget this fact"
+                  aria-label="Forget this fact"
                 >
+                  <Icon name="x" size={13} />
+                </button>
               </div>
             {/each}
           </div>
         {:else}
-          <div class="text-muted" style="font-size: 12px; font-style: italic; margin-bottom: 8px;">
-            none yet
-          </div>
+          <div class="rail-empty" style="margin-bottom: 8px;">No pinned facts yet.</div>
         {/if}
         <div style="display: flex; gap: 6px;">
           <input
             class="field"
             bind:value={newMemory}
-            placeholder="pin a fact…"
-            aria-label="pin a fact"
+            placeholder="Pin a fact…"
+            aria-label="Pin a fact"
             onkeydown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault()
@@ -343,7 +364,9 @@
               }
             }}
           />
-          <button class="btn-primary" disabled={pinning} onclick={addMem}>pin</button>
+          <button class="btn-primary" disabled={pinning} onclick={addMem}
+            ><Icon name="pin" size={13} />Pin</button
+          >
         </div>
       {:else}
         <!-- Beside a chat: read-only reference. Edit on the project page. -->
@@ -351,44 +374,44 @@
         {#if instructions.trim()}
           <div class="ref-text">{instructions}</div>
         {:else}
-          <div class="text-muted" style="font-size: 12px; font-style: italic;">none set</div>
+          <div class="rail-empty">None set.</div>
         {/if}
 
         <div class="label-cap" style="margin: 12px 0 6px;">Pinned facts</div>
         {#if data.memories.length}
-          <div class="space-y-1">
+          <ul class="mem-list">
             {#each data.memories as m (m.id)}
-              <div class="text-fg" style="font-size: 12px; line-height: 1.4;">• {m.text}</div>
+              <li>{m.text}</li>
             {/each}
-          </div>
+          </ul>
         {:else}
-          <div class="text-muted" style="font-size: 12px; font-style: italic;">none yet</div>
+          <div class="rail-empty">No pinned facts yet.</div>
         {/if}
 
-        <a href={href('/projects/' + encodeURIComponent(projectId))} use:link class="ref-edit"
-          >edit in project →</a
-        >
+        <a href={href('/projects/' + encodeURIComponent(projectId))} use:link class="ref-edit">
+          <Icon name="pencil" size={12} />Edit in project
+        </a>
       {/if}
     </Section>
 
     {#if mode === 'home'}
       <Section label="Scheduled" open={true}>
         {#snippet action()}
-          <button class="btn-ghost" onclick={() => (showSchedForm = !showSchedForm)}>+ add</button>
+          <button class="btn-ghost btn-sm" onclick={() => (showSchedForm = !showSchedForm)}
+            ><Icon name="plus" size={13} />Add</button
+          >
         {/snippet}
-        <p class="text-muted" style="font-size: 11px; margin-bottom: 8px;">
-          Recurring runners for this project.
-        </p>
+        <p class="rail-help">Recurring runners for this project.</p>
         {#if showSchedForm}
           <div class="card-quiet" style="margin-bottom: 8px;">
             <input
               class="field"
               bind:value={sName}
-              placeholder="name (unique)"
-              aria-label="runner name"
+              placeholder="Name (unique)"
+              aria-label="Runner name"
               style="margin-bottom: 6px;"
             />
-            <select class="field" bind:value={sAgent} aria-label="agent" style="margin-bottom: 6px;">
+            <select class="field" bind:value={sAgent} aria-label="Agent" style="margin-bottom: 6px;">
               {#each agents as a (a.name)}<option value={a.name}>{a.name}</option>{/each}
             </select>
             <div style="margin-bottom: 6px;"><CronField bind:value={sCron} /></div>
@@ -396,15 +419,15 @@
               class="field"
               bind:value={sTask}
               rows="4"
-              aria-label="runner task prompt"
-              placeholder="prompt — what should the agent do each run?"
+              aria-label="Runner task"
+              placeholder="What should the agent do each run?"
               style="resize: vertical; line-height: 1.5;"></textarea>
             <div style="display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px;">
               <button class="btn-ghost" disabled={schedAdding} onclick={() => (showSchedForm = false)}
-                >cancel</button
+                >Cancel</button
               >
               <button class="btn-primary" disabled={schedAdding} onclick={addSchedule}
-                >{schedAdding ? 'adding…' : 'add'}</button
+                >{schedAdding ? 'Adding…' : 'Add runner'}</button
               >
             </div>
           </div>
@@ -412,19 +435,20 @@
         {#if data.schedules.length}
           <div class="space-y-2">
             {#each data.schedules as s (s.name)}
-              <div style="display: flex; gap: 8px; align-items: baseline; font-size: 12px;">
+              <div class="sched-row">
                 <span class="text-bright">{s.name}</span>
-                <span class="mono text-dim">{s.cron}</span>
+                <span class="text-dim" title={s.cron}>{describeCron(s.cron)}</span>
                 <button
-                  class="btn-ghost ml-auto"
+                  class="btn-icon danger ml-auto"
                   onclick={() => removeSchedule(s.name)}
-                  aria-label="delete runner {s.name}">×</button
+                  title="Delete runner"
+                  aria-label="Delete runner {s.name}"><Icon name="trash" size={13} /></button
                 >
               </div>
             {/each}
           </div>
         {:else}
-          <div class="text-muted" style="font-size: 12px; font-style: italic;">none yet</div>
+          <div class="rail-empty">No runners yet.</div>
         {/if}
       </Section>
     {:else if data.schedules.length}
@@ -432,9 +456,9 @@
       <Section label="Scheduled" open={false}>
         <div class="space-y-2">
           {#each data.schedules as s (s.name)}
-            <div style="display: flex; gap: 8px; align-items: baseline; font-size: 12px;">
+            <div class="sched-row">
               <span class="text-bright">{s.name}</span>
-              <span class="mono text-dim">{s.cron}</span>
+              <span class="text-dim" title={s.cron}>{describeCron(s.cron)}</span>
             </div>
           {/each}
         </div>
@@ -442,9 +466,7 @@
     {/if}
 
     <Section label="Files" open={mode === 'home'}>
-      <p class="text-muted" style="font-size: 11px; margin-bottom: 8px;">
-        Uploaded files agents in this project can read on demand (PDFs, notes, data).
-      </p>
+      <p class="rail-help">Uploaded files agents in this project can read on demand (PDFs, notes, data).</p>
 
       {#if data.files.length}
         <div class="space-y-2" style="margin-bottom: 10px;">
@@ -455,24 +477,22 @@
                 href={fileUrl(f.name)}
                 target="_blank"
                 rel="noopener"
-                title="open {f.name} in a new tab">{f.name}</a
+                title="Open {f.name} in a new tab"><Icon name="file" size={12} />{f.name}</a
               >
-              <span class="text-dim" style="font-size: 10px; white-space: nowrap;">{f.size_human}</span>
+              <span class="file-size">{f.size_human}</span>
               {#if mode === 'home'}
                 <button
-                  class="btn-ghost"
-                  title="remove"
+                  class="btn-icon danger"
+                  title="Remove file"
                   onclick={() => removeFile(f.name)}
-                  aria-label="remove {f.name}">×</button
+                  aria-label="Remove {f.name}"><Icon name="x" size={13} /></button
                 >
               {/if}
             </div>
           {/each}
         </div>
       {:else}
-        <div class="text-muted" style="font-size: 12px; font-style: italic; margin-bottom: 10px;">
-          no files yet
-        </div>
+        <div class="rail-empty" style="margin-bottom: 10px;">No files yet.</div>
       {/if}
 
       {#if mode === 'home'}
@@ -481,16 +501,16 @@
              managed uploads above (read-only material the user provides). -->
         <div class="rail-divider"></div>
         <div class="label-cap" style="margin-bottom: 6px;">Working folder · read + write</div>
-        <p class="text-muted" style="font-size: 11px; margin-bottom: 8px;">
-          Agents create deliverables here (reports, CSVs, edited copies). Absolute path as the server sees it
-          — WSL-style, e.g. <code>/mnt/c/Users/you/Documents/reports</code>.
+        <p class="rail-help">
+          Agents create deliverables here (reports, CSVs, edited copies). Absolute path as the server sees it,
+          e.g. <code>/mnt/c/Users/you/Documents/reports</code>.
         </p>
         <div style="display: flex; gap: 6px;">
           <input
             class="field mono"
             bind:value={workDir}
-            placeholder="no working folder"
-            aria-label="working folder path"
+            placeholder="No working folder"
+            aria-label="Working folder path"
             style="font-size: 11px;"
             onkeydown={(e) => {
               if (e.key === 'Enter') {
@@ -499,13 +519,13 @@
               }
             }}
           />
-          <button class="btn-primary" disabled={saving} onclick={save}>{saving ? 'saving…' : 'save'}</button>
+          <button class="btn-primary" disabled={saving} onclick={save}
+            ><Icon name="folder" size={13} />{saving ? 'Saving…' : 'Set folder'}</button
+          >
         </div>
-        {#if saveError}<div style="color: var(--red); font-size: 11px; margin-top: 6px;">
-            {saveError}
-          </div>{/if}
-        {#if savedFlash}<div class="label-cap" style="color: var(--accent-soft); margin-top: 6px;">
-            saved ✓
+        {#if saveError}<div class="rail-error">{saveError}</div>{/if}
+        {#if savedFlash}<div class="saved-flash" style="margin-top: 6px;">
+            <Icon name="check" size={13} />Saved
           </div>{/if}
 
         <div class="rail-divider"></div>
@@ -523,13 +543,12 @@
           ondragleave={() => (dragOver = false)}
           ondrop={onDrop}
         >
-          {#if uploading}uploading…{:else}<span class="text-dim">drop files here, or</span>
+          <Icon name="upload" size={14} />
+          {#if uploading}Uploading…{:else}<span class="text-dim">Drop files here, or</span>
             <span class="text-bright">browse</span>{/if}
         </div>
         <input bind:this={fileInput} type="file" multiple style="display: none;" onchange={onPick} />
-        {#if fileError}<div style="color: var(--red); font-size: 11px; margin-top: 6px;">
-            {fileError}
-          </div>{/if}
+        {#if fileError}<div class="rail-error">{fileError}</div>{/if}
       {:else if workDir.trim()}
         <!-- Beside a chat: just show where the agent can produce files. -->
         <div class="rail-divider"></div>
@@ -544,21 +563,21 @@
         <input
           class="field"
           bind:value={name}
-          placeholder="name"
-          aria-label="project name"
+          placeholder="Name"
+          aria-label="Project name"
           style="margin-bottom: 10px;"
         />
         <div class="label-cap" style="margin-bottom: 6px;">Description</div>
         <input
           class="field"
           bind:value={description}
-          placeholder="description"
-          aria-label="project description"
+          placeholder="Description"
+          aria-label="Project description"
           style="margin-bottom: 10px;"
         />
         <div style="display: flex; align-items: center; gap: 10px;">
-          <button class="btn-primary" onclick={save}>save</button>
-          {#if savedFlash}<span class="label-cap" style="color: var(--accent-soft);">saved ✓</span>{/if}
+          <button class="btn-primary" onclick={save}>Save</button>
+          {#if savedFlash}<span class="saved-flash"><Icon name="check" size={13} />Saved</span>{/if}
         </div>
       </Section>
     {/if}
@@ -566,39 +585,117 @@
 {/if}
 
 <style>
+  .rail-help {
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  .rail-help code {
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+  .rail-empty {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .rail-error {
+    color: var(--red);
+    font-size: 12px;
+    margin-top: 6px;
+  }
+  .saved-flash {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--green);
+  }
+
+  /* Pinned facts */
+  .mem-row {
+    display: flex;
+    gap: 6px;
+    align-items: flex-start;
+    font-size: 13px;
+  }
+  .mem-text {
+    flex: 1;
+    line-height: 1.45;
+    color: var(--fg);
+  }
+  .mem-list {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--fg);
+  }
+  .mem-list li {
+    margin-bottom: 4px;
+  }
+  .mem-list li::marker {
+    color: var(--muted);
+  }
+
+  .sched-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    font-size: 13px;
+    min-height: 24px;
+  }
+
   /* Working-files list + dropzone. */
   .file-row {
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 12px;
+    font-size: 13px;
+    min-height: 24px;
   }
   .file-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--fg);
-    text-decoration: none;
+    font-size: 12.5px;
   }
   a.file-name:hover {
     color: var(--accent-soft);
     text-decoration: underline;
   }
+  .file-size {
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
   .dropzone {
-    border: 1px dashed var(--border);
-    border-radius: var(--radius);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border: 1px dashed var(--border2);
+    border-radius: 8px;
     padding: 12px 10px;
     text-align: center;
-    font-size: 11px;
+    font-size: 12px;
+    color: var(--muted);
     cursor: pointer;
     transition:
-      border-color 0.15s,
-      background 0.15s;
+      border-color var(--dur-1),
+      background var(--dur-1);
   }
   .dropzone:hover {
-    border-color: var(--accent-soft);
+    border-color: var(--accent);
+    color: var(--fg);
   }
   .dropzone.over {
     border-color: var(--accent);
@@ -607,8 +704,7 @@
 
   /* Read-only instructions preview in the chat rail. */
   .ref-text {
-    font-family: var(--font-mono);
-    font-size: 12px;
+    font-size: 12.5px;
     line-height: 1.5;
     color: var(--fg);
     white-space: pre-wrap;
@@ -616,14 +712,12 @@
     overflow-y: auto;
   }
   .ref-edit {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     margin-top: 12px;
-    font-size: 11px;
-    color: var(--accent-soft);
-    text-decoration: none;
-  }
-  .ref-edit:hover {
-    text-decoration: underline;
+    font-size: 12px;
+    font-weight: 500;
   }
   .rail-divider {
     height: 1px;
@@ -644,10 +738,29 @@
     align-items: center;
     gap: 8px;
     padding: 5px 8px;
+    margin: 0 -8px;
     border-radius: var(--radius);
-    transition: background 0.12s var(--transition);
+    text-decoration: none;
+    transition: background var(--dur-1) var(--transition);
   }
   .prog-row:hover {
     background: var(--surface2);
+    text-decoration: none;
+  }
+  .prog-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--fg-bright);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .prog-meta {
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
   }
 </style>

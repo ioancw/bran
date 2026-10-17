@@ -3,6 +3,7 @@
   import { navigate, href, link } from '../lib/router.svelte'
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import Page from '../components/Page.svelte'
+  import Icon from '../components/Icon.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import EmptyState from '../components/EmptyState.svelte'
   import type { AgentInfo } from '../lib/types'
@@ -28,16 +29,17 @@
   }
 </script>
 
-<Page title="Agents">
-  {#snippet subtitle()}the fleet · {agents.length}{/snippet}
+<Page title="Agent library">
+  {#snippet subtitle()}{agents.length} {agents.length === 1 ? 'agent' : 'agents'}{/snippet}
   {#if error}
     <ErrorBanner {error} onretry={load} />
   {:else if !loaded}
     <Skeleton rows={5} />
   {:else if !agents.length}
     <EmptyState
-      title="no agents"
-      hint="define one in src/bran/agents.py or drop a markdown file in .claude/agents/"
+      title="No agents defined"
+      hint="Agents are defined in src/bran/agents.py or as markdown files in .claude/agents/. They will appear here."
+      icon="bot"
     />
   {:else}
     <!-- Agents are a capability catalog, not tabular records — cards surface
@@ -50,29 +52,25 @@
         <div class="agent-cell">
           <a href={href('/agents/' + encodeURIComponent(a.name))} use:link class="card agent-card">
             <div class="agent-head">
-              <span class="text-bright" style="font-weight: 600; font-size: 15px;">{a.name}</span>
-              <span class="label-cap">{a.model ?? 'default'}</span>
+              <span class="agent-name">{a.name}</span>
+              <span class="agent-model">{a.model ?? 'default model'}</span>
             </div>
-            <p class="text-dim" style="font-size: 13px; line-height: 1.5; margin: 8px 0 10px;">
-              {a.description}
-            </p>
+            <p class="agent-desc">{a.description}</p>
             {#if a.tools.length}
               <div class="agent-tools">
                 {#each a.tools.slice(0, 8) as t (t)}<span class="chip">{t}</span>{/each}
-                {#if a.tools.length > 8}<span class="label-cap" style="align-self: center;"
-                    >+{a.tools.length - 8}</span
-                  >{/if}
+                {#if a.tools.length > 8}<span class="agent-more">+{a.tools.length - 8} more</span>{/if}
               </div>
             {/if}
             {#if a.subagents.length}
-              <div class="label-cap" style="margin-top: 10px;">delegates → {a.subagents.join(', ')}</div>
+              <div class="agent-delegates">Delegates to {a.subagents.join(', ')}</div>
             {/if}
           </a>
           <button
-            class="btn-ghost agent-sched"
+            class="btn-outline btn-sm agent-sched"
             onclick={() => scheduleAgent(a.name)}
-            title="run this agent on a schedule"
-            aria-label="schedule {a.name}">schedule →</button
+            title="Run this agent on a schedule"
+            aria-label="Schedule {a.name}"><Icon name="calendar" size={13} />Schedule</button
           >
         </div>
       {/each}
@@ -84,7 +82,7 @@
   .agent-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: 16px;
+    gap: 12px;
   }
   .agent-cell {
     position: relative;
@@ -93,20 +91,31 @@
     display: block;
     height: 100%;
     text-decoration: none;
-    transition:
-      border-color 0.15s var(--transition),
-      transform 0.12s var(--transition);
   }
   .agent-card:hover {
-    transform: translateY(-1px);
-    border-color: var(--accent-soft);
+    text-decoration: none;
   }
   .agent-head {
     display: flex;
     align-items: baseline;
     gap: 8px;
     /* keep the name/model row clear of the overlaid schedule button */
-    padding-right: 92px;
+    padding-right: 100px;
+  }
+  .agent-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--fg-bright);
+  }
+  .agent-model {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .agent-desc {
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--fg-dim);
+    margin: 8px 0 10px;
   }
   .agent-sched {
     position: absolute;
@@ -116,6 +125,16 @@
   .agent-tools {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: 4px;
+  }
+  .agent-more {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .agent-delegates {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 10px;
   }
 </style>

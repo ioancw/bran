@@ -8,8 +8,13 @@
 
 <script lang="ts">
   // Renders markdown + KaTeX. Reactive: re-renders as `text` grows during
-  // streaming. The container class `.prose-md` matches global.css styling.
-  let { text, streaming = false }: { text: string; streaming?: boolean } = $props()
+  // streaming. The container class `.prose-md` matches global.css styling;
+  // pass class="reading" for the serif reading column (outputs, run results).
+  let {
+    text,
+    streaming = false,
+    class: klass = '',
+  }: { text: string; streaming?: boolean; class?: string } = $props()
 
   let renderFn = $state<((src: string) => string) | null>(null)
   void loadMd().then((m) => (renderFn = m.renderMarkdown))
@@ -17,7 +22,7 @@
   const html = $derived(renderFn ? renderFn(text) : null)
 </script>
 
-<div class="prose-md">
+<div class="prose-md {klass}">
   {#if html != null}
     <!-- eslint-disable-next-line svelte/no-at-html-tags -- renderMarkdown escapes by construction AND runs DOMPurify over the final document -->
     {@html html}{#if streaming}<span class="stream-cursor"></span>{/if}

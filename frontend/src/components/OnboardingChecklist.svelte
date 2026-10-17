@@ -41,7 +41,9 @@
     <div class="onboard-head">
       <span class="label-cap">Get to know bran</span>
       <span class="ml-auto label-cap">{doneCount}/{steps.length}</span>
-      <button class="btn-icon onboard-x" onclick={dismiss} title="Dismiss" aria-label="Dismiss"><Icon name="x" size={12} /></button>
+      <button class="btn-icon onboard-x" onclick={dismiss} title="Dismiss" aria-label="Dismiss"
+        ><Icon name="x" size={12} /></button
+      >
     </div>
     <div class="onboard-bar">
       <div class="onboard-fill" style="width: {(doneCount / steps.length) * 100}%;"></div>
@@ -49,7 +51,9 @@
     <div class="onboard-steps">
       {#each steps as s (s.label)}
         <a href={href(s.to)} use:link class="onboard-step" class:done={s.done}>
-          <span class="onboard-check" class:done={s.done}>{#if s.done}<Icon name="check" size={9} stroke={3} />{/if}</span>
+          <span class="onboard-check" class:done={s.done}
+            >{#if s.done}<Icon name="check" size={9} stroke={3} />{/if}</span
+          >
           <span style="text-decoration: {s.done ? 'line-through' : 'none'};">{s.label}</span>
         </a>
       {/each}

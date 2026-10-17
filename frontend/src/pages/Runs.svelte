@@ -7,12 +7,13 @@
   import Skeleton from '../components/Skeleton.svelte'
   import EmptyState from '../components/EmptyState.svelte'
   import StatusBadge from '../components/StatusBadge.svelte'
+  import Icon from '../components/Icon.svelte'
   import type { RunRecord } from '../lib/types'
 
   let runs = $state<RunRecord[]>([])
   let loaded = $state(false)
   let error = $state<string | null>(null)
-  // Page size grows via "load older" — no silent 200-row cliff.
+  // Page size grows via "Show older" — no silent 200-row cliff.
   let limit = $state(200)
   let loadingMore = $state(false)
   const maybeMore = $derived(runs.length >= limit)
@@ -30,6 +31,8 @@
   let statusFilter = $state<Status>('all')
   const matchStatus = (r: RunRecord, s: Status) =>
     s === 'all' || (s === 'running' ? r.status === 'running' || r.status === 'pending' : r.status === s)
+
+  const label = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 
   const shown = $derived(
     runs.filter((r) => (filter === 'all' || r.source === filter) && matchStatus(r, statusFilter)),
@@ -85,70 +88,68 @@
     <Skeleton rows={5} />
   {:else if !runs.length}
     <EmptyState
-      title="no runs yet"
-      hint="run an agent — from chat, a runner, or the CLI — and it lands here"
+      title="No runs yet"
+      hint="Every agent run lands here: from chat, from a runner, or from the command line."
+      icon="history"
     />
   {:else}
-    <div style="display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; align-items: center;">
-      {#each SOURCES as s (s)}
-        <button class="chip" class:on={filter === s} onclick={() => (filter = s)}>
-          {s} <span class="chip-n">{countFor(s)}</span>
-        </button>
-      {/each}
-      <span class="chip-sep"></span>
-      {#each STATUSES as s (s)}
-        <button
-          class="chip"
-          class:on={statusFilter === s}
-          class:warn={s === 'failed'}
-          onclick={() => (statusFilter = s)}
-        >
-          {s} <span class="chip-n">{countForStatus(s)}</span>
-        </button>
-      {/each}
+    <div class="filters">
+      <div class="seg" role="group" aria-label="Source">
+        {#each SOURCES as s (s)}
+          <button
+            class="seg-btn"
+            class:on={filter === s}
+            aria-pressed={filter === s}
+            onclick={() => (filter = s)}
+          >
+            {label(s)} <span class="seg-n">{countFor(s)}</span>
+          </button>
+        {/each}
+      </div>
+      <div class="seg" role="group" aria-label="Status">
+        {#each STATUSES as s (s)}
+          <button
+            class="seg-btn"
+            class:on={statusFilter === s}
+            class:warn={s === 'failed'}
+            aria-pressed={statusFilter === s}
+            onclick={() => (statusFilter = s)}
+          >
+            {label(s)} <span class="seg-n">{countForStatus(s)}</span>
+          </button>
+        {/each}
+      </div>
     </div>
     <div style="overflow-x: auto;">
-      <table class="bran-table" style="min-width: 720px;">
+      <table class="bran-table" style="min-width: 760px;">
         <thead>
           <tr>
-            <th>ID</th><th>Agent</th><th>Source</th><th>Status</th><th>Started</th><th class="num">Dur</th><th
-              class="num">Cost</th
-            ><th>Task</th>
+            <th>ID</th><th>Agent</th><th>Source</th><th>Status</th><th>Started</th><th class="num"
+              >Duration</th
+            ><th class="num">Cost</th><th>Task</th>
           </tr>
         </thead>
         <tbody>
           {#each shown as r (r.id)}
             <tr>
               <td>
-                <a
-                  href={href('/runs/' + r.id)}
-                  use:link
-                  class="mono"
-                  style="color: var(--fg-dim); text-decoration: none;">{shortId(r.id)}</a
-                >
-                {#if r.parent_run_id}<span
-                    class="text-muted"
-                    title="spawned by another run"
-                    style="font-size: 10px;"
-                  >
-                    ↳</span
-                  >{/if}
+                <span class="id-cell">
+                  <a href={href('/runs/' + r.id)} use:link class="mono id-link">{shortId(r.id)}</a>
+                  {#if r.parent_run_id}<span class="text-muted" title="Spawned by another run"
+                      ><Icon name="corner-down-right" size={12} /></span
+                    >{/if}
+                </span>
               </td>
               <td style="color: var(--fg-bright);">{r.agent}</td>
               <td><span class="src src-{r.source}">{r.source}</span></td>
               <td><StatusBadge status={r.status} /></td>
-              <td style="color: var(--fg-dim); white-space: nowrap;">{localDateTime(r.started_at)}</td>
-              <td class="num" style="color: var(--fg-dim);">{fmtDuration(r.duration_ms)}</td>
-              <td class="num" style="color: var(--fg-dim);">{fmtCost(r.total_cost_usd)}</td>
-              <td style="color: var(--fg-dim); max-width: 320px;">
-                <div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{r.task}</div>
+              <td class="text-dim" style="white-space: nowrap;">{localDateTime(r.started_at)}</td>
+              <td class="num mono">{fmtDuration(r.duration_ms)}</td>
+              <td class="num mono">{fmtCost(r.total_cost_usd)}</td>
+              <td class="text-dim" style="max-width: 320px;">
+                <div class="task-line">{r.task}</div>
                 {#if r.status === 'failed' && r.error}
-                  <div
-                    title={r.error}
-                    style="color: var(--red); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
-                  >
-                    {r.error}
-                  </div>
+                  <div class="task-err" title={r.error}>{r.error}</div>
                 {/if}
               </td>
             </tr>
@@ -157,9 +158,9 @@
       </table>
     </div>
     {#if maybeMore}
-      <div style="text-align: center; margin-top: 12px;">
+      <div style="text-align: center; margin-top: 14px;">
         <button class="btn-outline" disabled={loadingMore} onclick={loadMore}>
-          {loadingMore ? 'loading…' : 'load older →'}
+          {loadingMore ? 'Loading…' : 'Show older runs'}
         </button>
       </div>
     {/if}
@@ -167,41 +168,76 @@
 </Page>
 
 <style>
-  .chip {
-    background: transparent;
+  .filters {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .seg {
+    display: inline-flex;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+  .seg-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 26px;
+    padding: 0 9px;
+    background: var(--surface);
     border: 1px solid var(--border2);
-    border-radius: 999px;
-    padding: 4px 12px;
+    border-radius: var(--radius);
     font-size: 12px;
+    font-weight: 500;
     color: var(--fg-dim);
     cursor: pointer;
-    text-transform: capitalize;
-    transition: all 0.12s var(--transition);
+    transition:
+      background var(--dur-1) var(--transition),
+      color var(--dur-1) var(--transition),
+      border-color var(--dur-1) var(--transition);
   }
-  .chip:hover {
+  .seg-btn:hover {
+    background: var(--surface2);
     color: var(--fg-bright);
-    border-color: var(--muted);
   }
-  .chip.on {
+  .seg-btn.on {
     background: var(--accent-glow);
-    border-color: var(--accent-soft);
+    border-color: transparent;
     color: var(--accent-soft);
   }
-  .chip.warn.on {
-    background: color-mix(in srgb, var(--red) 12%, transparent);
-    border-color: var(--red);
+  .seg-btn.warn.on {
+    background: var(--red-soft);
     color: var(--red);
   }
-  .chip-n {
-    opacity: 0.6;
-    font-family: var(--font-mono);
-    font-size: 10px;
+  .seg-n {
+    font-size: 11px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
   }
-  .chip-sep {
-    width: 1px;
-    height: 18px;
-    background: var(--border2);
-    margin: 0 4px;
+  .seg-btn.on .seg-n {
+    color: inherit;
+    opacity: 0.75;
   }
-  /* .src / .src-* now live in global.css (shared source-pill component). */
+  .id-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .id-link {
+    color: var(--fg-dim);
+  }
+  .task-line {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .task-err {
+    color: var(--red);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 </style>

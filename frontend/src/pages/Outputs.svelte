@@ -15,6 +15,7 @@
   import Skeleton from '../components/Skeleton.svelte'
   import EmptyState from '../components/EmptyState.svelte'
   import Prose from '../components/Prose.svelte'
+  import Icon from '../components/Icon.svelte'
   import type { RunRecord, ScheduleRecord } from '../lib/types'
 
   let runs = $state<RunRecord[]>([])
@@ -22,6 +23,10 @@
   let loaded = $state(false)
   let error = $state<string | null>(null)
   let expanded = $state<Record<string, boolean>>({})
+  // Page size grows via "Show older outputs" — no silent 200-row cliff.
+  let limit = $state(200)
+  let loadingMore = $state(false)
+  const maybeMore = $derived(runs.length >= limit)
 
   // Free-text search (server-side, over every completed output) + a starred-only
   // view. Read/star state is durable + cross-browser (server output_state).
@@ -32,11 +37,14 @@
   // were new at that moment stay highlighted for the visit, even though we mark
   // them read on the server straight away (which clears the sidebar badge).
   let freshIds = $state<Set<string>>(new Set())
+  let copiedId = $state<string | null>(null)
+  let copiedTimer: ReturnType<typeof setTimeout> | undefined
 
   // Outputs come from autonomous/managed runs, never interactive chat turns.
   const SOURCES = ['all', 'runner', 'spawn', 'manual'] as const
   type Source = (typeof SOURCES)[number]
   let filter = $state<Source>('all')
+  const label = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 
   // A runner-fired output is titled by the *runner* (the thing you named),
   // not the agent that powers it.
@@ -64,7 +72,7 @@
       await api.starOutput(r.id, want)
     } catch {
       runs = runs.map((x) => (x.id === r.id ? { ...x, starred: !want } : x)) // revert
-      toast('could not update star', 'err')
+      toast('Could not update star', 'err')
     }
   }
 
@@ -76,7 +84,7 @@
     const diffDays = Math.round((startOf(today) - startOf(d)) / 86400000)
     if (diffDays === 0) return 'Today'
     if (diffDays === 1) return 'Yesterday'
-    return d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })
+    return d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })
   }
   const groups = $derived.by(() => {
     const out: { label: string; items: RunRecord[] }[] = []
@@ -106,13 +114,15 @@
   async function copyResult(r: RunRecord) {
     try {
       await navigator.clipboard.writeText(r.result ?? '')
-      toast('copied to clipboard', 'ok')
+      copiedId = r.id
+      clearTimeout(copiedTimer)
+      copiedTimer = setTimeout(() => (copiedId = null), 2000)
     } catch {
-      toast('clipboard unavailable', 'err')
+      toast('Clipboard unavailable', 'err')
     }
   }
 
-  // "discuss →" hands the output to the orchestrator: open a new chat with the
+  // "Discuss" hands the output to the orchestrator: open a new chat with the
   // composer pre-filled (?draft= — not auto-sent) so the user appends their
   // question; the agent pulls the full text itself via get_run_result.
   function discuss(r: RunRecord) {
@@ -126,7 +136,7 @@
     error = null // clear a stale banner so a recovered search/refresh shows clean
     try {
       ;[runs, runners] = await Promise.all([
-        api.runs({ limit: 200, exclude_chats: true, status: 'completed', q }),
+        api.runs({ limit, exclude_chats: true, status: 'completed', q }),
         api.schedules(),
       ])
     } catch (e) {
@@ -150,6 +160,16 @@
       }
     }
   }
+  async function loadMore() {
+    if (loadingMore) return
+    loadingMore = true
+    limit += 200
+    try {
+      await load()
+    } finally {
+      loadingMore = false
+    }
+  }
   // Debounced: initial load (q='') and every search keystroke run through here.
   $effect(() => {
     void q
@@ -171,7 +191,7 @@
 </script>
 
 <Page title="Outputs">
-  {#snippet subtitle()}what your agents produced{/snippet}
+  {#snippet subtitle()}What your agents produced{/snippet}
 
   {#if error}<ErrorBanner {error} onretry={load} />{/if}
   {#if !loaded}
@@ -179,25 +199,33 @@
   {:else}
     {#if outputs.length || q.trim() || starredOnly}
       <div class="out-controls">
-        <input
-          class="field out-search"
-          type="search"
-          bind:value={q}
-          placeholder="search outputs…"
-          aria-label="search outputs"
-        />
-        <div class="out-chips">
+        <div class="search-wrap">
+          <Icon name="search" size={14} class="search-ico" />
+          <input
+            class="field out-search"
+            type="search"
+            bind:value={q}
+            placeholder="Search outputs"
+            aria-label="Search outputs"
+          />
+        </div>
+        <div class="seg" role="group" aria-label="Source">
           {#each SOURCES as s (s)}
-            <button class="chip" class:on={filter === s} onclick={() => (filter = s)}>
-              {s} <span class="chip-n">{countFor(s)}</span>
+            <button
+              class="seg-btn"
+              class:on={filter === s}
+              aria-pressed={filter === s}
+              onclick={() => (filter = s)}
+            >
+              {label(s)} <span class="seg-n">{countFor(s)}</span>
             </button>
           {/each}
           <button
-            class="chip star-chip"
+            class="seg-btn"
             class:on={starredOnly}
             onclick={() => (starredOnly = !starredOnly)}
             aria-pressed={starredOnly}
-            title="show starred only">★ starred</button
+            title="Show starred only"><Icon name="star" size={12} />Starred</button
           >
         </div>
       </div>
@@ -205,17 +233,22 @@
 
     {#if !shown.length}
       {#if q.trim()}
-        <EmptyState title="no matches" hint={`nothing in your outputs matches “${q.trim()}”`} />
+        <EmptyState
+          title="No matches"
+          hint={`Nothing in your outputs matches “${q.trim()}”.`}
+          icon="search"
+        />
       {:else if starredOnly}
-        <EmptyState title="no starred outputs" hint="star an output (☆) to keep it here" />
+        <EmptyState title="No starred outputs" hint="Star an output to keep it here." icon="star" />
       {:else}
         <EmptyState
-          title="no outputs yet"
-          hint="when a runner fires or a background agent finishes, its result lands here to read"
+          title="No outputs yet"
+          hint="When a runner fires or a background agent finishes, its result lands here to read."
+          icon="inbox"
         >
-          <a href={href('/runners')} use:link class="text-accent-soft" style="text-decoration: none;"
-            >create a runner →</a
-          >
+          <a href={href('/runners')} use:link class="btn-primary">
+            <Icon name="plus" size={14} stroke={2.2} />Create a runner
+          </a>
         </EmptyState>
       {/if}
     {:else}
@@ -232,48 +265,44 @@
               class:alerted={isAlertResult(r)}
             >
               <header class="out-head">
-                {#if freshIds.has(r.id)}<span class="new-dot" title="new since your last visit"></span>{/if}
-                <a href={href('/runs/' + r.id)} use:link class="out-agent text-bright">{titleFor(r)}</a>
+                {#if freshIds.has(r.id)}<span class="dot accent" title="New since your last visit"
+                  ></span>{/if}
+                <a href={href('/runs/' + r.id)} use:link class="out-agent">{titleFor(r)}</a>
                 <span class="src src-{r.source}">{r.source}</span>
-                {#if isAlertResult(r)}<span class="alert-tag" title="this run crossed its alert bar"
-                    >🚨 alert</span
+                {#if isAlertResult(r)}<span class="pill err" title="This run crossed its alert bar"
+                    ><Icon name="alert-triangle" size={12} />Alert</span
                   >{/if}
                 {#if runner?.delta}<span
-                    class="delta-tag"
-                    title="delta report — only what changed since the last run">Δ</span
+                    class="pill accent"
+                    title="Delta report: only what changed since the last run">Delta</span
                   >{/if}
                 {#if badge}<span
                     class="pill {badge.tone === 'ok' ? 'ok' : 'warn'}"
-                    style="font-size: 10px;"
-                    title="reviewed by the verification evaluator">{badge.label}</span
+                    title="Reviewed by the verification evaluator">{badge.label}</span
                   >{/if}
                 <span class="text-muted out-task" title={r.task}
                   >{runner ? `${r.agent} · ${r.task}` : r.task}</span
                 >
-                <span
-                  class="ml-auto text-dim"
-                  style="font-size: 11px; white-space: nowrap;"
-                  title={localDateTime(r.started_at)}>{relativeTime(r.started_at)}</span
-                >
+                <span class="out-time" title={localDateTime(r.started_at)}>{relativeTime(r.started_at)}</span>
                 <button
-                  class="star-btn"
+                  class="btn-icon star-btn"
                   class:on={r.starred}
                   aria-pressed={r.starred}
-                  title={r.starred ? 'unstar' : 'star'}
-                  aria-label={r.starred ? 'unstar output' : 'star output'}
-                  onclick={(e) => toggleStar(r, e)}>{r.starred ? '★' : '☆'}</button
+                  title={r.starred ? 'Unstar' : 'Star'}
+                  aria-label={r.starred ? 'Unstar output' : 'Star output'}
+                  onclick={(e) => toggleStar(r, e)}><Icon name="star" size={15} /></button
                 >
               </header>
-              <div class="out-body" class:clamp={isLong(r.result ?? '') && !expanded[r.id]}>
-                <div class="msg-prose"><Prose text={r.result ?? ''} /></div>
+              <div class="out-body reading-col" class:clamp={isLong(r.result ?? '') && !expanded[r.id]}>
+                <Prose text={r.result ?? ''} />
               </div>
               {#if isLong(r.result ?? '')}
                 <button
-                  class="more"
+                  class="btn-text more"
                   aria-expanded={!!expanded[r.id]}
                   onclick={() => (expanded = { ...expanded, [r.id]: !expanded[r.id] })}
                 >
-                  {expanded[r.id] ? 'show less' : 'show more'}
+                  {expanded[r.id] ? 'Show less' : 'Show more'}
                 </button>
               {/if}
               <footer class="out-actions">
@@ -281,29 +310,49 @@
                   <a
                     href={'/spa/runs/' + encodeURIComponent(r.id) + '/artifacts/' + a.index}
                     download
-                    class="art-chip mono"
-                    title="download file produced by this run">📄 {a.name}</a
+                    class="btn-outline btn-sm art-chip"
+                    title="Download file produced by this run"
+                    ><Icon name="file-text" size={12} /><span class="mono">{a.name}</span></a
                   >
                 {/each}
-                <button class="act" onclick={() => copyResult(r)}>copy</button>
-                <button class="act" onclick={() => discuss(r)}>discuss →</button>
+                <span class="spacer"></span>
+                <button class="btn-ghost btn-sm" onclick={() => copyResult(r)}>
+                  {#if copiedId === r.id}<Icon name="check" size={13} />Copied{:else}<Icon
+                      name="copy"
+                      size={13}
+                    />Copy{/if}
+                </button>
+                <button class="btn-ghost btn-sm" onclick={() => discuss(r)}
+                  ><Icon name="message-square" size={13} />Discuss</button
+                >
                 {#if runner}
-                  <a href={href('/runners/' + encodeURIComponent(runner.name))} use:link class="act"
-                    >runner →</a
+                  <a
+                    href={href('/runners/' + encodeURIComponent(runner.name))}
+                    use:link
+                    class="btn-ghost btn-sm"
                   >
+                    <Icon name="bot" size={13} />Open runner
+                  </a>
                 {/if}
               </footer>
             </article>
           {/each}
         </div>
       {/each}
+      {#if maybeMore}
+        <div style="text-align: center; margin: 4px 0 20px;">
+          <button class="btn-outline" disabled={loadingMore} onclick={loadMore}>
+            {loadingMore ? 'Loading…' : 'Show older outputs'}
+          </button>
+        </div>
+      {/if}
     {/if}
   {/if}
 </Page>
 
 <style>
   .day-label {
-    color: var(--muted);
+    display: block;
     margin: 0 0 10px;
     padding-bottom: 6px;
     border-bottom: 1px solid var(--border);
@@ -312,62 +361,33 @@
     padding: 16px 18px;
   }
   .output.fresh {
-    border-color: color-mix(in srgb, var(--accent-soft) 45%, var(--border));
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
   }
   /* "Nothing much changed" delta reports: compact + visually quiet. */
   .output.quiet {
     padding: 10px 18px;
     background: transparent;
   }
-  .output.quiet :global(.prose-md) {
-    font-size: 14px;
+  .output.quiet .reading-col :global(.prose-md) {
+    font-family: var(--font-ui);
+    font-size: 13.5px;
     color: var(--fg-dim);
-  }
-  .delta-tag {
-    display: inline-block;
-    padding: 0 6px;
-    border-radius: 4px;
-    background: var(--accent-glow);
-    color: var(--accent-soft);
-    font-family: var(--font-mono);
-    font-size: 10px;
-    cursor: help;
   }
   /* A sensing runner that crossed its bar — the one card that must not be missed. */
   .output.alerted {
     border-color: color-mix(in srgb, var(--red) 55%, var(--border));
   }
-  .alert-tag {
-    display: inline-block;
-    padding: 0 6px;
-    border-radius: 4px;
-    background: color-mix(in srgb, var(--red) 14%, transparent);
-    color: var(--red);
-    font-family: var(--font-mono);
-    font-size: 10px;
-    white-space: nowrap;
-    cursor: help;
-  }
-  .new-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--accent-soft);
-    flex-shrink: 0;
-    align-self: center;
-  }
   .out-head {
     display: flex;
-    align-items: baseline;
-    gap: 10px;
-    margin-bottom: 10px;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
   }
   .out-agent {
     font-size: 14px;
-    text-decoration: none;
-  }
-  .out-agent:hover {
-    text-decoration: underline;
+    font-weight: 600;
+    color: var(--fg-bright);
   }
   .out-task {
     font-size: 12px;
@@ -376,92 +396,62 @@
     white-space: nowrap;
     max-width: 46ch;
   }
-  /* Collapsed long outputs fade out; "show more" expands them in place. */
+  .out-time {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .star-btn.on {
+    color: var(--amber);
+  }
+  .star-btn.on :global(svg) {
+    fill: currentColor;
+  }
+
+  /* The briefing is the product: it reads like print. */
+  .reading-col {
+    max-width: var(--chat-col);
+  }
+  .reading-col :global(.prose-md) {
+    font-family: var(--font-prose);
+    font-size: 16.5px;
+    line-height: 1.7;
+  }
+  /* Collapsed long outputs fade out; "Show more" expands them in place. */
   .out-body {
     position: relative;
   }
   .out-body.clamp {
-    max-height: 200px;
+    max-height: 220px;
     overflow: hidden;
     -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent);
     mask-image: linear-gradient(to bottom, #000 70%, transparent);
   }
   .more {
     margin-top: 8px;
-    background: transparent;
-    border: 0;
-    padding: 2px 0;
-    font-size: 12px;
-    color: var(--accent-soft);
-    cursor: pointer;
-  }
-  .more:hover {
-    text-decoration: underline;
   }
 
   .out-actions {
     display: flex;
     align-items: center;
-    gap: 14px;
-    margin-top: 10px;
-    padding-top: 8px;
+    gap: 6px;
+    margin-top: 12px;
+    padding-top: 10px;
     border-top: 1px solid var(--border);
     flex-wrap: wrap;
   }
+  .out-actions .spacer {
+    flex: 1;
+  }
   .art-chip {
-    font-size: 11px;
-    color: var(--accent-soft);
     text-decoration: none;
-    border: 1px solid var(--border2);
-    border-radius: 999px;
-    padding: 2px 10px;
-    transition: border-color 0.12s var(--transition);
   }
-  .art-chip:hover {
-    border-color: var(--accent-soft);
-  }
-  .act {
-    background: transparent;
-    border: 0;
-    padding: 0;
+  .art-chip .mono {
     font-size: 11.5px;
-    font-family: var(--font-mono);
-    color: var(--muted);
-    cursor: pointer;
-    text-decoration: none;
-    transition: color 0.12s var(--transition);
-  }
-  .act:hover {
-    color: var(--accent-soft);
   }
 
-  .chip {
-    background: transparent;
-    border: 1px solid var(--border2);
-    border-radius: 999px;
-    padding: 4px 12px;
-    font-size: 12px;
-    color: var(--fg-dim);
-    cursor: pointer;
-    text-transform: capitalize;
-    transition: all 0.12s var(--transition);
-  }
-  .chip:hover {
-    color: var(--fg-bright);
-    border-color: var(--muted);
-  }
-  .chip.on {
-    background: var(--accent-glow);
-    border-color: var(--accent-soft);
-    color: var(--accent-soft);
-  }
-  .chip-n {
-    opacity: 0.6;
-    font-family: var(--font-mono);
-    font-size: 10px;
-  }
-
-  /* Controls row: search on the left, source + starred chips on the right. */
+  /* Controls row: search on the left, source + starred segments on the right. */
   .out-controls {
     display: flex;
     align-items: center;
@@ -469,41 +459,61 @@
     flex-wrap: wrap;
     margin-bottom: 18px;
   }
-  .out-search {
-    max-width: 280px;
+  .search-wrap {
+    position: relative;
+    width: min(300px, 100%);
   }
-  .out-chips {
-    display: flex;
-    gap: 6px;
+  .search-wrap :global(.search-ico) {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--muted);
+    pointer-events: none;
+  }
+  .search-wrap input.out-search.field {
+    padding-left: 32px;
+  }
+  .seg {
+    display: inline-flex;
+    gap: 4px;
     flex-wrap: wrap;
     margin-left: auto;
   }
-  .star-chip.on {
-    color: var(--accent-soft);
-  }
-
-  /* Per-card star toggle (far right of the header). */
-  .star-btn {
-    background: transparent;
-    border: 0;
-    padding: 0 2px;
-    margin-left: 2px;
-    font-size: 15px;
-    line-height: 1;
-    color: var(--muted);
+  .seg-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 26px;
+    padding: 0 9px;
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--fg-dim);
     cursor: pointer;
-    align-self: center;
     transition:
-      color 0.12s var(--transition),
-      transform 0.1s var(--transition);
+      background var(--dur-1) var(--transition),
+      color var(--dur-1) var(--transition),
+      border-color var(--dur-1) var(--transition);
   }
-  .star-btn:hover {
+  .seg-btn:hover {
+    background: var(--surface2);
+    color: var(--fg-bright);
+  }
+  .seg-btn.on {
+    background: var(--accent-glow);
+    border-color: transparent;
     color: var(--accent-soft);
   }
-  .star-btn:active {
-    transform: scale(0.88);
+  .seg-n {
+    font-size: 11px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
   }
-  .star-btn.on {
-    color: var(--accent-soft);
+  .seg-btn.on .seg-n {
+    color: inherit;
+    opacity: 0.75;
   }
 </style>

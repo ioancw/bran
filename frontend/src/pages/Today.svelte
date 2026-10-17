@@ -9,6 +9,7 @@
   import { relativeTime, localDateTime, localClock, countdown, fmtCost } from '../lib/time'
   import { isAlertResult, isSuperseded, verifyBadge } from '../lib/verification'
   import Page from '../components/Page.svelte'
+  import Icon from '../components/Icon.svelte'
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import EmptyState from '../components/EmptyState.svelte'
@@ -74,7 +75,7 @@
 
   // First lines of real prose for the delivery cards — skip markdown chrome
   // (headers, lists, tables) and strip inline markup so the snippet reads
-  // like a sentence, not raw source (**asterisks** in a preview scream demo).
+  // like a sentence, not raw source.
   function snippet(text: string, limit = 220): string {
     const parts: string[] = []
     for (const raw of text.split('\n')) {
@@ -132,16 +133,13 @@
     <Skeleton rows={5} />
   {:else if !runs.length && !schedules.length}
     <EmptyState
-      title="nothing yet"
-      hint="once your agents start working, this page becomes their morning report"
+      title="Nothing here yet"
+      hint="Once your agents start working, this page becomes their morning report: deliveries, failures, and what's coming up."
+      icon="calendar"
     >
-      <a href={href('/runners')} use:link class="text-accent-soft" style="text-decoration: none;"
-        >create a runner →</a
+      <a href={href('/runners')} use:link class="btn-primary"><Icon name="plus" size={14} />Create a runner</a
       >
-      <span class="text-muted" style="margin: 0 8px;">·</span>
-      <a href={href('/chat')} use:link class="text-accent-soft" style="text-decoration: none;"
-        >start a chat →</a
-      >
+      <a href={href('/chat')} use:link class="btn-outline">Start a chat</a>
     </EmptyState>
   {:else}
     <div class="grid grid-cols-3 gap-6">
@@ -149,17 +147,17 @@
       <div class="col-span-2 space-y-6">
         {#if attention.length}
           <section>
-            <div class="sec-label label-cap" style="color: var(--red);">needs attention</div>
+            <div class="sec-head">
+              <span class="label-cap sec-alert"><Icon name="alert-circle" size={13} />Needs attention</span>
+            </div>
             <div class="space-y-2">
               {#each attention as r (r.id)}
-                <a href={href('/runs/' + r.id)} use:link class="att card-quiet">
-                  <span class="text-bright" style="font-size: 13px; font-weight: 500;">{titleFor(r)}</span>
+                <a href={href('/runs/' + r.id)} use:link class="att card">
+                  <span class="att-title">{titleFor(r)}</span>
                   <span class="src src-{r.source}">{r.source}</span>
-                  <span class="ml-auto text-dim" style="font-size: 11px; white-space: nowrap;"
-                    >{relativeTime(r.started_at)}</span
-                  >
+                  <span class="ml-auto meta">{relativeTime(r.started_at)}</span>
                   <span class="att-err" title={r.error ?? ''}
-                    >{r.error ?? 'failed with no error message'}</span
+                    >{r.error ?? 'Failed with no error message'}</span
                   >
                 </a>
               {/each}
@@ -168,35 +166,34 @@
         {/if}
 
         <section>
-          <div class="sec-label label-cap" style="display: flex; align-items: baseline;">
-            {deliveriesLabel}
-            <a href={href('/outputs')} use:link class="ml-auto sec-more">all outputs →</a>
+          <div class="sec-head">
+            <span class="label-cap">{deliveriesLabel}</span>
+            <a href={href('/outputs')} use:link class="ml-auto sec-more"
+              >All outputs<Icon name="arrow-right" size={13} /></a
+            >
           </div>
           {#if deliveries.length}
             <div class="space-y-2">
               {#each deliveries as r (r.id)}
                 {@const badge = verifyBadge(r)}
                 <a href={href('/runs/' + r.id)} use:link class="dlv card">
-                  <header style="display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px;">
-                    {#if !r.read_at}<span class="new-dot" title="unread"></span>{/if}
-                    <span class="text-bright" style="font-size: 14px; font-weight: 500;">{titleFor(r)}</span>
+                  <header class="dlv-head">
+                    {#if !r.read_at}<span class="dot accent" title="Unread"></span>{/if}
+                    <span class="dlv-title">{titleFor(r)}</span>
                     <span class="src src-{r.source}">{r.source}</span>
-                    {#if isAlertResult(r)}<span class="alert-tag" title="this run crossed its alert bar"
-                        >🚨 alert</span
+                    {#if isAlertResult(r)}<span class="pill err" title="This run crossed its alert bar"
+                        ><Icon name="alert-triangle" size={12} />Alert</span
                       >{/if}
                     {#if runnerFor(r)?.delta}<span
-                        class="delta-tag"
-                        title="delta report — only what changed since the last run">Δ</span
+                        class="pill accent"
+                        title="Delta report: only what changed since the last run">Delta</span
                       >{/if}
                     {#if badge}<span
                         class="pill {badge.tone === 'ok' ? 'ok' : 'warn'}"
-                        style="font-size: 10px;"
-                        title="reviewed by the verification evaluator">{badge.label}</span
+                        title="Reviewed by the verification evaluator">{badge.label}</span
                       >{/if}
-                    <span
-                      class="ml-auto text-dim"
-                      style="font-size: 11px; white-space: nowrap;"
-                      title={localDateTime(r.started_at)}>{relativeTime(r.started_at)}</span
+                    <span class="ml-auto meta" title={localDateTime(r.started_at)}
+                      >{relativeTime(r.started_at)}</span
                     >
                   </header>
                   <p class="dlv-snippet">{snippet(r.result ?? '')}</p>
@@ -204,14 +201,9 @@
               {/each}
             </div>
           {:else}
-            <div class="text-muted" style="font-size: 13px; font-style: italic;">
-              nothing delivered yet — <a
-                href={href('/runners')}
-                use:link
-                class="text-accent-soft"
-                style="text-decoration: none;">create a runner</a
-              > to change that.
-            </div>
+            <p class="quiet">
+              Nothing delivered yet. <a href={href('/runners')} use:link>Create a runner</a> to change that.
+            </p>
           {/if}
         </section>
       </div>
@@ -219,42 +211,44 @@
       <!-- Right rail: coming up + today's tally -->
       <aside class="col-span-1 space-y-4">
         <div class="card">
-          <div class="label-cap" style="margin-bottom: 10px;">coming up</div>
+          <div class="label-cap" style="margin-bottom: 8px;">Coming up</div>
           {#if upcoming.length}
-            <div class="space-y-2">
+            <div class="up-list">
               {#each upcoming as s (s.id)}
                 <a href={href('/runners/' + encodeURIComponent(s.name))} use:link class="up-row">
-                  <span class="up-name text-bright">{s.name}</span>
-                  <span class="up-when mono text-accent-soft">{countdown(s.next_run!, now)}</span>
-                  <span class="up-meta text-muted">{s.agent} · {localClock(s.next_run!)}</span>
+                  <span class="up-name">{s.name}</span>
+                  <span class="up-when">{countdown(s.next_run!, now)}</span>
+                  <span class="up-meta">{s.agent} · {localClock(s.next_run!)}</span>
                 </a>
               {/each}
             </div>
           {:else}
-            <div class="text-muted" style="font-size: 12.5px; font-style: italic;">no scheduled runners.</div>
+            <p class="quiet">No scheduled runners.</p>
           {/if}
         </div>
 
         <div class="card-quiet">
-          <div class="label-cap" style="margin-bottom: 8px;">today's activity</div>
+          <div class="label-cap" style="margin-bottom: 10px;">Today's activity</div>
           <div class="tally">
-            <div>
-              <span class="num text-bright">{stats.completed}</span> <span class="label-cap">done</span>
+            <div class="stat">
+              <span class="stat-num num">{stats.completed}</span>
+              <span class="stat-label">Done</span>
             </div>
-            <div>
-              <span class="num" style="color: {stats.failed ? 'var(--red)' : 'var(--fg-bright)'};"
-                >{stats.failed}</span
-              > <span class="label-cap">failed</span>
+            <div class="stat">
+              <span class="stat-num num" class:bad={stats.failed > 0}>{stats.failed}</span>
+              <span class="stat-label">Failed</span>
             </div>
-            <div>
-              <span class="num text-bright">{stats.running}</span> <span class="label-cap">running</span>
+            <div class="stat">
+              <span class="stat-num num">{stats.running}</span>
+              <span class="stat-label">Running</span>
             </div>
-            <div>
-              <span class="num text-bright">{fmtCost(stats.cost)}</span> <span class="label-cap">cost</span>
+            <div class="stat">
+              <span class="stat-num num">{fmtCost(stats.cost)}</span>
+              <span class="stat-label">Cost</span>
             </div>
           </div>
-          <a href={href('/runs')} use:link class="sec-more" style="display: inline-block; margin-top: 8px;"
-            >activity log →</a
+          <a href={href('/runs')} use:link class="sec-more" style="margin-top: 12px;"
+            >Activity log<Icon name="arrow-right" size={13} /></a
           >
         </div>
       </aside>
@@ -263,37 +257,57 @@
 </Page>
 
 <style>
-  .sec-label {
-    color: var(--muted);
+  .sec-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     margin-bottom: 10px;
-    padding-bottom: 6px;
-    border-bottom: 1px solid var(--border);
+  }
+  .sec-alert {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--red);
   }
   .sec-more {
-    font-size: 11px;
-    font-family: var(--font-mono);
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 12px;
+    font-weight: 500;
     color: var(--muted);
     text-decoration: none;
-    text-transform: none;
-    letter-spacing: 0;
   }
   .sec-more:hover {
     color: var(--accent-soft);
+    text-decoration: none;
+  }
+  .meta {
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .quiet {
+    font-size: 13px;
+    color: var(--muted);
   }
 
   .att {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 10px;
     flex-wrap: wrap;
     padding: 10px 14px;
     text-decoration: none;
-    border-left: 2px solid var(--red);
-    border-radius: var(--radius);
-    transition: background 0.12s var(--transition);
+    border-color: color-mix(in srgb, var(--red) 30%, var(--border));
   }
   .att:hover {
-    background: var(--surface2);
+    text-decoration: none;
+  }
+  .att-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--fg-bright);
   }
   .att-err {
     flex-basis: 100%;
@@ -308,10 +322,21 @@
     display: block;
     padding: 14px 16px;
     text-decoration: none;
-    transition: border-color 0.12s var(--transition);
   }
   .dlv:hover {
-    border-color: var(--muted);
+    text-decoration: none;
+  }
+  .dlv-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  .dlv-title {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--fg-bright);
   }
   .dlv-snippet {
     margin: 0;
@@ -319,36 +344,12 @@
     line-height: 1.55;
     color: var(--fg-dim);
   }
-  .new-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--accent-soft);
-    flex-shrink: 0;
-    align-self: center;
-  }
-  .delta-tag {
-    display: inline-block;
-    padding: 0 6px;
-    border-radius: 4px;
-    background: var(--accent-glow);
-    color: var(--accent-soft);
-    font-family: var(--font-mono);
-    font-size: 10px;
-    cursor: help;
-  }
-  .alert-tag {
-    display: inline-block;
-    padding: 0 6px;
-    border-radius: 4px;
-    background: color-mix(in srgb, var(--red) 14%, transparent);
-    color: var(--red);
-    font-family: var(--font-mono);
-    font-size: 10px;
-    white-space: nowrap;
-    cursor: help;
-  }
 
+  .up-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
   .up-row {
     display: grid;
     grid-template-columns: 1fr auto;
@@ -357,37 +358,54 @@
     padding: 6px 8px;
     margin: 0 -8px;
     border-radius: var(--radius);
-    transition: background 0.12s var(--transition);
+    transition: background var(--dur-1) var(--transition);
   }
   .up-row:hover {
     background: var(--surface2);
+    text-decoration: none;
   }
   .up-name {
     font-size: 13px;
     font-weight: 500;
+    color: var(--fg-bright);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   .up-when {
-    font-size: 11px;
+    font-size: 12px;
+    color: var(--muted);
     white-space: nowrap;
+    font-variant-numeric: tabular-nums;
   }
   .up-meta {
     grid-column: 1 / -1;
-    font-size: 11px;
-    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--muted);
   }
 
   .tally {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 6px 12px;
-    font-size: 13px;
+    gap: 12px 16px;
   }
-  .tally .num {
-    font-family: var(--font-mono);
-    font-size: 14px;
-    margin-right: 4px;
+  .stat {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .stat-num {
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--fg-bright);
+    letter-spacing: -0.01em;
+  }
+  .stat-num.bad {
+    color: var(--red);
+  }
+  .stat-label {
+    font-size: 12px;
+    color: var(--muted);
   }
 </style>

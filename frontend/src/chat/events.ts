@@ -18,8 +18,10 @@ export interface ToolItem {
 }
 
 export type ChatItem =
-  | { kind: 'user'; text: string }
-  | { kind: 'assistant'; text: string }
+  // `at` = ISO timestamp when the server knows it (replay from the transcript,
+  // or the live stream's own clock). Absent on older transcripts.
+  | { kind: 'user'; text: string; at?: string }
+  | { kind: 'assistant'; text: string; at?: string }
   | { kind: 'thinking'; text: string }
   | { kind: 'routed'; agent: string }
   | { kind: 'footer'; numTurns: number | null; cost: number | null; stopped?: boolean }
@@ -65,15 +67,20 @@ export function applyEvent(items: ChatItem[], st: ReducerState, ev: ChatEvent): 
         const cur = items[st.openAssistant] as Extract<ChatItem, { kind: 'assistant' }>
         cur.text += ev.text
       } else {
-        items.push({ kind: 'assistant', text: ev.text })
+        const item: Extract<ChatItem, { kind: 'assistant' }> = { kind: 'assistant', text: ev.text }
+        if (ev.ts) item.at = ev.ts
+        items.push(item)
         st.openAssistant = items.length - 1
       }
       return {}
 
-    case 'user':
+    case 'user': {
       close(st)
-      items.push({ kind: 'user', text: ev.text })
+      const item: Extract<ChatItem, { kind: 'user' }> = { kind: 'user', text: ev.text }
+      if (ev.ts) item.at = ev.ts
+      items.push(item)
       return {}
+    }
 
     case 'thinking':
       close(st)
@@ -144,4 +151,52 @@ export function applyEvent(items: ChatItem[], st: ReducerState, ev: ChatEvent): 
       close(st)
       return {}
   }
+}
+
+// --- Row grouping ------------------------------------------------------------
+// A burst of tool calls (any names) folds into one expandable row so a fan-out
+// of searches and reads stays scannable. Spawn and plan cards are never
+// grouped — they carry their own UI — and they break a run.
+
+export type Row =
+  { group: false; item: ChatItem; idx: number } | { group: true; tools: ToolItem[]; idx: number }
+
+export const SPAWN_TOOL = 'mcp__bran__spawn_agent'
+export const PLAN_TOOL = 'mcp__bran__propose_plan'
+const NEVER_GROUP = new Set([SPAWN_TOOL, PLAN_TOOL])
+export const GROUP_MIN = 3
+
+export function groupRows(items: ChatItem[]): Row[] {
+  const out: Row[] = []
+  let i = 0
+  while (i < items.length) {
+    const it = items[i]
+    if (it.kind === 'tool' && !NEVER_GROUP.has(it.name)) {
+      let j = i
+      while (j < items.length && items[j].kind === 'tool' && !NEVER_GROUP.has((items[j] as ToolItem).name))
+        j++
+      const run = items.slice(i, j) as ToolItem[]
+      if (run.length >= GROUP_MIN) {
+        out.push({ group: true, tools: run, idx: i })
+      } else {
+        run.forEach((t, k) => out.push({ group: false, item: t, idx: i + k }))
+      }
+      i = j
+    } else {
+      out.push({ group: false, item: it, idx: i })
+      i++
+    }
+  }
+  return out
+}
+
+/** "5 tool calls · Read ×3, Grep ×2" — names ordered by frequency, then first appearance. */
+export function groupLabel(tools: ToolItem[]): string {
+  const counts = new Map<string, number>()
+  for (const t of tools) {
+    const n = toolDisplayName(t.name)
+    counts.set(n, (counts.get(n) ?? 0) + 1)
+  }
+  const parts = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([n, c]) => (c > 1 ? `${n} ×${c}` : n))
+  return `${tools.length} tool calls · ${parts.join(', ')}`
 }

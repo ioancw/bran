@@ -1,6 +1,28 @@
+<script lang="ts" module>
+  // One shared ticker for every running tool row — a block subscribes while it
+  // runs and unsubscribes when it finishes, so an idle transcript costs nothing.
+  let tickNow = $state(performance.now())
+  let subscribers = 0
+  let ticker: ReturnType<typeof setInterval> | undefined
+  function subscribe(): () => void {
+    subscribers++
+    if (!ticker) ticker = setInterval(() => (tickNow = performance.now()), 250)
+    return () => {
+      subscribers--
+      if (subscribers <= 0 && ticker) {
+        clearInterval(ticker)
+        ticker = undefined
+        subscribers = 0
+      }
+    }
+  }
+</script>
+
 <script lang="ts">
-  // Collapsible tool call + paired result, ported from chat.html's tool block.
+  // Collapsible tool call + paired result.
   import { toolDisplayName, type ToolItem } from './events'
+  import { shellLooksFailed } from './format'
+  import Icon from '../components/Icon.svelte'
   let { tool }: { tool: ToolItem } = $props()
 
   let expanded = $state(false)
@@ -66,7 +88,7 @@
     if (n === 'read') return `${text.split('\n').length} lines`
     if (n === 'grep') return `${text.split('\n').filter(Boolean).length} matches`
     if (n === 'glob') return `${text.split('\n').filter(Boolean).length} files`
-    if (n === 'bash' || n === 'powershell') return text.toLowerCase().includes('error') ? 'with errors' : 'ok'
+    if (n === 'bash' || n === 'powershell') return shellLooksFailed(text) ? 'with errors' : 'ok'
     if (n === 'edit' || n === 'write') return 'saved'
     if (n === 'agent' || n === 'task') return 'done'
     return 'ok'
@@ -94,6 +116,16 @@
   )
   const rows = $derived(paramRows(tool.input))
   const isAgent = $derived(['agent', 'task'].includes(lower(tool.name)))
+
+  // Live elapsed while running; the measured duration once finished.
+  $effect(() => {
+    if (tool.status !== 'running') return
+    return subscribe()
+  })
+  const elapsed = $derived.by(() => {
+    if (tool.status === 'running') return `${Math.max(0, (tickNow - tool.startedAt) / 1000).toFixed(1)}s`
+    return tool.durationMs != null ? `${(tool.durationMs / 1000).toFixed(1)}s` : ''
+  })
 </script>
 
 <div
@@ -109,23 +141,13 @@
     <span class="tool-result-preview" class:error={tool.isError}
       >{preview(tool.name, tool.resultText, tool.isError)}</span
     >
-    <span class="tool-duration"
-      >{tool.durationMs != null ? `${(tool.durationMs / 1000).toFixed(1)}s` : ''}</span
-    >
-    <svg class="tool-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
-      <path
-        d="M2 4l3 3 3-3"
-        stroke="currentColor"
-        stroke-width="1.3"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      />
-    </svg>
+    <span class="tool-duration">{elapsed}</span>
+    <Icon name="chevron-down" size={12} class="tool-chevron" />
   </button>
   <div class="tool-body">
     {#if rows.length}
       <div class="tool-section">
-        <div class="tool-section-label"><span>Params</span></div>
+        <div class="tool-section-label"><span>Parameters</span></div>
         <div class="tool-params">
           {#each rows as [k, v] (k)}
             <span class="tool-param-key">{k}</span><span class="tool-param-value">{v}</span>

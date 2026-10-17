@@ -9,6 +9,7 @@
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import StatusBadge from '../components/StatusBadge.svelte'
   import Prose from '../components/Prose.svelte'
+  import Icon from '../components/Icon.svelte'
   import ChatLog from '../chat/ChatLog.svelte'
   import { applyEvent, freshState, type ChatItem } from '../chat/events'
   import type { ArtifactEntry, RunRecord, Verification } from '../lib/types'
@@ -165,13 +166,13 @@
     {#if run}
       <StatusBadge status={run.status} />
       {#if run.status === 'running' || run.status === 'pending'}
-        <button class="btn-outline" disabled={cancelling} onclick={cancel}
-          >{cancelling ? 'cancelling…' : '⊘ cancel'}</button
-        >
+        <button class="btn-outline" disabled={cancelling} onclick={cancel}>
+          <Icon name="stop" size={13} />{cancelling ? 'Cancelling…' : 'Cancel'}
+        </button>
       {:else}
-        <button class="btn-outline" disabled={rerunning} onclick={rerun}
-          >{rerunning ? 'starting…' : '↻ re-run'}</button
-        >
+        <button class="btn-outline" disabled={rerunning} onclick={rerun}>
+          <Icon name="refresh" size={13} />{rerunning ? 'Starting…' : 'Re-run'}
+        </button>
       {/if}
     {/if}
   {/snippet}
@@ -184,81 +185,81 @@
   {#if run}
     <div class="grid grid-cols-4 gap-6">
       <aside class="col-span-1 space-y-3">
-        <div class="card-quiet">
-          <div class="label-cap" style="margin-bottom: 6px;">task</div>
-          <div class="text-fg" style="font-size: 13px; line-height: 1.5; white-space: pre-wrap;">
-            {run.task}
-          </div>
+        <div class="card">
+          <h2 class="card-title">Task</h2>
+          <div class="task-text">{run.task}</div>
         </div>
-        <div class="card-quiet meta-list" style="font-size: 12.5px;">
-          <div class="label-cap" style="margin-bottom: 8px;">details</div>
-          <div><span class="label-cap">turns</span> {run.num_turns ?? '—'}</div>
-          <div><span class="label-cap">cost</span> {fmtCost(run.total_cost_usd)}</div>
-          <div><span class="label-cap">duration</span> {fmtDuration(run.duration_ms)}</div>
-          <div><span class="label-cap">started</span> {localDateTime(run.started_at)}</div>
-          {#if run.actor}
-            <div><span class="label-cap">triggered by</span> {run.actor}</div>
-          {/if}
-          <div class="mono text-dim" style="word-break: break-all; margin-top: 6px;">
-            session: {run.session_id ?? '—'}
-          </div>
+        <div class="card">
+          <h2 class="card-title">Details</h2>
+          <dl class="defs">
+            <dt>Turns</dt>
+            <dd>{run.num_turns ?? '—'}</dd>
+            <dt>Cost</dt>
+            <dd class="mono">{fmtCost(run.total_cost_usd)}</dd>
+            <dt>Duration</dt>
+            <dd class="mono">{fmtDuration(run.duration_ms)}</dd>
+            <dt>Started</dt>
+            <dd>{localDateTime(run.started_at)}</dd>
+            {#if run.actor}
+              <dt>Triggered by</dt>
+              <dd>{run.actor}</dd>
+            {/if}
+            <dt>Session</dt>
+            <dd class="mono session">{run.session_id ?? '—'}</dd>
+          </dl>
         </div>
         {#if verification}
-          <div class="card-quiet meta-list" style="font-size: 12.5px;">
-            <div class="label-cap" style="margin-bottom: 8px;">verification</div>
+          <div class="card">
+            <h2 class="card-title">Verification</h2>
             {#if verification.status === 'skipped'}
-              <div class="text-muted">skipped — {verification.reason ?? 'critic unavailable'}</div>
+              <div class="verif-line text-muted">
+                <Icon name="minus" size={14} />Skipped: {verification.reason ?? 'reviewer unavailable'}
+              </div>
             {:else if verification.pass}
-              <div style="color: var(--green);">✓ passed review</div>
+              <div class="verif-line" style="color: var(--green);">
+                <Icon name="circle-check" size={14} />Passed review
+              </div>
             {:else}
-              <div style="color: var(--amber);">✗ reviewer found issues</div>
+              <div class="verif-line" style="color: var(--amber);">
+                <Icon name="alert-circle" size={14} />Reviewer found issues
+              </div>
               {#if verification.issues?.length}
                 <ul class="verif-issues">
                   {#each verification.issues as issue, i (i)}<li>{issue}</li>{/each}
                 </ul>
               {/if}
               {#if verification.retried_run_id}
-                <div style="margin-top: 6px;">
-                  <a
-                    href={href('/runs/' + verification.retried_run_id)}
-                    use:link
-                    class="text-accent-soft"
-                    style="text-decoration: none;">↳ corrected attempt</a
-                  >
-                </div>
+                <a href={href('/runs/' + verification.retried_run_id)} use:link class="verif-link">
+                  <Icon name="corner-down-right" size={13} />Corrected attempt
+                </a>
               {/if}
             {/if}
             {#if verification.retry_of}
-              <div style="margin-top: 6px;">
-                <a
-                  href={href('/runs/' + verification.retry_of)}
-                  use:link
-                  class="text-accent-soft"
-                  style="text-decoration: none;">↰ original attempt</a
-                >
-              </div>
+              <a href={href('/runs/' + verification.retry_of)} use:link class="verif-link">
+                <Icon name="corner-down-right" size={13} />Original attempt
+              </a>
             {/if}
           </div>
         {/if}
         {#if artifacts.length}
-          <div class="card-quiet meta-list" style="font-size: 12.5px;">
-            <div class="label-cap" style="margin-bottom: 8px;">files produced</div>
+          <div class="card">
+            <h2 class="card-title">Files produced</h2>
             <div class="space-y-1">
               {#each artifacts as a (a.index)}
                 {#if a.exists}
                   <div class="art-row">
+                    <Icon name="file-text" size={14} class="text-muted" />
                     <a
                       href={'/spa/runs/' + encodeURIComponent(runId) + '/artifacts/' + a.index}
                       download
-                      class="mono text-accent-soft art-name"
+                      class="mono art-name"
                       title={a.path}>{a.name}</a
                     >
-                    <span class="text-muted" style="font-size: 10px; white-space: nowrap;"
-                      >{fmtBytes(a.size)}</span
-                    >
+                    <span class="text-muted art-size">{fmtBytes(a.size)}</span>
                   </div>
                 {:else}
                   <div class="art-row">
+                    <Icon name="file" size={14} class="text-muted" />
                     <span
                       class="mono text-muted art-name"
                       title="{a.path} (deleted or moved since the run)"
@@ -270,67 +271,55 @@
             </div>
           </div>
         {/if}
-        <div class="card-quiet meta-list" style="font-size: 12.5px;">
-          <div class="label-cap" style="margin-bottom: 8px;">origin</div>
-          {#if run.project_id}
-            <div>
-              <a
-                href={href('/projects/' + run.project_id)}
-                use:link
-                class="text-accent-soft"
-                style="text-decoration: none;">↳ project</a
-              >
-            </div>
-          {:else}
-            <div class="text-muted">standalone run</div>
-          {/if}
-          {#if run.session_id}
-            <div>
-              <a
-                href={href('/chat/' + encodeURIComponent(run.session_id))}
-                use:link
-                class="text-accent-soft"
-                style="text-decoration: none;">↳ conversation</a
-              >
-            </div>
-          {/if}
+        <div class="card">
+          <h2 class="card-title">Origin</h2>
+          <div class="space-y-1">
+            {#if run.project_id}
+              <a href={href('/projects/' + run.project_id)} use:link class="origin-link">
+                <Icon name="folder" size={14} />Project
+              </a>
+            {:else}
+              <div class="text-muted" style="font-size: 13px;">Standalone run</div>
+            {/if}
+            {#if run.session_id}
+              <a href={href('/chat/' + encodeURIComponent(run.session_id))} use:link class="origin-link">
+                <Icon name="message-square" size={14} />Conversation
+              </a>
+            {/if}
+          </div>
         </div>
       </aside>
       <div class="col-span-3 space-y-3">
         {#if run.error}
-          <div
-            class="card"
-            style="color: var(--red); white-space: pre-wrap; border-color: color-mix(in srgb, var(--red) 30%, transparent);"
-          >
-            {run.error}
-          </div>
+          <div class="card err-card">{run.error}</div>
         {/if}
         {#if resultFirst}
           <div class="card">
-            <div class="label-cap" style="margin-bottom: 6px;">result</div>
-            <div class="msg-prose"><Prose text={run.result ?? ''} /></div>
+            <h2 class="card-title">Result</h2>
+            <div class="reading-col"><Prose text={run.result ?? ''} /></div>
           </div>
           {#if transcript.length}
             <!-- The transcript repeats the final answer at its tail; it's the
                  debug view, collapsed by default once the result is on top. -->
             <button
-              class="transcript-toggle label-cap"
+              class="transcript-toggle"
               aria-expanded={showTranscript}
               onclick={() => (showTranscript = !showTranscript)}
             >
-              {showTranscript ? '▾' : '▸'} transcript ({transcript.length} steps)
+              <Icon name={showTranscript ? 'chevron-down' : 'chevron-right'} size={14} />
+              Transcript <span class="text-muted">{transcript.length} steps</span>
             </button>
             {#if showTranscript}
               <div class="space-y-3"><ChatLog items={transcript} /></div>
             {/if}
           {/if}
         {:else if transcript.length}
-          <div class="label-cap">transcript</div>
+          <h2 class="card-title">Transcript</h2>
           <div class="space-y-3"><ChatLog items={transcript} /></div>
         {:else if run.result}
           <div class="card">
-            <div class="label-cap" style="margin-bottom: 6px;">result</div>
-            <div class="msg-prose"><Prose text={run.result} /></div>
+            <h2 class="card-title">Result</h2>
+            <div class="reading-col"><Prose text={run.result} /></div>
           </div>
         {/if}
       </div>
@@ -339,45 +328,122 @@
 </Page>
 
 <style>
-  /* Roomier label/value rows in the run's metadata column. */
-  .meta-list > div {
-    line-height: 1.85;
+  .card-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg-bright);
+    margin-bottom: 10px;
   }
-  .meta-list .label-cap {
-    margin-right: 7px;
+  .task-text {
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--fg);
+    white-space: pre-wrap;
   }
+  .defs {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 6px 12px;
+    margin: 0;
+    font-size: 13px;
+  }
+  .defs dt {
+    font-size: 12px;
+    color: var(--muted);
+    padding-top: 1px;
+  }
+  .defs dd {
+    margin: 0;
+    min-width: 0;
+    color: var(--fg);
+  }
+  .defs .mono {
+    font-size: 12.5px;
+  }
+  .defs .session {
+    font-size: 11.5px;
+    color: var(--fg-dim);
+    word-break: break-all;
+  }
+
+  /* The briefing is the product: the result reads like print, in a column. */
+  .reading-col {
+    max-width: var(--chat-col);
+  }
+  .reading-col :global(.prose-md) {
+    font-family: var(--font-prose);
+    font-size: 16.5px;
+    line-height: 1.7;
+  }
+  .err-card {
+    color: var(--red);
+    white-space: pre-wrap;
+    font-size: 13px;
+    background: var(--red-soft);
+    border-color: color-mix(in srgb, var(--red) 30%, transparent);
+  }
+
   .transcript-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     background: transparent;
     border: 0;
     padding: 4px 0;
     cursor: pointer;
-    color: var(--muted);
-    transition: color 0.12s var(--transition);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--fg-dim);
+    transition: color var(--dur-1) var(--transition);
   }
   .transcript-toggle:hover {
-    color: var(--accent-soft);
+    color: var(--fg-bright);
   }
-  .art-row {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-  }
-  .art-name {
-    font-size: 12px;
-    text-decoration: none;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-  }
-  a.art-name:hover {
-    text-decoration: underline;
+
+  .verif-line {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 500;
   }
   .verif-issues {
     margin: 6px 0 0;
     padding-left: 18px;
     color: var(--fg-dim);
-    font-size: 12px;
+    font-size: 12.5px;
     line-height: 1.6;
+  }
+  .verif-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    font-size: 13px;
+  }
+
+  .art-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+  }
+  .art-name {
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .art-size {
+    font-size: 11px;
+    white-space: nowrap;
+    margin-left: auto;
+  }
+  .origin-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
   }
 </style>

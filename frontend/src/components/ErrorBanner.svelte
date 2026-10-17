@@ -10,7 +10,8 @@
 <div class="card err-banner" role="alert">
   <Icon name="alert-circle" size={16} />
   <span class="err-msg">{errorText(error)}</span>
-  {#if onretry}<button class="btn-outline btn-sm" onclick={onretry}><Icon name="refresh" size={13} />Retry</button
+  {#if onretry}<button class="btn-outline btn-sm" onclick={onretry}
+      ><Icon name="refresh" size={13} />Retry</button
     >{/if}
 </div>
 

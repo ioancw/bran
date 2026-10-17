@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte'
+  import { onDestroy, tick } from 'svelte'
   import { fly } from 'svelte/transition'
   import { api, streamChat } from '../lib/api'
   import { router, navigate, href, link } from '../lib/router.svelte'
@@ -17,6 +17,7 @@
   import Composer from '../components/Composer.svelte'
   import ProjectRail from '../components/ProjectRail.svelte'
   import Skeleton from '../components/Skeleton.svelte'
+  import Icon from '../components/Icon.svelte'
   import ChatLog from '../chat/ChatLog.svelte'
   import { applyEvent, freshState, toolDisplayName, type ChatItem, type ReducerState } from '../chat/events'
   import type { Attachment, Catalog, ChatSummary, RunRecord } from '../lib/types'
@@ -119,6 +120,31 @@
       scopeMenuOpen = false
       scopeBtnEl?.focus()
     }
+  }
+  // Menu keyboard model: opening focuses the current option; arrows move
+  // (wrapping), Home/End jump, Enter/Space activate the focused button.
+  function menuItems(): HTMLButtonElement[] {
+    return Array.from(scopeMenuEl?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])
+  }
+  $effect(() => {
+    if (!scopeMenuOpen) return
+    void tick().then(() => {
+      const opts = menuItems()
+      ;(opts.find((o) => o.classList.contains('on')) ?? opts[0])?.focus()
+    })
+  })
+  function onMenuKeydown(e: KeyboardEvent) {
+    const opts = menuItems()
+    if (!opts.length) return
+    const cur = opts.indexOf(document.activeElement as HTMLButtonElement)
+    let next = -1
+    if (e.key === 'ArrowDown') next = (cur + 1) % opts.length
+    else if (e.key === 'ArrowUp') next = (cur - 1 + opts.length) % opts.length
+    else if (e.key === 'Home') next = 0
+    else if (e.key === 'End') next = opts.length - 1
+    else return
+    e.preventDefault()
+    opts[next].focus()
   }
 
   // Autoscroll only while the reader is pinned to the bottom — scrolling up to
@@ -308,9 +334,10 @@
     }
   }
 
-  // PlanCard approve/revise: approve sends the canned reply immediately;
-  // revise just seeds the composer for the user to finish.
-  function onPlanAction(text: string, sendNow: boolean) {
+  // Card actions (PlanCard approve/revise, "Edit" on a user message): approve
+  // sends the canned reply immediately; the rest seed the composer for the
+  // user to finish.
+  function onComposerAction(text: string, sendNow: boolean) {
     if (streaming) return
     input = text
     if (sendNow) void send()
@@ -345,7 +372,7 @@
       attachments = []
     }
     input = ''
-    items.push({ kind: 'user', text })
+    items.push({ kind: 'user', text, at: new Date().toISOString() })
     streaming = true
     setLive(true, 'thinking…')
     scrollSoon(true)
@@ -442,43 +469,42 @@
 
 <Page fill={true}>
   {#snippet head()}
-    <!-- Cowork-style breadcrumb: <scope ▾> / conversation -->
+    <!-- Breadcrumb: <scope ▾> / conversation -->
     <div class="bc">
       <span class="crumb-wrap" bind:this={scopeMenuEl}>
-        <!-- A disclosure, not a menu: the popup is plain buttons without menu
-             semantics, so don't announce aria-haspopup="menu". -->
         <button
-          class="crumb crumb-scope"
+          class="crumb-scope"
           bind:this={scopeBtnEl}
+          aria-haspopup="menu"
           aria-expanded={scopeMenuOpen}
           onclick={() => (scopeMenuOpen = !scopeMenuOpen)}
         >
           {scopeName}
-          <svg
-            width="11"
-            height="11"
-            viewBox="0 0 10 10"
-            fill="none"
-            aria-hidden="true"
-            style="margin-left: 4px;"
-          >
-            <path
-              d="M2 4l3 3 3-3"
-              stroke="currentColor"
-              stroke-width="1.3"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          </svg>
+          <Icon name="chevron-down" size={14} />
         </button>
         {#if scopeMenuOpen}
-          <div class="crumb-menu card elev-md" transition:fly={{ y: -4, duration: 120 }}>
-            <button class="crumb-opt" class:on={!scopeId} onclick={() => switchScope(null)}
-              >Recents (all chats)</button
+          <div
+            class="crumb-menu card elev-md"
+            role="menu"
+            tabindex="-1"
+            aria-label="Conversation scope"
+            transition:fly={{ y: -4, duration: 120 }}
+            onkeydown={onMenuKeydown}
+          >
+            <button
+              class="crumb-opt"
+              class:on={!scopeId}
+              role="menuitem"
+              tabindex="-1"
+              onclick={() => switchScope(null)}>Recents (all chats)</button
             >
             {#each workspace.projects as p (p.id)}
-              <button class="crumb-opt" class:on={scopeId === p.id} onclick={() => switchScope(p.id)}
-                >{p.name}</button
+              <button
+                class="crumb-opt"
+                class:on={scopeId === p.id}
+                role="menuitem"
+                tabindex="-1"
+                onclick={() => switchScope(p.id)}>{p.name}</button
               >
             {/each}
           </div>
@@ -486,9 +512,9 @@
       </span>
       <span class="crumb-sep">/</span>
       <span class="crumb-title">{activeChat?.title ?? 'New chat'}</span>
-      {#if activeChat}<span class="crumb-agent mono">{activeChat.agent}</span>{/if}
+      {#if activeChat}<span class="pill mute crumb-agent">{activeChat.agent}</span>{/if}
     </div>
-    <span class="ml-auto thinking">{streaming ? 'thinking…' : ''}</span>
+    {#if streaming}<span class="ml-auto thinking"><span class="live-dot sm"></span>Thinking…</span>{/if}
   {/snippet}
 
   <div style="display: flex; gap: 16px; flex: 1; min-height: 0;">
@@ -504,36 +530,42 @@
         {#if historyLoading && !items.length}
           <Skeleton rows={6} />
         {:else if !items.length}
-          <div class="empty-state">
-            <span class="glyph" style="font-size: 26px;" aria-hidden="true"></span>
-            <h3>{currentAgent !== 'orchestrator' ? `chat with ${currentAgent}` : 'start a conversation'}</h3>
-            <p class="cta">type a message below — try <code>/digest</code> or <code>@research</code></p>
+          <div class="empty-state chat-welcome">
+            <svg class="welcome-crow" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path
+                d="m10 18l-1.65 4l-1.85-.75l1.45-3.525q-2.65-.7-4.3-2.85T2 10V6q0-1.65 1.175-2.825T6 2q.55 0 1.05.187t1 .388L14 5l-4 1.5V8l7.85 5H10q-.825 0-1.412-.587T8 11H6q0 1.65 1.175 2.825T10 15h11l1 5h-2l-1-2h-5v4h-2v-4zM5.288 5.288Q5 5.575 5 6t.288.713T6 7t.713-.288T7 6t-.288-.712T6 5t-.712.288"
+              />
+            </svg>
+            <h3 class="welcome-title">
+              {currentAgent !== 'orchestrator' ? `Chat with ${currentAgent}` : 'What can bran do for you?'}
+            </h3>
+            <p class="cta">Ask anything, or try <code>/digest</code> or <code>@research</code></p>
             <div class="starters">
               <button
-                class="starter"
+                class="btn-outline"
                 onclick={() => {
                   input = 'What did my runners deliver today?'
                   focusComposer()
                 }}>What did my runners deliver today?</button
               >
               <button
-                class="starter"
+                class="btn-outline"
                 onclick={() => {
                   input = 'Summarise the latest finance briefing for me.'
                   focusComposer()
                 }}>Summarise the latest briefing</button
               >
               <button
-                class="starter"
+                class="btn-outline"
                 onclick={() => {
                   input = '/digest '
                   focusComposer()
-                }}>/digest a topic</button
+                }}>Digest a topic</button
               >
             </div>
           </div>
         {:else}
-          <ChatLog {items} {streamingIndex} onaction={onPlanAction} onretry={retryFailed} />
+          <ChatLog {items} {streamingIndex} onaction={onComposerAction} onretry={retryFailed} />
           {#if showPending}
             <div class="pending-turn" aria-label="working on a reply">
               <span class="pending-dot"></span><span class="pending-dot"></span><span class="pending-dot"
@@ -555,21 +587,13 @@
              messages doesn't need chrome floating over the page. -->
         <div class="jump-wrap">
           <button
-            class="jump-latest elev-md"
+            class="btn-outline jump-latest elev-md"
             transition:fly={{ y: 6, duration: 160 }}
             onclick={jumpToLatest}
             aria-label="Jump to latest"
-            title="jump to latest"
+            title="Jump to latest"
           >
-            <svg width="13" height="13" viewBox="0 0 12 12" fill="none" aria-hidden="true"
-              ><path
-                d="M6 2.5v7M2.8 6.5L6 9.7l3.2-3.2"
-                stroke="currentColor"
-                stroke-width="1.4"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              /></svg
-            >
+            <Icon name="chevron-down" size={16} />
           </button>
         </div>
       {/if}
@@ -582,7 +606,7 @@
           bind:attachments
           attach={true}
           {catalog}
-          hint="⏎ send · ⇧⏎ newline · / @"
+          hint="Enter to send · Shift+Enter for a new line"
           busy={streaming}
           placeholder="Message bran…"
           onsubmit={send}
@@ -590,14 +614,19 @@
         >
           {#snippet leading()}
             {#if activeChat}
-              <span class="composer-agent">{activeChat.agent}</span>
+              <span class="composer-agent agent-fixed"><Icon name="bot" size={13} />{activeChat.agent}</span>
             {:else}
-              <select class="composer-agent-select" bind:value={pendingAgent} title="agent for this chat">
-                <option value={null}>orchestrator</option>
-                {#each catalog.agents.filter((a) => a.name !== 'orchestrator') as a (a.name)}<option
-                    value={a.name}>{a.name}</option
-                  >{/each}
-              </select>
+              <label class="agent-pick btn-ghost btn-sm" title="Agent for this chat">
+                <Icon name="bot" size={13} />
+                <span>{pendingAgent ?? 'orchestrator'}</span>
+                <Icon name="chevron-down" size={12} />
+                <select class="agent-select" bind:value={pendingAgent} aria-label="Agent for this chat">
+                  <option value={null}>orchestrator</option>
+                  {#each catalog.agents.filter((a) => a.name !== 'orchestrator') as a (a.name)}<option
+                      value={a.name}>{a.name}</option
+                    >{/each}
+                </select>
+              </label>
             {/if}
           {/snippet}
         </Composer>
@@ -608,13 +637,10 @@
     {#if scopeId}
       <aside class="chat-rail">
         <div style="margin-bottom: 10px; display: flex; align-items: baseline; gap: 8px;">
-          <a
-            href={href('/projects/' + encodeURIComponent(scopeId))}
-            use:link
-            class="text-bright"
-            style="font-weight: 600; text-decoration: none;">{scopeName}</a
+          <a href={href('/projects/' + encodeURIComponent(scopeId))} use:link class="rail-title"
+            >{scopeName}</a
           >
-          <span class="label-cap">project</span>
+          <span class="label-cap">Project</span>
         </div>
         <ProjectRail projectId={scopeId} mode="chat" sessionId={activeChat?.id ?? null} />
       </aside>
@@ -623,9 +649,8 @@
 </Page>
 
 <style>
-  /* The conversation is a reading column, not a full-bleed dump: every turn
-     (and the composer below) caps at --chat-col and centres, exactly like a
-     typeset page. On narrow panes the cap is inert and rows fill naturally. */
+  /* The conversation is a reading column: every turn (and the composer below)
+     caps at --chat-col and centres. On narrow panes the cap is inert. */
   .chat-scroll > :global(*) {
     max-width: var(--chat-col);
     margin-left: auto;
@@ -635,105 +660,113 @@
     margin: 14px auto 4px;
     width: 100%;
     max-width: var(--chat-col);
+    padding-bottom: var(--safe-bottom);
   }
 
-  /* New/empty chat: centre the invitation vertically so it doesn't sit top-heavy
-     above a void (the composer stays pinned at the bottom). */
+  /* New/empty chat: centre the invitation vertically (the composer stays
+     pinned at the bottom). */
   .chat-empty {
     display: flex;
     flex-direction: column;
     justify-content: center;
+  }
+  .chat-welcome {
+    max-width: 560px;
+  }
+  .welcome-crow {
+    width: 36px;
+    height: 36px;
+    color: var(--accent);
+    margin-bottom: 14px;
+  }
+  .welcome-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--fg-bright);
+    margin-bottom: 6px;
   }
   .starters {
     display: flex;
     justify-content: center;
     flex-wrap: wrap;
     gap: 8px;
-    margin-top: 22px;
-  }
-  .starter {
-    background: transparent;
-    border: 1px solid var(--border2);
-    border-radius: 999px;
-    padding: 7px 16px;
-    font-family: var(--font-prose);
-    font-style: italic;
-    font-size: 13px;
-    color: var(--fg-dim);
-    cursor: pointer;
-    transition:
-      color var(--dur-1) var(--transition),
-      border-color var(--dur-1) var(--transition),
-      background var(--dur-1) var(--transition);
-  }
-  .starter:hover {
-    color: var(--accent-soft);
-    border-color: var(--accent-soft);
-    background: var(--accent-glow);
-  }
-  /* Agent picker living in the composer footer (new chats only) — styled to read
-     like the inline agent label, with a dropdown affordance. */
-  .composer-agent-select {
-    background: transparent;
-    border: 0;
-    padding: 0;
-    cursor: pointer;
-    outline: none;
-    font-family: var(--font-mono);
-    font-size: 11px;
-    color: var(--accent-soft);
+    margin-top: 20px;
   }
 
-  /* Breadcrumb bar — prose, prominent, like Cowork's center-top crumb. */
+  /* Agent picker in the composer footer. A fixed label once the chat exists;
+     a select dressed as a quiet button before the first message. */
+  .agent-fixed {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .agent-pick {
+    position: relative;
+    cursor: pointer;
+  }
+  .agent-select {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+    width: 100%;
+  }
+
+  /* Breadcrumb bar. */
   .bc {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 8px;
-    font-family: var(--font-prose);
-    font-size: 20px;
-    letter-spacing: -0.01em;
     min-width: 0;
+    font-size: 14px;
   }
   .crumb-wrap {
     position: relative;
-    display: inline-block;
-  }
-  .crumb {
-    background: transparent;
-    border: 0;
-    cursor: pointer;
-    font: inherit;
     display: inline-flex;
-    align-items: center;
-    padding: 0;
   }
   .crumb-scope {
-    color: var(--muted);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 28px;
+    padding: 0 6px 0 8px;
+    margin-left: -8px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--fg-dim);
+    white-space: nowrap;
   }
-  .crumb-scope:hover {
-    color: var(--accent-soft);
+  .crumb-scope:hover,
+  .crumb-scope[aria-expanded='true'] {
+    background: var(--surface2);
+    color: var(--fg-bright);
   }
   .crumb-sep {
     color: var(--border2);
   }
   .crumb-title {
     color: var(--fg-bright);
-    font-weight: 500;
+    font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    min-width: 0;
   }
   .crumb-agent {
     font-size: 11px;
-    color: var(--accent-soft);
-    align-self: center;
+    flex-shrink: 0;
   }
   .thinking {
-    font-size: 11px;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
     color: var(--muted);
+    white-space: nowrap;
   }
   .crumb-menu {
     position: absolute;
@@ -741,7 +774,7 @@
     left: 0;
     margin-top: 6px;
     padding: 4px;
-    min-width: 200px;
+    min-width: 220px;
     z-index: 60;
     display: flex;
     flex-direction: column;
@@ -755,29 +788,37 @@
     cursor: pointer;
     color: var(--fg);
     font-size: 13px;
-    text-transform: none;
-    letter-spacing: 0;
-    font-family: var(--font-ui);
   }
-  .crumb-opt:hover {
+  .crumb-opt:hover,
+  .crumb-opt:focus-visible {
     background: var(--surface2);
+    outline: none;
   }
   .crumb-opt.on {
     color: var(--accent-soft);
+    font-weight: 500;
   }
+
   .chat-rail {
     width: 320px;
     flex-shrink: 0;
     overflow-y: auto;
     padding-left: 4px;
   }
+  .rail-title {
+    font-weight: 600;
+    color: var(--fg-bright);
+  }
+  .rail-title:hover {
+    text-decoration: none;
+    color: var(--accent-soft);
+  }
 
-  /* Floating "back to the live edge" pill — appears when the reader scrolls
-     up during a stream, sits just above the composer. The wrapper centres it
-     so Svelte's fly transition can own the button's transform. */
+  /* Floating "back to the live edge" button — appears when the reader scrolls
+     up during a stream, sits just above the composer. */
   .jump-wrap {
     position: absolute;
-    bottom: 96px;
+    bottom: 104px;
     left: 0;
     right: 0;
     display: flex;
@@ -787,23 +828,10 @@
   }
   .jump-latest {
     pointer-events: auto;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
+    width: 34px;
+    height: 34px;
+    padding: 0;
     border-radius: 50%;
-    background: var(--surface2);
-    border: 1px solid var(--border2);
-    color: var(--fg);
-    cursor: pointer;
-    transition:
-      color var(--dur-1) var(--transition),
-      border-color var(--dur-1) var(--transition);
-  }
-  .jump-latest:hover {
-    color: var(--accent-soft);
-    border-color: var(--accent-soft);
   }
 
   /* Visually hidden, still announced. */
@@ -830,7 +858,7 @@
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: var(--accent-soft);
+    background: var(--accent);
     animation: pending-bounce 1.1s ease-in-out infinite;
   }
   .pending-dot:nth-child(2) {
@@ -841,10 +869,7 @@
   }
   .pending-label {
     margin-left: 6px;
-    font-family: var(--font-mono);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
+    font-size: 12px;
     color: var(--muted);
   }
   @keyframes pending-bounce {
@@ -856,5 +881,4 @@
       opacity: 1;
     }
   }
-  /* .composer / .composer-* now live in global.css (shared input component). */
 </style>

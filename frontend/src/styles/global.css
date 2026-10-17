@@ -250,6 +250,16 @@ a:hover {
   color: var(--red);
   background: var(--red-soft);
 }
+a.btn-primary:hover,
+a.btn-outline:hover,
+a.btn-ghost:hover,
+a.btn-icon:hover,
+a.btn-text:hover {
+  text-decoration: none;
+}
+a.btn-text:hover {
+  text-decoration: underline;
+}
 .btn-primary:disabled,
 .btn-outline:disabled,
 .btn-danger:disabled,
@@ -1572,7 +1582,7 @@ table.bran-table .mono {
   .grid-cols-2,
   .grid-cols-3,
   .grid-cols-4 {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .col-span-2,
   .col-span-3 {
@@ -1606,7 +1616,7 @@ table.bran-table .mono {
 @media (max-width: 1024px) {
   .grid-cols-3,
   .grid-cols-4 {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .col-span-2,
   .col-span-3 {

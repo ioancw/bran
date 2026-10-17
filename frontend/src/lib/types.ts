@@ -137,8 +137,8 @@ export interface ProjectDetail {
 export type ChatEvent =
   | { type: 'session'; session_id: string }
   | { type: 'routed'; agent: string }
-  | { type: 'user'; text: string }
-  | { type: 'text'; text: string }
+  | { type: 'user'; text: string; ts?: string } // ts: ISO-8601, present when known
+  | { type: 'text'; text: string; ts?: string }
   | { type: 'thinking'; text: string }
   | { type: 'tool_use'; name: string; input: Record<string, unknown>; tool_id: string | null }
   | { type: 'tool_result'; tool_id: string | null; text: string; is_error: boolean }

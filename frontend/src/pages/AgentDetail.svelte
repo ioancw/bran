@@ -8,6 +8,7 @@
   import { toast } from '../lib/toast.svelte'
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import Page from '../components/Page.svelte'
+  import Icon from '../components/Icon.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import EmptyState from '../components/EmptyState.svelte'
   import Composer from '../components/Composer.svelte'
@@ -47,6 +48,10 @@
     void load()
   })
 
+  function schedule() {
+    navigate('/runners?agent=' + encodeURIComponent(agentName))
+  }
+
   async function runNow() {
     if (firing) return
     firing = true
@@ -63,11 +68,9 @@
 </script>
 
 <Page title={agentName}>
-  {#snippet subtitle()}agent{/snippet}
+  {#snippet subtitle()}Agent{/snippet}
   {#snippet actions()}
-    <button class="btn-outline" onclick={() => navigate('/runners?agent=' + encodeURIComponent(agentName))}
-      >schedule →</button
-    >
+    <button class="btn-outline" onclick={schedule}><Icon name="calendar" size={14} />Schedule</button>
   {/snippet}
 
   {#if error}
@@ -76,7 +79,9 @@
   {:else if !loaded}
     <Skeleton rows={5} />
   {:else if !agent}
-    <EmptyState title="unknown agent" hint="check the agent library for the current roster" />
+    <EmptyState title="Unknown agent" hint="Check the agent library for the current roster." icon="bot">
+      <a href={href('/agents')} use:link class="btn-outline">Agent library</a>
+    </EmptyState>
   {:else}
     <div class="grid grid-cols-3 gap-6">
       <!-- Main: run now + recent runs -->
@@ -85,7 +90,7 @@
           <div class="label-cap" style="margin-bottom: 8px;">Run now</div>
           <Composer
             bind:value={task}
-            hint="fires a one-off run"
+            hint="Starts a one-off run"
             busy={firing}
             rows={3}
             placeholder={`Task for ${agentName}… (blank = a default run)`}
@@ -94,33 +99,22 @@
         </div>
 
         <section>
-          <div class="label-cap" style="margin-bottom: 8px;">Recent runs ({runs.length})</div>
+          <div class="label-cap" style="margin-bottom: 8px;">Recent runs · {runs.length}</div>
           {#if runs.length}
-            <div class="space-y-2">
+            <div class="run-list">
               {#each runs.slice(0, 20) as r (r.id)}
-                <a
-                  href={href('/runs/' + r.id)}
-                  use:link
-                  class="row-link card-quiet"
-                  style="display: flex; gap: 10px; align-items: baseline; text-decoration: none;"
-                >
+                <a href={href('/runs/' + r.id)} use:link class="run-row">
                   <span class="src src-{r.source}">{r.source}</span>
                   <StatusBadge status={r.status} />
-                  <span
-                    class="text-dim"
-                    style="font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
-                    >{r.task}</span
-                  >
-                  <span class="ml-auto text-muted" style="font-size: 11px; white-space: nowrap;"
-                    >{relativeTime(r.started_at)} · {fmtCost(r.total_cost_usd)}</span
+                  <span class="run-task">{r.task}</span>
+                  <span class="run-meta"
+                    >{relativeTime(r.started_at)} · <span class="num">{fmtCost(r.total_cost_usd)}</span></span
                   >
                 </a>
               {/each}
             </div>
           {:else}
-            <div class="text-muted" style="font-size: 13px; font-style: italic;">
-              no runs yet — fire one above.
-            </div>
+            <p class="quiet">No runs yet. Start one above.</p>
           {/if}
         </section>
       </div>
@@ -128,49 +122,39 @@
       <!-- Right: config + runners -->
       <aside class="col-span-1 space-y-4">
         <div class="card">
-          <div class="label-cap" style="margin-bottom: 8px;">Config</div>
-          <div class="text-dim" style="font-size: 13px; margin-bottom: 10px;">{agent.description}</div>
-          <div style="font-size: 12px;" class="space-y-1">
-            <div>
-              <span class="label-cap">model</span>
-              <span class="mono text-dim">{agent.model ?? 'default'}</span>
-            </div>
-            <div><span class="label-cap">tools</span> <span class="text-dim">{agent.tools.length}</span></div>
-          </div>
+          <div class="label-cap" style="margin-bottom: 8px;">Configuration</div>
+          <p class="cfg-desc">{agent.description}</p>
+          <dl class="cfg">
+            <dt>Model</dt>
+            <dd class="mono">{agent.model ?? 'default'}</dd>
+            <dt>Tools</dt>
+            <dd>{agent.tools.length}</dd>
+          </dl>
           {#if agent.tools.length}
-            <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px;">
-              {#each agent.tools as t (t)}<span class="src">{t}</span>{/each}
+            <div class="cfg-tools">
+              {#each agent.tools as t (t)}<span class="chip">{t}</span>{/each}
             </div>
           {/if}
           {#if agent.subagents.length}
-            <div class="label-cap" style="margin-top: 10px;">delegates → {agent.subagents.join(', ')}</div>
+            <div class="cfg-delegates">Delegates to {agent.subagents.join(', ')}</div>
           {/if}
         </div>
 
         <div class="card">
-          <div class="label-cap" style="margin-bottom: 8px;">Runners ({runners.length})</div>
+          <div class="label-cap" style="margin-bottom: 8px;">Runners · {runners.length}</div>
           {#if runners.length}
-            <div class="space-y-2">
+            <div class="runner-list">
               {#each runners as s (s.name)}
-                <a
-                  href={href('/runners/' + encodeURIComponent(s.name))}
-                  use:link
-                  class="row-link"
-                  style="display: flex; gap: 8px; align-items: baseline; font-size: 12px; text-decoration: none;"
-                >
-                  <span class="text-bright">{s.name}</span>
-                  <span class="mono text-dim ml-auto">{s.run_at ? 'once' : s.cron}</span>
+                <a href={href('/runners/' + encodeURIComponent(s.name))} use:link class="runner-row">
+                  <span class="runner-name">{s.name}</span>
+                  <span class="mono runner-cron">{s.run_at ? 'once' : s.cron}</span>
                 </a>
               {/each}
             </div>
           {:else}
-            <div class="text-muted" style="font-size: 12px; font-style: italic;">
-              none — <button
-                class="linkish"
-                onclick={() => navigate('/runners?agent=' + encodeURIComponent(agentName))}
-                >schedule one</button
-              >
-            </div>
+            <p class="quiet">
+              None yet. <button class="btn-text" onclick={schedule}>Schedule one</button>
+            </p>
           {/if}
         </div>
       </aside>
@@ -179,22 +163,106 @@
 </Page>
 
 <style>
-  .row-link {
-    padding: 7px 10px;
+  .quiet {
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .run-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .run-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    padding: 8px 10px;
     border-radius: var(--radius);
-    transition: background 0.12s var(--transition);
+    text-decoration: none;
+    transition: background var(--dur-1) var(--transition);
   }
-  .row-link:hover {
+  .run-row:hover {
     background: var(--surface2);
+    text-decoration: none;
   }
-  /* .src lives in global.css (shared source-pill); reused here for tool tags. */
-  .linkish {
-    background: none;
-    border: 0;
-    padding: 0;
-    cursor: pointer;
-    color: var(--accent-soft);
-    font: inherit;
-    text-decoration: underline;
+  .run-task {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    color: var(--fg-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .run-meta {
+    margin-left: auto;
+    flex-shrink: 0;
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .cfg-desc {
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--fg-dim);
+    margin: 0 0 10px;
+  }
+  .cfg {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 4px 12px;
+    margin: 0;
+    font-size: 12.5px;
+  }
+  .cfg dt {
+    color: var(--muted);
+  }
+  .cfg dd {
+    margin: 0;
+    color: var(--fg-dim);
+  }
+  .cfg-tools {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 10px;
+  }
+  .cfg-delegates {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 10px;
+  }
+  .runner-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .runner-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 6px 8px;
+    margin: 0 -8px;
+    border-radius: var(--radius);
+    font-size: 13px;
+    text-decoration: none;
+    transition: background var(--dur-1) var(--transition);
+  }
+  .runner-row:hover {
+    background: var(--surface2);
+    text-decoration: none;
+  }
+  .runner-name {
+    font-weight: 500;
+    color: var(--fg-bright);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .runner-cron {
+    margin-left: auto;
+    flex-shrink: 0;
+    font-size: 12px;
+    color: var(--fg-dim);
   }
 </style>

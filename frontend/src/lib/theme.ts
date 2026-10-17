@@ -14,10 +14,24 @@ export interface Theme {
 }
 
 export const THEMES: Theme[] = [
-  { name: 'midnight', label: 'Midnight', bg: '#0e0e10', surface: '#151517', fg: '#d6d3d1', accent: '#d9748e' },
+  {
+    name: 'midnight',
+    label: 'Midnight',
+    bg: '#0e0e10',
+    surface: '#151517',
+    fg: '#d6d3d1',
+    accent: '#d9748e',
+  },
   { name: 'light', label: 'Light', bg: '#fafaf9', surface: '#ffffff', fg: '#1c1917', accent: '#b0405e' },
   { name: 'dracula', label: 'Dracula', bg: '#282a36', surface: '#2d2f3d', fg: '#cdd6f4', accent: '#bd93f9' },
-  { name: 'solarized', label: 'Solarized', bg: '#002b36', surface: '#073642', fg: '#93a1a1', accent: '#268bd2' },
+  {
+    name: 'solarized',
+    label: 'Solarized',
+    bg: '#002b36',
+    surface: '#073642',
+    fg: '#93a1a1',
+    accent: '#268bd2',
+  },
   { name: 'nord', label: 'Nord', bg: '#2e3440', surface: '#3b4252', fg: '#d8dee9', accent: '#88c0d0' },
 ]
 

@@ -4,6 +4,7 @@
   // the session. `onaction` is absent on read-only surfaces (run transcripts),
   // and `answered` hides the buttons once the user has already replied.
   import Prose from '../components/Prose.svelte'
+  import Icon from '../components/Icon.svelte'
   import type { ToolItem } from './events'
 
   let {
@@ -21,53 +22,61 @@
 </script>
 
 <div class="card plan-card">
-  <header style="display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px;">
-    <span class="label-cap plan-label" style="color: var(--accent-soft);">
-      <svg
-        width="12"
-        height="12"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        aria-hidden="true"
-        ><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" /><rect
-          x="9"
-          y="3"
-          width="6"
-          height="4"
-          rx="1"
-        /><path d="M9 12h6M9 16h4" /></svg
-      >
-      plan · needs your approval
-    </span>
-    <span class="text-bright" style="font-size: 14px; font-weight: 500;">{title}</span>
+  <header class="plan-head">
+    <span class="plan-label"><Icon name="list" size={14} />Plan</span>
+    <span class="plan-title">{title}</span>
+    {#if !answered}<span class="pill accent ml-auto">Needs your approval</span>{/if}
   </header>
-  <div class="msg-prose plan-body"><Prose text={plan} /></div>
+  <div class="plan-body"><Prose text={plan} /></div>
   {#if onaction && !answered}
-    <footer style="display: flex; gap: 8px; margin-top: 12px;">
-      <button class="btn-primary" onclick={() => onaction?.('Approved — go ahead with the plan.', true)}
-        >approve →</button
-      >
-      <button class="btn-outline" onclick={() => onaction?.('Revise the plan: ', false)}>revise…</button>
+    <footer class="plan-foot">
+      <button class="btn-primary" onclick={() => onaction?.('Approved — go ahead with the plan.', true)}>
+        <Icon name="check" size={14} />Approve
+      </button>
+      <button class="btn-outline" onclick={() => onaction?.('Revise the plan: ', false)}>
+        <Icon name="pencil" size={14} />Revise
+      </button>
     </footer>
   {:else if answered}
-    <div class="label-cap" style="margin-top: 10px; color: var(--muted);">answered below</div>
+    <div class="plan-answered">Answered below</div>
   {/if}
 </div>
 
 <style>
   .plan-card {
-    border-left: 2px solid var(--accent-soft);
+    border-left: 2px solid var(--accent);
+  }
+  .plan-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
   }
   .plan-label {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--muted);
+  }
+  .plan-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--fg-bright);
   }
   .plan-body {
     font-size: 14px;
+  }
+  .plan-foot {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .plan-answered {
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--muted);
   }
 </style>

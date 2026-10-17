@@ -7,6 +7,7 @@
   import { href, link } from '../lib/router.svelte'
   import { fmtCost, fmtDuration } from '../lib/time'
   import StatusBadge from '../components/StatusBadge.svelte'
+  import Icon from '../components/Icon.svelte'
   import Prose from '../components/Prose.svelte'
   import type { ToolItem } from './events'
   import type { RunRecord } from '../lib/types'
@@ -46,54 +47,28 @@
 </script>
 
 <div class="card spawn-card">
-  <div style="display: flex; align-items: center; gap: 8px;">
-    <span class="label-cap spawn-label" style="color: var(--amber);">
-      <svg
-        width="12"
-        height="12"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        aria-hidden="true"
-        ><path d="M6 3v12a3 3 0 0 0 3 3h11" /><path d="M16 14l4 4-4 4" /><circle
-          cx="6"
-          cy="3"
-          r="0.5"
-          fill="currentColor"
-        /></svg
-      >
-      background run
-    </span>
-    <span class="mono text-accent-soft" style="font-size: 11px;">{agentName}</span>
+  <div class="spawn-head">
+    <span class="spawn-label"><Icon name="git-branch" size={14} />Background run</span>
+    <span class="pill mute">{agentName}</span>
     <span class="ml-auto"><StatusBadge {status} /></span>
   </div>
   {#if taskText}
-    <div
-      class="text-dim"
-      style="font-size: 13px; margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
-    >
-      {taskText}
-    </div>
+    <div class="spawn-task">{taskText}</div>
   {/if}
 
-  <div style="display: flex; align-items: center; gap: 12px; margin-top: 8px;">
+  <div class="spawn-foot">
     {#if hasOutput}
       <button class="btn-text" onclick={() => (expanded = !expanded)}>
-        {expanded ? 'hide result ▴' : 'show result ▾'}
+        {expanded ? 'Hide result' : 'Show result'}
       </button>
     {/if}
     {#if runId}
-      <a
-        href={href('/runs/' + runId)}
-        use:link
-        class="text-accent-soft ml-auto"
-        style="font-size: 11px; text-decoration: none;">view run {runId.slice(0, 8)} →</a
-      >
+      <a href={href('/runs/' + runId)} use:link class="spawn-link ml-auto">
+        View run <span class="mono">{runId.slice(0, 8)}</span>
+        <Icon name="arrow-right" size={12} />
+      </a>
     {:else}
-      <span class="text-muted" style="font-size: 11px;">spawning…</span>
+      <span class="text-muted" style="font-size: 12px;">Starting…</span>
     {/if}
   </div>
 
@@ -102,9 +77,9 @@
       {#if run.error}
         <div style="color: var(--red); white-space: pre-wrap; font-size: 13px;">{run.error}</div>
       {:else if run.result}
-        <div class="msg-prose"><Prose text={run.result} /></div>
+        <Prose text={run.result} />
       {/if}
-      <div class="label-cap" style="margin-top: 10px;">
+      <div class="spawn-meta">
         {fmtCost(run.total_cost_usd)} · {fmtDuration(run.duration_ms)} · {run.num_turns ?? '—'} turns
       </div>
     </div>
@@ -112,17 +87,52 @@
 </div>
 
 <style>
-  .spawn-card {
-    border-color: color-mix(in srgb, var(--amber) 35%, var(--border));
+  .spawn-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
   .spawn-label {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg-bright);
+  }
+  .spawn-task {
+    font-size: 13px;
+    color: var(--fg-dim);
+    margin-top: 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .spawn-foot {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 8px;
+  }
+  .spawn-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .spawn-link .mono {
+    font-size: 11px;
   }
   .spawn-result {
     margin-top: 10px;
     padding-top: 10px;
     border-top: 1px solid var(--border);
+  }
+  .spawn-meta {
+    margin-top: 10px;
+    font-size: 11px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
   }
 </style>

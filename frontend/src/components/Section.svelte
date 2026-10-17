@@ -1,8 +1,9 @@
 <script lang="ts">
-  // Collapsible right-rail card (Cowork-style): a header with a label, optional
-  // action, and a chevron that smoothly expands/collapses the body.
+  // Collapsible right-rail card: a heading with an optional action and a
+  // chevron that expands/collapses the body.
   import { slide } from 'svelte/transition'
   import type { Snippet } from 'svelte'
+  import Icon from './Icon.svelte'
 
   let {
     label,
@@ -29,24 +30,8 @@
       aria-expanded={expanded}
       onclick={() => (expanded = !expanded)}
     >
-      <svg
-        class="section-chevron"
-        class:open={expanded}
-        width="10"
-        height="10"
-        viewBox="0 0 10 10"
-        fill="none"
-        aria-hidden="true"
-      >
-        <path
-          d="M2 4l3 3 3-3"
-          stroke="currentColor"
-          stroke-width="1.3"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        />
-      </svg>
-      <span class="label-cap">{label}</span>
+      <span class="section-chevron" class:open={expanded}><Icon name="chevron-down" size={14} /></span>
+      <span class="section-label">{label}</span>
     </button>
     {#if action}<div class="section-action">{@render action()}</div>{/if}
   </div>
@@ -66,7 +51,7 @@
   .section-toggle {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     background: transparent;
     border: 0;
     padding: 0;
@@ -74,16 +59,20 @@
     color: inherit;
     flex: 1;
     text-align: left;
+    min-width: 0;
+  }
+  .section-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg);
   }
   .section-action {
     margin-left: auto;
   }
   .section-chevron {
+    display: inline-flex;
     color: var(--muted);
-    transition: transform 0.18s var(--transition);
-  }
-  .section-chevron.open {
-    transform: rotate(0deg);
+    transition: transform var(--dur-2) var(--transition);
   }
   .section-chevron:not(.open) {
     transform: rotate(-90deg);

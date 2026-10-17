@@ -1,14 +1,15 @@
 <script lang="ts">
-  // The shared "type here" input — a solid focus-ring surface, a footer row,
-  // and a round accent send button, with built-in / command + @ agent
-  // autocomplete (when a `catalog` is passed). Used by the chat, the project
-  // launcher, and "Run now" so the input behaves identically everywhere.
+  // The shared "type here" input — a focus-ring surface, a footer row, and an
+  // accent send button, with built-in / command + @ agent autocomplete (when a
+  // `catalog` is passed). Used by the chat, the project launcher, and "Run now"
+  // so the input behaves identically everywhere.
   //
   // The parent owns the value (bind:value) and what happens on submit
   // (onsubmit) — e.g. send a message, start a chat, fire a run.
   import { fly } from 'svelte/transition'
   import type { Snippet } from 'svelte'
   import { api } from '../lib/api'
+  import Icon from './Icon.svelte'
   import type { Attachment, Catalog } from '../lib/types'
 
   let {
@@ -81,7 +82,7 @@
       const saved = await api.uploadAttachments(list)
       attachments = [...attachments, ...saved]
     } catch (e) {
-      attError = e instanceof Error ? e.message : 'upload failed'
+      attError = e instanceof Error ? e.message : 'Upload failed'
     } finally {
       attBusy = false
     }
@@ -211,7 +212,7 @@
           }}
         >
           <code class="ac-name">{it.trigger}{it.name}</code>
-          <span class="ac-desc text-dim">{it.description}</span>
+          <span class="ac-desc">{it.description}</span>
         </button>
       {/each}
     </div>
@@ -232,35 +233,16 @@
     {#if attachments.length || attError}
       <div class="att-row">
         {#each attachments as a, i (a.path)}
-          <span class="att-chip mono" title={a.path}>
-            <svg
-              width="11"
-              height="11"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-              ><path
-                d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"
-              /></svg
-            >
-            {a.name} <span class="text-muted">{a.size_human}</span>
-            <button class="att-x" onclick={() => removeAtt(i)} aria-label="remove {a.name}">
-              <svg width="9" height="9" viewBox="0 0 10 10" fill="none" aria-hidden="true"
-                ><path
-                  d="M2 2l6 6M8 2l-6 6"
-                  stroke="currentColor"
-                  stroke-width="1.4"
-                  stroke-linecap="round"
-                /></svg
-              >
+          <span class="chip att-chip" title={a.path}>
+            <Icon name="file" size={11} />
+            <span class="att-name">{a.name}</span>
+            <span class="text-muted">{a.size_human}</span>
+            <button class="btn-icon att-x" onclick={() => removeAtt(i)} aria-label="Remove {a.name}">
+              <Icon name="x" size={11} />
             </button>
           </span>
         {/each}
-        {#if attError}<span style="color: var(--red); font-size: 11px;">{attError}</span>{/if}
+        {#if attError}<span class="att-error">{attError}</span>{/if}
       </div>
     {/if}
     <textarea
@@ -280,28 +262,16 @@
       {#if leading}{@render leading()}{/if}
       {#if attach}
         <button
-          class="att-btn"
+          class="btn-icon"
           disabled={attBusy}
           onclick={() => attInput?.click()}
-          title="attach files (or drag/paste them)"
+          title="Attach files (or drag or paste them)"
           aria-label="Attach files"
         >
-          {#if attBusy}…{:else}
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-              ><path
-                d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"
-              /></svg
-            >
-          {/if}
+          {#if attBusy}<Icon name="loader" size={15} class="spin" />{:else}<Icon
+              name="paperclip"
+              size={15}
+            />{/if}
         </button>
         <input bind:this={attInput} type="file" multiple style="display: none;" onchange={onAttPick} />
       {/if}
@@ -312,27 +282,16 @@
           class="composer-send stop"
           onclick={onstop}
           aria-label="Stop generating"
-          title="stop generating"
+          title="Stop generating"
         >
-          <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"
-            ><rect x="1.5" y="1.5" width="9" height="9" rx="1.5" fill="currentColor" /></svg
-          >
+          <Icon name="stop" size={14} stroke={2} />
         </button>
       {:else}
-        <button class="composer-send" disabled={busy} onclick={submit} aria-label="Send">
+        <button class="composer-send" disabled={busy} onclick={submit} aria-label="Send" title="Send">
           {#if busy}
             <span class="composer-spin"></span>
           {:else}
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2.2"
-              stroke-linecap="round"
-              stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg
-            >
+            <Icon name="arrow-up" size={16} stroke={2.2} />
           {/if}
         </button>
       {/if}
@@ -345,7 +304,7 @@
     position: relative;
   }
   .composer.drag-over {
-    outline: 2px dashed var(--accent-soft);
+    outline: 2px dashed var(--accent);
     outline-offset: -2px;
   }
   .att-row {
@@ -353,44 +312,36 @@
     align-items: center;
     gap: 6px;
     flex-wrap: wrap;
-    padding: 8px 12px 0;
+    padding: 0 2px 8px;
   }
   .att-chip {
-    display: inline-flex;
-    align-items: center;
     gap: 6px;
-    font-size: 11px;
-    color: var(--fg-dim);
-    border: 1px solid var(--border2);
-    border-radius: 999px;
-    padding: 2px 8px;
+    padding-right: 2px;
+    font-family: var(--font-ui);
+    font-size: 12px;
+  }
+  .att-name {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .att-x {
-    display: inline-flex;
-    align-items: center;
-    background: transparent;
-    border: 0;
-    color: var(--muted);
-    cursor: pointer;
-    padding: 0 2px;
-    line-height: 1;
+    width: 20px;
+    height: 20px;
   }
-  .att-x:hover {
+  .att-error {
     color: var(--red);
+    font-size: 12px;
   }
-  .att-btn {
-    display: inline-flex;
-    align-items: center;
-    background: transparent;
-    border: 0;
-    cursor: pointer;
-    color: var(--muted);
-    font-size: 14px;
-    padding: 2px 4px;
-    transition: color var(--dur-1) var(--transition);
+  /* The hint is desktop-only: on a phone the keyboard's own send key wins. */
+  @media (max-width: 768px) {
+    .composer-hint {
+      display: none;
+    }
   }
-  .att-btn:hover {
-    color: var(--fg);
+  :global(.icon.spin) {
+    animation: composer-spin 0.9s linear infinite;
   }
   .ac-pop {
     position: absolute;
@@ -409,18 +360,19 @@
     gap: 10px;
     width: 100%;
     text-align: left;
-    padding: 8px 10px;
+    padding: 7px 10px;
     border: 0;
     border-radius: var(--radius);
     cursor: pointer;
     background: transparent;
+    font-size: 13px;
   }
   .ac-item.on {
     background: var(--accent-glow);
   }
   .ac-name {
     font-family: var(--font-mono);
-    font-size: 13px;
+    font-size: 12.5px;
     min-width: 110px;
     flex-shrink: 0;
     color: var(--fg-bright);
@@ -429,7 +381,7 @@
     color: var(--accent-soft);
   }
   .ac-desc {
-    font-size: 12px;
+    color: var(--fg-dim);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

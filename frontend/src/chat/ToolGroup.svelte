@@ -1,34 +1,35 @@
 <script lang="ts">
-  // Collapses a run of 3+ consecutive same-name tool calls into one expandable
-  // block, so a fan-out (e.g. 12 WebSearches) stays scannable instead of a wall
-  // of rows. Expands to the individual ToolBlocks. (Pattern from light_cc.)
-  import { toolDisplayName, type ToolItem } from './events'
+  // Collapses a burst of 3+ consecutive tool calls (any names) into one
+  // expandable row, so a fan-out (12 searches, a few reads) stays scannable
+  // instead of a wall of rows. Expands to the individual ToolBlocks.
+  import { groupLabel, type ToolItem } from './events'
+  import Icon from '../components/Icon.svelte'
   import ToolBlock from './ToolBlock.svelte'
 
-  let { name, tools }: { name: string; tools: ToolItem[] } = $props()
+  let { tools }: { tools: ToolItem[]; name?: string } = $props()
   let expanded = $state(false)
 
   const running = $derived(tools.some((t) => t.status === 'running'))
   const errored = $derived(tools.some((t) => t.isError))
   const dot = $derived(running ? 'running' : errored ? 'error' : 'done')
+  const label = $derived(groupLabel(tools))
+  const nErr = $derived(tools.filter((t) => t.isError).length)
 </script>
 
 <div class="tool-group" class:expanded>
-  <button type="button" class="tool-header" aria-expanded={expanded} onclick={() => (expanded = !expanded)}>
+  <button
+    type="button"
+    class="tool-group-header"
+    aria-expanded={expanded}
+    aria-label="{tools.length} tool calls"
+    onclick={() => (expanded = !expanded)}
+  >
     <span class="tool-status-dot {dot}"></span>
-    <span class="tool-name" title={name}>{tools.length}× {toolDisplayName(name)}</span>
-    <span class="tool-summary"
-      >{expanded ? 'hide' : 'show'} {tools.length} calls{errored ? ' · some errored' : ''}</span
-    >
-    <svg class="tool-chevron" width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
-      <path
-        d="M2 4l3 3 3-3"
-        stroke="currentColor"
-        stroke-width="1.3"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      />
-    </svg>
+    <span class="tool-name">{label}</span>
+    <span class="tool-group-count">
+      {#if running}running{:else if nErr}{nErr} failed{/if}
+    </span>
+    <Icon name="chevron-down" size={12} class="tool-chevron" />
   </button>
   {#if expanded}
     <div class="tool-group-body">
@@ -38,15 +39,14 @@
 </div>
 
 <style>
-  .tool-group {
-    border-left: 2px solid color-mix(in srgb, var(--muted) 45%, transparent);
-    border-radius: var(--radius);
-    margin: 1px 0;
+  .tool-group .tool-name {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
-  .tool-group.expanded .tool-chevron {
-    transform: rotate(180deg);
-  }
-  .tool-group-body {
-    padding: 2px 0 4px 10px;
+  .tool-group-count {
+    text-align: right;
   }
 </style>

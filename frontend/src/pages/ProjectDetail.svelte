@@ -11,6 +11,7 @@
   import { relativeTime } from '../lib/time'
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import Page from '../components/Page.svelte'
+  import Icon from '../components/Icon.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import Composer from '../components/Composer.svelte'
   import ProjectRail from '../components/ProjectRail.svelte'
@@ -54,7 +55,13 @@
     return href('/chat/' + encodeURIComponent(id) + '?project=' + encodeURIComponent(projectId))
   }
   async function deleteProject() {
-    if (!(await confirmDialog(`Delete project "${name}"? Its chats become loose; nothing is lost.`))) return
+    if (
+      !(await confirmDialog(
+        `Delete project "${name}"? Its chats are kept and move to Recents; its runners are detached. Nothing else is lost.`,
+        'Delete project',
+      ))
+    )
+      return
     try {
       await api.deleteProject(projectId)
     } catch (e) {
@@ -67,9 +74,9 @@
 </script>
 
 <Page title={name || 'Project'}>
-  {#snippet subtitle()}workspace{/snippet}
+  {#snippet subtitle()}Project{/snippet}
   {#snippet actions()}
-    <button class="btn-outline" onclick={deleteProject}>delete</button>
+    <button class="btn-outline" onclick={deleteProject}><Icon name="trash" size={14} />Delete</button>
   {/snippet}
 
   {#if error}
@@ -83,45 +90,29 @@
         <Composer
           bind:value={prompt}
           {catalog}
-          hint="⏎ to start · ⇧⏎ newline"
+          hint="Enter to start, Shift+Enter for a new line"
           placeholder={`What would you like to work on in ${name}?`}
           rows={3}
           onsubmit={launch}
         />
 
         <section>
-          <div class="label-cap" style="margin-bottom: 10px;">Recents ({data.chats.length})</div>
+          <div class="label-cap" style="margin-bottom: 8px;">Recent chats · {data.chats.length}</div>
           {#if data.chats.length}
             <div class="space-y-2">
               {#each data.chats as c (c.id)}
                 <a href={chatHref(c.id)} use:link class="conv-card card">
-                  <span class="conv-icon" aria-hidden="true">
-                    <svg
-                      width="15"
-                      height="15"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="1.8"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      ><path
-                        d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"
-                      /></svg
-                    >
-                  </span>
+                  <span class="conv-icon" aria-hidden="true"><Icon name="message-square" size={15} /></span>
                   <div style="flex: 1; min-width: 0;">
                     <div class="conv-title">{c.title}</div>
                     <div class="conv-meta">{c.agent}</div>
                   </div>
-                  <span class="conv-time label-cap">{relativeTime(c.updated_at)}</span>
+                  <span class="conv-time">{relativeTime(c.updated_at)}</span>
                 </a>
               {/each}
             </div>
           {:else}
-            <div class="text-muted" style="font-size: 13px; font-style: italic;">
-              No conversations yet — start one above.
-            </div>
+            <p class="quiet">No chats in this project yet. Start one above.</p>
           {/if}
         </section>
       </div>
@@ -147,18 +138,19 @@
       grid-template-columns: 1fr;
     }
   }
+  .quiet {
+    font-size: 13px;
+    color: var(--muted);
+  }
   .conv-card {
     display: flex;
     align-items: center;
     gap: 12px;
+    padding: 12px 14px;
     text-decoration: none;
-    transition:
-      border-color 0.15s var(--transition),
-      transform 0.12s var(--transition);
   }
   .conv-card:hover {
-    transform: translateY(-1px);
-    border-color: var(--accent-soft);
+    text-decoration: none;
   }
   .conv-icon {
     display: flex;
@@ -167,7 +159,7 @@
     width: 30px;
     height: 30px;
     flex-shrink: 0;
-    border-radius: 50%;
+    border-radius: 8px;
     background: var(--surface2);
     color: var(--muted);
   }
@@ -180,12 +172,14 @@
     white-space: nowrap;
   }
   .conv-meta {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    color: var(--accent-soft);
-    margin-top: 2px;
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 1px;
   }
   .conv-time {
     flex-shrink: 0;
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
   }
 </style>

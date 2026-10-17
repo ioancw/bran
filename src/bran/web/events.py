@@ -10,10 +10,12 @@ Here both sources funnel through one schema. Every event is a flat dict with a
 
     {"type": "session",     "session_id": str}
     {"type": "routed",      "agent": str}
-    {"type": "user",        "text": str}                      # replay only
-    {"type": "text",        "text": str}                      # assistant prose;
+    {"type": "user",        "text": str, "ts"?: str}          # replay only
+    {"type": "text",        "text": str, "ts"?: str}          # assistant prose;
                                                               #   consecutive ones
                                                               #   merge into one bubble
+                                                              #   (ts = ISO-8601 UTC,
+                                                              #   present when known)
     {"type": "thinking",    "text": str}
     {"type": "tool_use",    "name": str, "input": dict, "tool_id": str|None}
                                                               # delegation folded in:
@@ -31,9 +33,21 @@ exact shape, so the client renders both through a single code path.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from bran.transcript import Entry
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _with_ts(ev: dict[str, Any], ts: str | None) -> dict[str, Any]:
+    """Attach a timestamp when one is known; the key is simply absent otherwise."""
+    if ts:
+        ev["ts"] = ts
+    return ev
 
 
 def _text_from_tool_result_content(content: Any) -> str:
@@ -67,7 +81,7 @@ def events_from_message(message: Any) -> list[dict[str, Any]]:
             if btype == "TextBlock":
                 text = getattr(block, "text", "")
                 if text:
-                    out.append({"type": "text", "text": text})
+                    out.append({"type": "text", "text": text, "ts": _now_iso()})
             elif btype == "ThinkingBlock":
                 out.append({"type": "thinking", "text": getattr(block, "thinking", "")})
             elif btype == "ToolUseBlock":
@@ -113,9 +127,9 @@ def events_from_transcript_entry(entry: Entry) -> list[dict[str, Any]]:
     """Convert one replayed transcript `Entry` into the same normalized events."""
     k = entry.kind
     if k == "user_text":
-        return [{"type": "user", "text": entry.text or ""}]
+        return [_with_ts({"type": "user", "text": entry.text or ""}, entry.timestamp)]
     if k == "assistant_text":
-        return [{"type": "text", "text": entry.text or ""}]
+        return [_with_ts({"type": "text", "text": entry.text or ""}, entry.timestamp)]
     if k == "thinking":
         return [{"type": "thinking", "text": entry.text or ""}]
     if k == "tool_call":

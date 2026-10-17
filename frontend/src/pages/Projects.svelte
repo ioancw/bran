@@ -3,8 +3,10 @@
   import { href, link, navigate } from '../lib/router.svelte'
   import { errorText } from '../lib/errors'
   import Page from '../components/Page.svelte'
+  import Icon from '../components/Icon.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import ErrorBanner from '../components/ErrorBanner.svelte'
+  import EmptyState from '../components/EmptyState.svelte'
   import type { ProjectSummary } from '../lib/types'
 
   let projects = $state<ProjectSummary[]>([])
@@ -35,7 +37,7 @@
     e?.preventDefault()
     if (creating) return
     if (!newName.trim()) {
-      formError = 'give the project a name'
+      formError = 'Give the project a name.'
       return
     }
     formError = null
@@ -59,44 +61,38 @@
 <Page title="Projects">
   {#snippet subtitle()}{loaded
       ? `${projects.length} ${projects.length === 1 ? 'workspace' : 'workspaces'}`
-      : 'loading…'}{/snippet}
+      : 'Loading…'}{/snippet}
   {#snippet actions()}
-    <button class="btn-primary" onclick={() => (showForm = !showForm)}>+ new project</button>
+    <button class="btn-primary" onclick={() => (showForm = !showForm)}
+      ><Icon name="plus" size={14} stroke={2.2} />New project</button
+    >
   {/snippet}
 
   <div class="space-y-4">
     {#if error}<ErrorBanner {error} onretry={load} />{/if}
 
     {#if showForm}
-      <form class="card-quiet" style="max-width: 480px;" onsubmit={create}>
-        <span class="label-cap" style="display: block; margin-bottom: 6px;">New project</span>
-        <input
-          class="field"
-          bind:value={newName}
-          placeholder="name"
-          aria-label="project name"
-          style="margin-bottom: 6px;"
-        />
+      <form class="card-quiet form" onsubmit={create}>
+        <h2 class="form-title">New project</h2>
+        <input class="field" bind:value={newName} placeholder="Name" aria-label="Project name" />
         <input
           class="field"
           bind:value={newDesc}
-          placeholder="description (optional)"
-          aria-label="project description"
+          placeholder="Description (optional)"
+          aria-label="Project description"
         />
-        {#if formError}<div role="alert" style="color: var(--red); font-size: 12px; margin-top: 6px;">
-            {formError}
-          </div>{/if}
-        <div style="display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px;">
+        {#if formError}<div role="alert" class="form-error">{formError}</div>{/if}
+        <div class="form-actions">
           <button
             type="button"
             class="btn-ghost"
             onclick={() => {
               showForm = false
               formError = null
-            }}>cancel</button
+            }}>Cancel</button
           >
           <button type="submit" class="btn-primary" disabled={creating}
-            >{creating ? 'creating…' : 'create'}</button
+            >{creating ? 'Creating…' : 'Create project'}</button
           >
         </div>
       </form>
@@ -107,38 +103,28 @@
     {:else if !projects.length && !showForm}
       <!-- First-run: a project is the front door, so explain it rather than
            showing an empty grid. -->
-      <div class="empty-state">
-        <div class="brackets">[ ]</div>
-        <h3>no projects yet</h3>
-        <p class="cta">a project is a workspace — chat, memory, and scheduled runners in one place</p>
-        <div style="margin-top: 18px;">
-          <button class="btn-primary" onclick={() => (showForm = true)}>+ create your first project</button>
-        </div>
-      </div>
+      <EmptyState
+        title="No projects yet"
+        hint="A project keeps a topic's chats, instructions, files and scheduled runners in one place. Your projects will appear here."
+        icon="folder"
+      >
+        <button class="btn-primary" onclick={() => (showForm = true)}
+          ><Icon name="plus" size={14} stroke={2.2} />Create your first project</button
+        >
+      </EmptyState>
     {:else}
-      <section class="proj-hero">
-        <div class="proj-rule"></div>
-        <p class="proj-standfirst">
-          A workspace keeps a project's <em>conversations, memory, and scheduled agents</em> in one place — your
-          room to think with the fleet.
-        </p>
-      </section>
-      <div class="label-cap" style="margin-bottom: 12px;">Workspaces · {projects.length}</div>
-      <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px;">
+      <p class="intro">
+        A project keeps a topic's chats, instructions, files and scheduled runners together.
+      </p>
+      <div class="proj-grid">
         {#each projects as p (p.id)}
-          <a
-            href={href('/projects/' + encodeURIComponent(p.id))}
-            use:link
-            class="card project-card"
-            style="text-decoration: none; display: block;"
-          >
-            <div style="display: flex; align-items: baseline; gap: 8px;">
-              <span class="text-bright" style="font-weight: 600;">{p.name}</span>
-              <span class="ml-auto label-cap">{p.n_chats} chats</span>
+          <a href={href('/projects/' + encodeURIComponent(p.id))} use:link class="card project-card">
+            <div class="proj-head">
+              <Icon name="folder" size={16} class="proj-ico" />
+              <span class="proj-name">{p.name}</span>
+              <span class="proj-count">{p.n_chats} {p.n_chats === 1 ? 'chat' : 'chats'}</span>
             </div>
-            {#if p.description}<p class="text-dim" style="font-size: 13px; margin-top: 6px;">
-                {p.description}
-              </p>{/if}
+            {#if p.description}<p class="proj-desc">{p.description}</p>{/if}
           </a>
         {/each}
       </div>
@@ -147,41 +133,71 @@
 </Page>
 
 <style>
-  /* Editorial entrance: an accent rule + a serif-italic standfirst that gives
-     the front door an authored, magazine feel before the workspace grid. */
-  .proj-hero {
-    max-width: 640px;
-    margin: 4px 0 30px;
+  .form {
+    max-width: 480px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
   }
-  .proj-rule {
-    width: 52px;
-    height: 2px;
-    background: var(--accent);
-    margin-bottom: 18px;
-  }
-  .proj-standfirst {
-    font-family: var(--font-prose);
-    font-style: italic;
-    font-weight: 400;
-    font-size: 23px;
-    line-height: 1.45;
-    letter-spacing: -0.01em;
-    color: var(--fg-dim);
-    margin: 0;
-  }
-  .proj-standfirst em {
-    font-style: italic;
+  .form-title {
+    font-size: 14px;
+    font-weight: 600;
     color: var(--fg-bright);
+    margin-bottom: 2px;
   }
-
-  /* Subtle lift on the project cards — the grid is the front door. */
+  .form-error {
+    color: var(--red);
+    font-size: 12px;
+  }
+  .form-actions {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+    margin-top: 4px;
+  }
+  .intro {
+    font-size: 13px;
+    color: var(--muted);
+    margin: 0 0 4px;
+  }
+  .proj-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+  }
   .project-card {
-    transition:
-      border-color 0.15s var(--transition),
-      transform 0.15s var(--transition);
+    display: block;
+    text-decoration: none;
   }
   .project-card:hover {
-    transform: translateY(-1px);
-    border-color: var(--accent-soft);
+    text-decoration: none;
+  }
+  .proj-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  :global(.proj-ico) {
+    color: var(--muted);
+  }
+  .proj-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--fg-bright);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .proj-count {
+    margin-left: auto;
+    flex-shrink: 0;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .proj-desc {
+    font-size: 13px;
+    color: var(--fg-dim);
+    margin: 8px 0 0;
+    line-height: 1.5;
   }
 </style>

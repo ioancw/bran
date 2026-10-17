@@ -1,11 +1,12 @@
 <script lang="ts">
   // Settings: app-level configuration. "About me" — global instructions layered
-  // into EVERY agent run's system prompt (chat, runners, spawns, manual runs),
-  // bran's equivalent of Cowork's global instructions — plus Appearance (theme).
+  // into EVERY agent run's system prompt (chat, runners, spawns, manual runs) —
+  // plus Appearance (theme).
   import { api } from '../lib/api'
   import { errorText } from '../lib/errors'
   import { THEMES, getTheme, setTheme } from '../lib/theme'
   import ErrorBanner from '../components/ErrorBanner.svelte'
+  import Icon from '../components/Icon.svelte'
   import Page from '../components/Page.svelte'
   import Skeleton from '../components/Skeleton.svelte'
 
@@ -78,48 +79,43 @@
 </script>
 
 <Page title="Settings">
-  {#snippet subtitle()}how your agents work for you{/snippet}
+  {#snippet subtitle()}How your agents work for you{/snippet}
 
   {#if error}<div style="margin-bottom: 14px;"><ErrorBanner {error} onretry={load} /></div>{/if}
   {#if loaded}
     <div class="space-y-4" style="max-width: 720px;">
-      <div class="card">
-        <div class="label-cap" style="margin-bottom: 6px;">About me · applied to every agent run</div>
-        <p class="text-muted" style="font-size: 12.5px; margin: 0 0 10px; line-height: 1.5;">
-          Who you are and how you like things done — role, location/timezone, preferences, standing context.
-          Every agent sees this on every run: chats, runners, background spawns. Project instructions layer on
-          top for project-specific guidance.
+      <section class="card">
+        <h2 class="card-title">About me</h2>
+        <p class="card-desc">
+          Who you are and how you like things done: role, location and timezone, preferences, standing
+          context. Every agent sees this on every run (chats, runners, background spawns). Project
+          instructions layer on top for project-specific guidance.
         </p>
         <textarea
-          class="field"
+          class="field about"
           bind:value={instructions}
           rows="10"
-          aria-label="about me — global instructions applied to every agent run"
+          aria-label="About me: global instructions applied to every agent run"
           placeholder={ABOUT_PLACEHOLDER}
           onkeydown={(e) => {
             if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
               e.preventDefault()
               void save()
             }
-          }}
-          style="resize: vertical; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.55;"
-        ></textarea>
-        <div style="display: flex; align-items: center; gap: 10px; margin-top: 10px;">
-          <button class="btn-primary" disabled={saving} onclick={save}>{saving ? 'saving…' : 'save'}</button>
-          {#if savedFlash}<span class="label-cap" style="color: var(--accent-soft);"
-              >saved ✓ — applies to the next run</span
+          }}></textarea>
+        <div class="save-row">
+          <button class="btn-primary" disabled={saving} onclick={save}>{saving ? 'Saving…' : 'Save'}</button>
+          {#if savedFlash}<span class="saved" role="status"
+              ><Icon name="check" size={14} />Saved. Applies to the next run.</span
             >{/if}
-          {#if saveError}<span role="alert" style="color: var(--red); font-size: 12px;">{saveError}</span
-            >{/if}
+          {#if saveError}<span role="alert" class="save-err">{saveError}</span>{/if}
         </div>
-      </div>
+      </section>
 
-      <div class="card">
-        <div class="label-cap" style="margin-bottom: 6px;">Appearance · this device</div>
-        <p class="text-muted" style="font-size: 12.5px; margin: 0 0 12px; line-height: 1.5;">
-          Applies instantly and is remembered by this browser.
-        </p>
-        <div class="theme-grid" role="radiogroup" aria-label="theme">
+      <section class="card">
+        <h2 class="card-title">Appearance</h2>
+        <p class="card-desc">Applies instantly and is remembered by this browser.</p>
+        <div class="theme-grid" role="radiogroup" aria-label="Theme">
           {#each THEMES as t, i (t.name)}
             <button
               class="theme-tile"
@@ -142,7 +138,7 @@
             </button>
           {/each}
         </div>
-      </div>
+      </section>
     </div>
   {:else}
     <Skeleton rows={5} />
@@ -150,6 +146,39 @@
 </Page>
 
 <style>
+  .card-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--fg-bright);
+    margin: 0 0 4px;
+  }
+  .card-desc {
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.5;
+    margin: 0 0 12px;
+  }
+  .about {
+    resize: vertical;
+    line-height: 1.55;
+  }
+  .save-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+  }
+  .saved {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12.5px;
+    color: var(--green);
+  }
+  .save-err {
+    color: var(--red);
+    font-size: 12px;
+  }
   .theme-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
@@ -166,15 +195,14 @@
     cursor: pointer;
   }
   /* Each tile is a miniature of the theme itself — canvas, a raised card, an
-     accent dot and two text lines. At this size Dracula and Nord actually
-     look different, and no tooltip is needed: the name sits underneath. */
+     accent dot and two text lines. */
   .tile-preview {
     display: flex;
     align-items: flex-end;
     height: 58px;
     padding: 8px;
     border: 1px solid var(--border2);
-    border-radius: var(--radius);
+    border-radius: 8px;
     transition:
       border-color var(--dur-1) var(--transition),
       box-shadow var(--dur-1) var(--transition);

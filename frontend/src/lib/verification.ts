@@ -24,11 +24,11 @@ export function isSuperseded(r: RunRecord): boolean {
   return !!v && v.status === 'done' && v.pass === false && !!v.retried_run_id
 }
 
-/** Badge for reading surfaces: ✓ verified / ✓ revised (passed after a retry) /
- * ✗ unverified (failed review with no successful retry). Null = not reviewed. */
+/** Badge for reading surfaces: Verified / Revised (passed after a retry) /
+ * Unverified (failed review with no successful retry). Null = not reviewed. */
 export function verifyBadge(r: RunRecord): { label: string; tone: 'ok' | 'warn' } | null {
   const v = verificationOf(r)
   if (!v || v.status !== 'done') return null
-  if (v.pass) return { label: v.retry_of ? '✓ revised' : '✓ verified', tone: 'ok' }
-  return { label: '✗ unverified', tone: 'warn' }
+  if (v.pass) return { label: v.retry_of ? 'Revised' : 'Verified', tone: 'ok' }
+  return { label: 'Unverified', tone: 'warn' }
 }

@@ -7,12 +7,13 @@
   import { errorText } from '../lib/errors'
   import { toast } from '../lib/toast.svelte'
   import { localDateTime } from '../lib/time'
-  import { validateTrigger, nowLocal } from '../lib/schedule'
+  import { validateTrigger, nowLocal, describeCron } from '../lib/schedule'
   import EmptyState from '../components/EmptyState.svelte'
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import Page from '../components/Page.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import CronField from '../components/CronField.svelte'
+  import Icon from '../components/Icon.svelte'
   import type { AgentInfo, ProjectSummary, RunRecord, ScheduleRecord } from '../lib/types'
 
   let runners = $state<ScheduleRecord[]>([])
@@ -45,6 +46,7 @@
   let fAlert = $state('') // significance bar; '' = normal (non-sensing) runner
   let creating = $state(false)
   let formError = $state<string | null>(null)
+  const uid = $props.id()
 
   async function load() {
     error = null // clear a stale banner so a recovered refresh shows clean
@@ -80,11 +82,11 @@
     e?.preventDefault()
     if (creating) return
     if (!fName.trim()) {
-      formError = 'give the runner a name'
+      formError = 'Give the runner a name.'
       return
     }
     if (!fTask.trim()) {
-      formError = 'describe the task — what should the agent do each run?'
+      formError = 'Describe the task: what should the agent do each run?'
       return
     }
     const fields: {
@@ -118,7 +120,7 @@
     creating = true
     try {
       await api.newSchedule(fields)
-      toast(`created runner ${fields.name}`, 'ok')
+      toast(`Created runner ${fields.name}`, 'ok')
     } catch (err) {
       formError = errorText(err)
       return
@@ -136,10 +138,16 @@
     await load()
   }
   async function remove(name: string) {
-    if (!(await confirmDialog(`Delete runner "${name}"?`))) return
+    if (
+      !(await confirmDialog(
+        `Delete runner "${name}"? Its schedule stops. Past runs and outputs are kept.`,
+        'Delete runner',
+      ))
+    )
+      return
     try {
       await api.deleteSchedule(name)
-      toast(`deleted runner ${name}`, 'ok')
+      toast(`Deleted runner ${name}`, 'ok')
     } catch (e) {
       toast(errorText(e), 'err')
     }
@@ -153,7 +161,7 @@
     try {
       const updated = await api.setScheduleEnabled(r.name, want)
       runners = runners.map((x) => (x.name === r.name ? updated : x))
-      toast(`${updated.enabled ? 'resumed' : 'paused'} ${r.name}`, 'ok')
+      toast(`${updated.enabled ? 'Resumed' : 'Paused'} ${r.name}`, 'ok')
     } catch (e) {
       runners = runners.map((x) => (x.name === r.name ? { ...x, enabled: r.enabled } : x))
       toast(errorText(e), 'err')
@@ -162,94 +170,115 @@
 </script>
 
 <Page title="Runners">
-  {#snippet subtitle()}scheduled agents · {runners.length}{/snippet}
+  {#snippet subtitle()}{runners.length} scheduled {runners.length === 1 ? 'agent' : 'agents'}{/snippet}
   {#snippet actions()}
-    <button class="btn-primary" onclick={() => (showForm = !showForm)}>+ new runner</button>
+    <button class="btn-primary" onclick={() => (showForm = !showForm)}>
+      <Icon name="plus" size={14} stroke={2.2} />New runner
+    </button>
   {/snippet}
 
   <div class="space-y-4">
     {#if error}<ErrorBanner {error} onretry={load} />{/if}
 
     {#if showForm}
-      <form class="card-quiet" style="max-width: 660px;" onsubmit={create}>
-        <span class="label-cap" style="display: block; margin-bottom: 8px;"
-          >New runner — an agent on a schedule</span
-        >
+      <form class="card-quiet runner-form" onsubmit={create}>
+        <h2 class="form-title">New runner</h2>
+        <p class="form-hint">An agent on a schedule. Runners fire inside <code>bran serve</code>.</p>
         <div class="grid grid-cols-2 gap-4">
-          <input class="field" bind:value={fName} placeholder="name (unique)" aria-label="runner name" />
-          <select class="field" bind:value={fAgent} aria-label="agent">
-            {#each agents as a (a.name)}<option value={a.name}>{a.name}</option>{/each}
-          </select>
-          <select class="field" bind:value={fKind} aria-label="trigger type">
-            <option value="cron">Recurring (cron)</option>
-            <option value="once">Once (one-shot)</option>
-          </select>
-          {#if fKind === 'once'}
-            <input
+          <div class="fld">
+            <label for="{uid}-name">Name</label>
+            <input id="{uid}-name" class="field" bind:value={fName} placeholder="morning-brief" />
+          </div>
+          <div class="fld">
+            <label for="{uid}-agent">Agent</label>
+            <select id="{uid}-agent" class="field" bind:value={fAgent}>
+              {#each agents as a (a.name)}<option value={a.name}>{a.name}</option>{/each}
+            </select>
+          </div>
+          <div class="fld">
+            <label for="{uid}-kind">Trigger</label>
+            <select id="{uid}-kind" class="field" bind:value={fKind}>
+              <option value="cron">Recurring</option>
+              <option value="once">Once</option>
+            </select>
+          </div>
+          <div class="fld">
+            {#if fKind === 'once'}
+              <label for="{uid}-runat">Run at</label>
+              <input
+                id="{uid}-runat"
+                class="field"
+                type="datetime-local"
+                bind:value={fRunAt}
+                min={nowLocal()}
+              />
+            {:else}
+              <span class="fld-label">Schedule</span>
+              <CronField bind:value={fCron} />
+            {/if}
+          </div>
+          <div class="fld">
+            <label for="{uid}-project">Project</label>
+            <select id="{uid}-project" class="field" bind:value={fProject}>
+              <option value="">Standalone (no project)</option>
+              {#each projects as p (p.id)}<option value={p.id}>{p.name}</option>{/each}
+            </select>
+            <span class="fld-help">Attaching runs the agent with that project's instructions and memory.</span
+            >
+          </div>
+          <div class="fld span2">
+            <label for="{uid}-task">Task</label>
+            <textarea
+              id="{uid}-task"
               class="field"
-              type="datetime-local"
-              bind:value={fRunAt}
-              min={nowLocal()}
-              aria-label="run date and time"
-            />
-          {:else}
-            <CronField bind:value={fCron} />
-          {/if}
-          <select class="field" bind:value={fProject} aria-label="attach to project">
-            <option value="">standalone (no project)</option>
-            {#each projects as p (p.id)}<option value={p.id}>attach to: {p.name}</option>{/each}
-          </select>
-          <textarea
-            class="field"
-            bind:value={fTask}
-            rows="4"
-            aria-label="task prompt"
-            placeholder={fKind === 'once'
-              ? 'prompt to run once — what should the agent do?'
-              : 'prompt to run each tick — what should the agent do?'}
-            style="grid-column: span 2; resize: vertical; line-height: 1.5;"></textarea>
-          <label
-            class="mode-check"
-            title="An evaluator reviews each output against the task; a failed verdict re-runs the agent once with the reviewer's feedback."
-          >
+              bind:value={fTask}
+              rows="4"
+              placeholder={fKind === 'once'
+                ? 'What should the agent do when it runs?'
+                : 'What should the agent do each time it runs?'}
+              style="resize: vertical; line-height: 1.5;"></textarea>
+          </div>
+          <label class="mode-check">
             <input type="checkbox" bind:checked={fVerify} />
-            <span><strong>verify</strong> — review each output, retry once on a bad one</span>
+            <span>
+              <strong>Verify</strong>
+              <span class="fld-help"
+                >An evaluator reviews each output against the task and re-runs once on a bad verdict.</span
+              >
+            </span>
           </label>
-          <label
-            class="mode-check"
-            title="Each run sees the previous run's report and reports only what's new or changed — ideal for recurring news/research runners."
-          >
+          <label class="mode-check">
             <input type="checkbox" bind:checked={fDelta} />
-            <span><strong>delta</strong> — report only what changed since last run</span>
+            <span>
+              <strong>Delta</strong>
+              <span class="fld-help">Each run sees the previous report and reports only what changed.</span>
+            </span>
           </label>
-          <input
-            class="field"
-            bind:value={fAlert}
-            aria-label="alert condition"
-            placeholder="alert when… (optional significance bar, e.g. 'GBP moves >1% intraday') — crossed = escalated 🚨"
-            style="grid-column: span 2;"
-          />
+          <div class="fld span2">
+            <label for="{uid}-alert">Alert when <span class="text-muted">(optional)</span></label>
+            <input
+              id="{uid}-alert"
+              class="field"
+              bind:value={fAlert}
+              placeholder="e.g. GBP moves more than 1% intraday"
+            />
+            <span class="fld-help">A significance bar. A run that crosses it is escalated as an alert.</span>
+          </div>
         </div>
-        {#if formError}<div role="alert" style="color: var(--red); font-size: 12px; margin-top: 8px;">
-            {formError}
-          </div>{/if}
-        <div style="display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px;">
+        {#if formError}<div role="alert" class="form-error">{formError}</div>{/if}
+        <div class="form-actions">
           <button
             type="button"
             class="btn-ghost"
             onclick={() => {
               showForm = false
               formError = null
-            }}>cancel</button
+            }}>Cancel</button
           >
           <button type="submit" class="btn-primary" disabled={creating}
-            >{creating ? 'creating…' : 'create runner'}</button
+            >{creating ? 'Creating…' : 'Create runner'}</button
           >
         </div>
-        <p class="text-muted" style="font-size: 11px; margin-top: 8px;">
-          Runners fire inside <code>bran serve</code>. Attaching to a project runs the agent with that
-          project's memory.
-        </p>
       </form>
     {/if}
 
@@ -257,70 +286,89 @@
       <Skeleton rows={5} />
     {:else if !runners.length}
       <EmptyState
-        title="no runners"
-        hint="a runner is an agent on a schedule — your morning briefing, your weekly digest"
+        title="No runners yet"
+        hint="A runner is an agent on a schedule: a morning briefing, a weekly digest, a one-off job at 3pm."
+        icon="bot"
       >
-        <button class="btn-primary" onclick={() => (showForm = true)}>+ create your first runner</button>
+        <button class="btn-primary" onclick={() => (showForm = true)}>
+          <Icon name="plus" size={14} stroke={2.2} />Create a runner
+        </button>
       </EmptyState>
     {:else}
       <div style="overflow-x: auto;">
-        <table class="bran-table" style="min-width: 780px;">
+        <table class="bran-table" style="min-width: 820px;">
           <thead>
             <tr>
-              <th>Name</th><th>Agent</th><th>Trigger</th><th>Next</th><th>Attached</th><th>State</th><th
+              <th>Name</th><th>Agent</th><th>Trigger</th><th>Next run</th><th>Project</th><th>State</th><th
                 >Task</th
               ><th></th>
             </tr>
           </thead>
           <tbody>
             {#each runners as r (r.name)}
+              {@const last = lastRun[r.id]}
               <tr>
                 <td>
-                  <a
-                    href={href('/runners/' + encodeURIComponent(r.name))}
-                    use:link
-                    style="color: var(--fg-bright); text-decoration: none; font-weight: 500;">{r.name}</a
-                  >
-                  {#if lastRun[r.id]?.status === 'failed'}
-                    <span class="fail-dot" title="last run failed: {lastRun[r.id].error ?? 'unknown error'}"
-                      >●</span
+                  <span class="name-cell">
+                    {#if last?.status === 'failed'}
+                      <span class="dot err" title="Last run failed: {last.error ?? 'unknown error'}"></span>
+                    {/if}
+                    <a href={href('/runners/' + encodeURIComponent(r.name))} use:link class="name-link"
+                      >{r.name}</a
+                    >
+                  </span>
+                </td>
+                <td>
+                  <span class="agent-cell">
+                    <span>{r.agent}</span>
+                    {#if r.verify}<span class="pill mute" title="Outputs are reviewed by an evaluator"
+                        >Verified</span
+                      >{/if}
+                    {#if r.delta}<span
+                        class="pill accent"
+                        title="Reports only what changed since the last run">Delta</span
+                      >{/if}
+                    {#if r.alert}<span class="pill err" title="Alerts when: {r.alert}"
+                        ><Icon name="alert-triangle" size={12} />Alert</span
+                      >{/if}
+                  </span>
+                </td>
+                <td class="text-dim">
+                  {#if r.run_at}
+                    <span title={r.run_at}>Once · {localDateTime(r.run_at)}</span>
+                  {:else}
+                    <span title={r.cron ?? ''} style="white-space: nowrap;">{describeCron(r.cron ?? '')}</span
                     >
                   {/if}
                 </td>
-                <td class="mono" style="color: var(--accent-soft);">
-                  {r.agent}
-                  {#if r.verify}<span class="mode-tag" title="outputs are reviewed by an evaluator">v</span
-                    >{/if}
-                  {#if r.delta}<span class="mode-tag" title="reports only what changed since the last run"
-                      >Δ</span
-                    >{/if}
-                  {#if r.alert}<span class="mode-tag" title="sensing runner — alerts when: {r.alert}">🚨</span
-                    >{/if}
-                </td>
-                <td class="mono" style="color: var(--fg-dim);">{r.run_at ? 'once' : r.cron}</td>
-                <td style="color: var(--fg-dim); white-space: nowrap;"
+                <td class="text-dim" style="white-space: nowrap;"
                   >{r.enabled && r.next_run ? localDateTime(r.next_run) : '—'}</td
                 >
-                <td style="color: var(--fg-dim);">{projName(r.project_id) ?? '—'}</td>
-                <td
-                  ><button
-                    class="state-btn"
-                    class:on={r.enabled}
-                    onclick={() => toggle(r)}
-                    title={r.enabled ? 'pause' : 'resume'}>{r.enabled ? 'on' : 'paused'}</button
-                  ></td
-                >
-                <td
-                  style="color: var(--fg-dim); max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
-                  >{r.task}</td
-                >
-                <td
-                  ><button
-                    class="btn-ghost"
+                <td class="text-dim">{projName(r.project_id) ?? '—'}</td>
+                <td>
+                  <span class="state-cell">
+                    <span class="state-word"
+                      ><span class="dot" class:ok={r.enabled}></span>{r.enabled ? 'On' : 'Paused'}</span
+                    >
+                    <button class="btn-outline btn-sm" onclick={() => toggle(r)}>
+                      {#if r.enabled}<Icon name="pause" size={12} />Pause{:else}<Icon
+                          name="play"
+                          size={12}
+                        />Resume{/if}
+                    </button>
+                  </span>
+                </td>
+                <td class="text-dim task-cell" title={r.task}>{r.task}</td>
+                <td>
+                  <button
+                    class="btn-icon danger"
                     onclick={() => remove(r.name)}
-                    aria-label="delete runner {r.name}">×</button
-                  ></td
-                >
+                    aria-label="Delete runner {r.name}"
+                    title="Delete runner"
+                  >
+                    <Icon name="x" size={14} />
+                  </button>
+                </td>
               </tr>
             {/each}
           </tbody>
@@ -331,57 +379,113 @@
 </Page>
 
 <style>
-  .state-btn {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    padding: 2px 8px;
-    border-radius: 999px;
-    border: 1px solid var(--border2);
-    background: transparent;
+  .runner-form {
+    max-width: 720px;
+  }
+  .form-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--fg-bright);
+  }
+  .form-hint {
+    font-size: 12.5px;
     color: var(--muted);
-    cursor: pointer;
-    transition: all 0.12s var(--transition);
+    margin: 2px 0 14px;
   }
-  .state-btn.on {
-    color: var(--accent-soft);
-    border-color: var(--accent-soft);
-    background: var(--accent-glow);
+  .form-hint code {
+    font-family: var(--font-mono);
+    font-size: 12px;
   }
-  .state-btn:hover {
-    border-color: var(--muted);
+  .fld {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
   }
-  .fail-dot {
+  .fld.span2 {
+    grid-column: span 2;
+  }
+  .fld label,
+  .fld-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--fg);
+  }
+  .fld-help {
+    display: block;
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.4;
+  }
+  .form-error {
     color: var(--red);
-    font-size: 9px;
-    margin-left: 6px;
-    vertical-align: middle;
-    cursor: help;
+    font-size: 12.5px;
+    margin-top: 10px;
+  }
+  .form-actions {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+    margin-top: 14px;
   }
   .mode-check {
     display: flex;
-    align-items: baseline;
+    align-items: flex-start;
     gap: 8px;
-    font-size: 12px;
+    font-size: 13px;
     color: var(--fg-dim);
     cursor: pointer;
   }
   .mode-check input {
     cursor: pointer;
+    margin-top: 2px;
   }
   .mode-check strong {
+    display: block;
     color: var(--fg-bright);
     font-weight: 500;
   }
-  .mode-tag {
-    display: inline-block;
-    margin-left: 6px;
-    padding: 0 5px;
-    border-radius: 4px;
-    background: var(--accent-glow);
-    color: var(--accent-soft);
-    font-size: 10px;
-    cursor: help;
+
+  .name-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .name-link {
+    color: var(--fg-bright);
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .agent-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .state-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .state-word {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--fg-dim);
+    white-space: nowrap;
+  }
+  .task-cell {
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  @media (max-width: 768px) {
+    .fld.span2,
+    .runner-form :global(.grid-cols-2) {
+      grid-column: auto;
+    }
   }
 </style>

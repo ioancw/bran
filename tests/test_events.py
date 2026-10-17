@@ -9,6 +9,10 @@ from bran.web.events import events_from_message, events_from_transcript_entry
 
 # --- Stand-ins whose class __name__ matches the SDK types events.py keys off. ---
 
+def _no_ts(events):
+    """Timestamps are wall-clock on the live path; strip them to compare shapes."""
+    return [{k: v for k, v in e.items() if k != "ts"} for e in events]
+
 class TextBlock:
     def __init__(self, text): self.text = text
 
@@ -51,7 +55,8 @@ def test_assistant_message_explodes_blocks_in_order():
         TextBlock(""),  # empty text is dropped
     ])
     evs = events_from_message(msg)
-    assert evs == [
+    assert evs[0]["ts"]  # live prose is stamped when it arrives
+    assert _no_ts(evs) == [
         {"type": "text", "text": "hello "},
         {"type": "tool_use", "name": "Read", "input": {"file_path": "/x"}, "tool_id": "t1"},
         {"type": "thinking", "text": "hmm"},
@@ -117,4 +122,16 @@ def test_transcript_user_and_tool_result():
 def test_live_and_replay_text_events_are_identical():
     live = events_from_message(AssistantMessage([TextBlock("same")]))
     replay = events_from_transcript_entry(Entry(kind="assistant_text", text="same"))
-    assert live == replay
+    assert _no_ts(live) == _no_ts(replay)
+
+
+def test_replay_carries_the_transcript_timestamp_when_known():
+    ts = "2026-07-25T09:37:27.818Z"
+    assert events_from_transcript_entry(Entry(kind="user_text", text="hi", timestamp=ts)) == [
+        {"type": "user", "text": "hi", "ts": ts}
+    ]
+    assert events_from_transcript_entry(Entry(kind="assistant_text", text="yo", timestamp=ts)) == [
+        {"type": "text", "text": "yo", "ts": ts}
+    ]
+    # No timestamp on the entry → no key at all (never ts=None).
+    assert "ts" not in events_from_transcript_entry(Entry(kind="user_text", text="hi"))[0]

@@ -122,7 +122,12 @@
   </div>
 
   <div class="side-actions">
-    <button class="btn-primary new-chat" onclick={newChat} title={collapsed ? 'New chat' : undefined} aria-label="New chat">
+    <button
+      class="btn-primary new-chat"
+      onclick={newChat}
+      title={collapsed ? 'New chat' : undefined}
+      aria-label="New chat"
+    >
       <Icon name="plus" size={15} stroke={2.2} />
       <span class="nav-label">New chat</span>
     </button>
@@ -188,7 +193,9 @@
           <span class="recent-meta">
             <span>{relativeTime(c.updated_at)}</span>
             <!-- Global Recents shows every chat, so say where each one lives. -->
-            {#if !workspace.scopeProjectId && c.project_id}<span class="recent-proj">{projectName(c.project_id)}</span>{/if}
+            {#if !workspace.scopeProjectId && c.project_id}<span class="recent-proj"
+                >{projectName(c.project_id)}</span
+              >{/if}
           </span>
         </a>
         <button
