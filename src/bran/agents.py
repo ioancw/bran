@@ -280,6 +280,7 @@ def build_options_for(
     agent: Agent,
     *,
     resume: str | None = None,
+    session_id: str | None = None,
     max_turns: int | None = None,
     append_system: str | None = None,
 ) -> ClaudeAgentOptions:
@@ -314,6 +315,9 @@ def build_options_for(
         mcp_servers=dict(agent.mcp_servers) if agent.mcp_servers else {},
         skills=list(agent.skills) if agent.skills else None,
         resume=resume,
+        # A fresh session under a chosen id (used when a chat's SDK transcript
+        # was pruned: bran keeps the chat's identity, the CLI starts over).
+        session_id=session_id,
         max_turns=max_turns if max_turns is not None else agent.max_turns,
         cwd=str(SETTINGS.project_root),
         hooks=dict(agent.hooks) if agent.hooks else None,

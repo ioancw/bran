@@ -216,6 +216,11 @@ def test_mention_in_orchestrator_chat_keeps_the_session(monkeypatch):
 
     sid = "sess-" + uuid.uuid4().hex
     upsert_chat(ChatRecord(id=sid, title="t", agent="orchestrator"))
+    # The SDK transcript is present (otherwise the pruned-transcript branch
+    # would start a fresh session instead of resuming — see test_chat_resume).
+    from pathlib import Path
+
+    monkeypatch.setattr(spa, "find_session_file", lambda _sid: Path("/tmp/present.jsonl"))
     seen: dict = {}
 
     async def fake_stream(agent, prompt, *, resume_session=None, **kw):

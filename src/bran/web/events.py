@@ -33,6 +33,7 @@ exact shape, so the client renders both through a single code path.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -89,6 +90,31 @@ def events_from_runs(runs: list[Any]) -> list[dict[str, Any]]:
         elif r.status == "cancelled":
             out.append({"type": "error", "message": r.error or "Run cancelled"})
     return out
+
+
+RESTORED_CONTEXT_CHARS = 12_000
+
+
+def restored_context(events: list[dict[str, Any]], limit: int = RESTORED_CONTEXT_CHARS) -> str:
+    """The conversation so far as a system-prompt block, for continuing a chat
+    whose SDK transcript was pruned. Keeps the most recent turns that fit."""
+    lines: list[str] = []
+    for ev in events:
+        if ev.get("type") == "user" and ev.get("text"):
+            lines.append("User: " + ev["text"].strip())
+        elif ev.get("type") == "text" and ev.get("text"):
+            lines.append("You: " + ev["text"].strip())
+    if not lines:
+        return ""
+    body = "\n\n".join(lines)
+    if len(body) > limit:
+        body = "[… earlier turns omitted …]\n\n" + body[-limit:]
+    return (
+        "## Earlier in this conversation (restored)\n"
+        "The session's transcript was pruned, so the turns below were restored from "
+        "bran's records. Treat them as the conversation so far and continue naturally; "
+        "do not mention the restoration unless asked.\n\n" + body
+    )
 
 
 def _text_from_tool_result_content(content: Any) -> str:
@@ -161,7 +187,19 @@ def events_from_message(message: Any) -> list[dict[str, Any]]:
             "session_id": getattr(message, "session_id", None),
         }]
 
+    # Name-based matching means an SDK rename would silently drop a message
+    # kind; say so once per kind so it shows up in the log, not as a mystery.
+    if mtype not in _IGNORED_TYPES and mtype not in _warned_types:
+        _warned_types.add(mtype)
+        logging.getLogger("bran.events").warning(
+            "unhandled SDK message type %s — events.py may need updating for this SDK version", mtype
+        )
     return []
+
+
+# Message kinds we know carry nothing the UI renders.
+_IGNORED_TYPES = {"SystemMessage", "StreamEvent", "RateLimitEvent", "ConversationResetMessage"}
+_warned_types: set[str] = set()
 
 
 def events_from_transcript_entry(entry: Entry) -> list[dict[str, Any]]:

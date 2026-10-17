@@ -373,6 +373,7 @@ async def stream_agent(
     task: str,
     *,
     resume_session: str | None = None,
+    session_id: str | None = None,
     parent_run_id: str | None = None,
     append_system: str | None = None,
     max_turns: int | None = None,
@@ -394,7 +395,7 @@ async def stream_agent(
     agent_def = get_agent(agent)
     record = _begin_run(agent, task, parent_run_id, None, project_id, source)
     options = build_options_for(
-        agent_def, resume=resume_session, max_turns=max_turns,
+        agent_def, resume=resume_session, session_id=session_id, max_turns=max_turns,
         append_system=append_system,
     )
     gen = _drive(record, task, options, on_message)

@@ -49,7 +49,7 @@ The orchestrator is the default chat agent. It can hand work off to specialists 
 | Sync vs async | Synchronous — orchestrator waits | Asynchronous — returns immediately |
 | Returned to orchestrator | The subagent's full output | Just a `run_id`, nothing else |
 | Use when | "Answer this *using* research" — you want the result *in this conversation* | "Kick off X *in the background*" — fire and forget |
-| Persistence | One row (orchestrator's run) | Separate run row in bran's SQLite |
+| Persistence | A child run (`source=subagent`) under the orchestrator's run, with the prompt, result and inner transcript | Separate run row in bran's SQLite |
 
 Trigger them by phrasing:
 
@@ -63,7 +63,39 @@ bran chat
 
 In the REPL stream you'll see `→ Agent {...}` or `→ spawn_agent {...}` lines confirming which path was taken. In one-shot mode (`bran "..."`) you only see the final text plus the footer; delegation is implied by higher turn counts (4–8) and inline `(Source: domain)` citations.
 
-To explicitly invoke a specific subagent regardless of phrasing, just name it: *"Use the `research` agent to…"* bypasses the orchestrator's discretion.
+To explicitly invoke a specific subagent regardless of phrasing, just name it: *"Use the `research` agent to…"* bypasses the orchestrator's discretion. In the web chat, starting a message with `@research …` does the same inside the current conversation.
+
+### Defining agents
+
+Every agent is one file in `agents/<name>.md`. The frontmatter is the configuration, the body is the system prompt:
+
+```markdown
+---
+name: research
+description: Web research specialist. Use it for anything that needs the web.
+model: sonnet
+max_turns: 40
+tools: [WebSearch, WebFetch, Read, Write, mcp__bran_docs__read_pdf, mcp__tavily__*]
+---
+You are a careful web research analyst. …
+```
+
+The same file defines the agent in both of its forms — the top-level agent you chat with, schedule or spawn, and the inline subagent another agent lists under `subagents:`. MCP servers follow from the tool names (`mcp__bran_docs__…` brings in `bran_docs`; `mcp__tavily__*` expands to every Tavily tool when `TAVILY_API_KEY` is set and to nothing otherwise). The body may use `{{roster}}` (a bullet list of the agent's subagents) and `{{briefings_dir}}`. Restart `bran serve` after adding or editing a file.
+
+### Fleet limits
+
+Every run is bounded, so one prompt can't grow into an unbounded tree of agents:
+
+| Limit | Setting | Default |
+| --- | --- | --- |
+| Spend per run (client-side estimate; the run ends with `error_max_budget_usd`) | `BRAN_RUN_BUDGET_USD` | 5 |
+| Turns per run | `max_turns` in the agent file | per agent |
+| Background runs executing at once (the rest wait as `pending`) | `BRAN_MAX_CONCURRENT_RUNS` | 4 |
+| `spawn_agent` nesting depth | `BRAN_MAX_SPAWN_DEPTH` | 2 |
+| Inline Agent-tool subagent depth / concurrency inside one run | `BRAN_SUBAGENT_DEPTH` / `BRAN_SUBAGENT_CONCURRENCY` | 1 / 5 |
+| Wall clock per run | `BRAN_RUN_TIMEOUT` (seconds, 0 = off) | 3600 |
+
+Only the tools an agent file grants exist in its session; everything else among the built-ins (Bash above all) is removed from the request, and the write-confinement hook keeps file writes inside bran's home and the project's working folder. Agent runs load project settings only — never your user-level `~/.claude` settings.
 
 ## Auth: API key vs subscription
 

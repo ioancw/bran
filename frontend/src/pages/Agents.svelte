@@ -54,7 +54,6 @@
             <div class="agent-head">
               <span class="agent-name">{a.name}</span>
               <span class="agent-model">{a.model ?? 'default model'}</span>
-              {#if a.file}<span class="agent-model mono" title="Defined in {a.file}">{a.file}</span>{/if}
             </div>
             <p class="agent-desc">{a.description}</p>
             {#if a.tools.length}
@@ -66,6 +65,7 @@
             {#if a.subagents.length}
               <div class="agent-delegates">Delegates to {a.subagents.join(', ')}</div>
             {/if}
+            {#if a.file}<div class="agent-file mono">{a.file}</div>{/if}
           </a>
           <button
             class="btn-outline btn-sm agent-sched"
@@ -107,6 +107,11 @@
     font-size: 14px;
     font-weight: 600;
     color: var(--fg-bright);
+  }
+  .agent-file {
+    margin-top: 10px;
+    font-size: 11px;
+    color: var(--muted);
   }
   .agent-model {
     font-size: 12px;

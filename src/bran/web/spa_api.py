@@ -70,7 +70,12 @@ from bran.project_files import (
 )
 from bran.runner import run_agent, stream_agent
 from bran.transcript import find_session_file, parse_transcript
-from bran.web.events import events_from_message, events_from_runs, events_from_transcript_entry
+from bran.web.events import (
+    events_from_message,
+    events_from_runs,
+    events_from_transcript_entry,
+    restored_context,
+)
 
 
 async def _require_same_origin(request: Request) -> None:
@@ -920,15 +925,22 @@ async def remove_chat(chat_id: str) -> dict[str, Any]:
 async def chat_history(chat_id: str) -> dict[str, Any]:
     """Replay a session as unified events (same schema as the live stream)."""
     path = find_session_file(chat_id)
-    if path is None:
+    if path is None or get_setting(_DB_HISTORY_KEY + chat_id) == "1":
         # Claude Code prunes session files after ~30 days; the turns live on
-        # as chat runs in bran's own database, so rebuild from those.
+        # as chat runs in bran's own database, so rebuild from those. A chat
+        # that was continued after its file was pruned stays on this path:
+        # its new file holds only the turns since, the database holds all.
         turns = list_runs(session_id=chat_id, limit=1000)
         return {"session_id": chat_id, "events": events_from_runs(turns)}
     events: list[dict[str, Any]] = []
     for entry in parse_transcript(path):
         events.extend(events_from_transcript_entry(entry))
     return {"session_id": chat_id, "events": events}
+
+
+# app_settings marker: this chat's history is served from the database even
+# though an SDK file exists (see chat_stream's pruned-transcript branch).
+_DB_HISTORY_KEY = "chat_history_db:"
 
 
 @router.post("/chat/stream")
@@ -980,6 +992,20 @@ async def chat_stream(
         target_project_id = None  # stale/unknown id → loose
     append_system = _build_project_context(project_record) if project_record else None
 
+    # Resuming needs the SDK's transcript file. When Claude Code has pruned it
+    # (it keeps sessions ~30 days) `--resume` exits with "No conversation
+    # found" — so start a FRESH SDK session under the same id (the chat keeps
+    # its identity, links and history) and seed it with what bran still holds.
+    resume_sid = sid
+    fresh_sid: str | None = None
+    if sid and existing_chat is not None and find_session_file(sid) is None:
+        resume_sid = None
+        fresh_sid = sid
+        restored = restored_context(events_from_runs(list_runs(session_id=sid, limit=1000)))
+        if restored:
+            append_system = (append_system + "\n\n" + restored) if append_system else restored
+        set_setting(_DB_HISTORY_KEY + sid, "1")
+
     first_prompt = actual_prompt.strip()
     title_seed = (first_prompt[:80].rstrip() + ("…" if len(first_prompt) > 80 else "")) or "(new chat)"
 
@@ -997,7 +1023,7 @@ async def chat_stream(
             await lock.acquire()
         try:
             async for msg in stream_agent(
-                target_agent, actual_prompt, resume_session=sid,
+                target_agent, actual_prompt, resume_session=resume_sid, session_id=fresh_sid,
                 append_system=append_system, project_id=target_project_id,
             ):
                 # Inside-subagent messages belong to the child run (see
