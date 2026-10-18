@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, streamRunEvents } from '../lib/api'
   import { toast } from '../lib/toast.svelte'
+  import { confirmDialog } from '../lib/confirm.svelte'
   import { errorText } from '../lib/errors'
   import { navigate, href, link } from '../lib/router.svelte'
   import { fmtBytes, fmtCost, fmtDuration, localDateTime } from '../lib/time'
@@ -155,6 +156,25 @@
       cancelling = false
     }
   }
+  let deleting = $state(false)
+  async function remove() {
+    if (!run || deleting) return
+    const ok = await confirmDialog(
+      `Delete run ${runId.slice(0, 8)}? It disappears from Runs and Outputs. Files it wrote stay on disk.`,
+      'Delete run',
+    )
+    if (!ok) return
+    deleting = true
+    try {
+      await api.deleteRun(runId)
+      toast('Run deleted', 'ok')
+      navigate('/runs')
+    } catch (e) {
+      toast(errorText(e), 'err')
+    } finally {
+      deleting = false
+    }
+  }
   async function rerun() {
     if (!run || rerunning) return
     rerunning = true
@@ -181,6 +201,9 @@
       {:else}
         <button class="btn-outline" disabled={rerunning} onclick={rerun}>
           <Icon name="refresh" size={13} />{rerunning ? 'Starting…' : 'Re-run'}
+        </button>
+        <button class="btn-ghost danger" disabled={deleting} onclick={remove} title="Delete this run">
+          <Icon name="trash" size={13} />Delete
         </button>
       {/if}
     {/if}

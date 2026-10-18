@@ -9,6 +9,9 @@
   import { relativeTime, localDateTime, localClock, countdown, fmtCost } from '../lib/time'
   import { isAlertResult, isSuperseded, verifyBadge } from '../lib/verification'
   import { sourceLabel, sourceHint } from '../lib/labels'
+  import { confirmDialog } from '../lib/confirm.svelte'
+  import { toast } from '../lib/toast.svelte'
+  import { errorText } from '../lib/errors'
   import Page from '../components/Page.svelte'
   import Icon from '../components/Icon.svelte'
   import ErrorBanner from '../components/ErrorBanner.svelte'
@@ -135,6 +138,27 @@
       document.removeEventListener('visibilitychange', refresh)
     }
   })
+
+  let clearing = $state(false)
+  async function clearFailures() {
+    const ids = attention.map((r) => r.id)
+    if (!ids.length || clearing) return
+    const ok = await confirmDialog(
+      `Delete ${ids.length} failed ${ids.length === 1 ? 'run' : 'runs'}? They disappear from Runs. Nothing else is affected.`,
+      'Delete runs',
+    )
+    if (!ok) return
+    clearing = true
+    try {
+      const res = await api.deleteRuns(ids)
+      toast(`Deleted ${res.deleted} ${res.deleted === 1 ? 'run' : 'runs'}`, 'ok')
+      await load()
+    } catch (e) {
+      toast(errorText(e), 'err')
+    } finally {
+      clearing = false
+    }
+  }
 </script>
 
 <Page title="Today">
@@ -162,6 +186,9 @@
           <section>
             <div class="sec-head">
               <span class="label-cap sec-alert"><Icon name="alert-circle" size={13} />Needs attention</span>
+              <button class="btn-ghost btn-sm ml-auto" disabled={clearing} onclick={clearFailures}>
+                <Icon name="trash" size={13} />{clearing ? 'Clearing…' : 'Clear'}
+              </button>
             </div>
             <div class="space-y-2">
               {#each attention as r (r.id)}

@@ -242,6 +242,13 @@ export const api = {
     const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''
     return getJSON<ChatSummary[]>(`/spa/chats${qs}`)
   },
+  deleteRun: async (id: string): Promise<void> => {
+    const url = `/spa/runs/${encodeURIComponent(id)}`
+    const r = await fetch(url, { method: 'DELETE' })
+    if (!r.ok) await raiseFor(r, url)
+  },
+  deleteRuns: (ids: string[]) =>
+    form<{ deleted: number; skipped: number }>('/spa/runs/delete', { ids: ids.join(',') }),
   chat: (id: string) => getJSON<ChatSummary>(`/spa/chats/${encodeURIComponent(id)}`),
   deleteChat: async (id: string): Promise<void> => {
     const url = `/spa/chats/${encodeURIComponent(id)}`

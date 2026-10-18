@@ -822,6 +822,31 @@ def get_chat(chat_id: str) -> ChatRecord | None:
     return _row_to_chat(row) if row else None
 
 
+def delete_runs(run_ids: list[str]) -> int:
+    """Delete run rows (and the subagent children recorded under them), with
+    their artifact and read/star rows. Files the runs wrote stay on disk.
+    Returns the number of top-level rows removed."""
+    ids = [r for r in run_ids if r]
+    if not ids:
+        return 0
+    marks = ",".join("?" for _ in ids)
+    with _lock, _conn() as conn:
+        children = [
+            row["id"] for row in conn.execute(
+                f"SELECT id FROM runs WHERE parent_run_id IN ({marks}) AND source = 'subagent'", ids
+            ).fetchall()
+        ]
+        everything = ids + children
+        emarks = ",".join("?" for _ in everything)
+        conn.execute(f"DELETE FROM artifacts WHERE run_id IN ({emarks})", everything)
+        conn.execute(f"DELETE FROM output_state WHERE run_id IN ({emarks})", everything)
+        cur = conn.execute(f"DELETE FROM runs WHERE id IN ({marks})", ids)
+        if children:
+            cmarks = ",".join("?" for _ in children)
+            conn.execute(f"DELETE FROM runs WHERE id IN ({cmarks})", children)
+        return cur.rowcount
+
+
 def delete_chat(chat_id: str) -> bool:
     with _lock, _conn() as conn:
         cur = conn.execute("DELETE FROM chats WHERE id = ?", (chat_id,))

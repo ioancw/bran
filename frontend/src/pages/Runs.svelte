@@ -9,6 +9,9 @@
   import StatusBadge from '../components/StatusBadge.svelte'
   import Icon from '../components/Icon.svelte'
   import { sourceLabel, sourceHint } from '../lib/labels'
+  import { confirmDialog } from '../lib/confirm.svelte'
+  import { toast } from '../lib/toast.svelte'
+  import { errorText } from '../lib/errors'
   import type { RunRecord } from '../lib/types'
 
   let runs = $state<RunRecord[]>([])
@@ -80,6 +83,22 @@
       document.removeEventListener('visibilitychange', refresh)
     }
   })
+
+  async function removeRun(r: RunRecord) {
+    const what = r.status === 'completed' ? 'this completed run and its output' : 'this run'
+    const ok = await confirmDialog(
+      `Delete ${what} (${shortId(r.id)})? It disappears from Runs and Outputs. Files it wrote stay on disk.`,
+      'Delete run',
+    )
+    if (!ok) return
+    try {
+      await api.deleteRun(r.id)
+      runs = runs.filter((x) => x.id !== r.id)
+      toast('Run deleted', 'ok')
+    } catch (e) {
+      toast(errorText(e), 'err')
+    }
+  }
 </script>
 
 <Page title="Runs">
@@ -127,7 +146,7 @@
           <tr>
             <th>ID</th><th>Agent</th><th>Source</th><th>Status</th><th>Started</th><th class="num"
               >Duration</th
-            ><th class="num">Cost</th><th>Task</th>
+            ><th class="num">Cost</th><th>Task</th><th></th>
           </tr>
         </thead>
         <tbody>
@@ -157,6 +176,16 @@
                   {#if r.error_summary?.hint}
                     <div class="task-hint">{r.error_summary.hint}</div>
                   {/if}
+                {/if}
+              </td>
+              <td style="width: 36px;">
+                {#if r.status !== 'running' && r.status !== 'pending'}
+                  <button
+                    class="btn-icon danger"
+                    title="Delete run"
+                    aria-label="Delete run {shortId(r.id)}"
+                    onclick={() => removeRun(r)}><Icon name="x" size={14} /></button
+                  >
                 {/if}
               </td>
             </tr>

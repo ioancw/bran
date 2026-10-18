@@ -363,6 +363,35 @@ async def new_run(
     return asdict(record)
 
 
+_LIVE = ("running", "pending")
+
+
+@router.delete("/runs/{run_id}")
+async def delete_run(run_id: str) -> dict[str, Any]:
+    """Remove a finished run from the activity log and Outputs. A live run
+    must be cancelled first — deleting under a running process would leave
+    it writing into a row that no longer exists."""
+    from bran.persistence import delete_runs
+
+    rec = get_run(run_id)
+    if rec is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No run {run_id}")
+    if rec.status in _LIVE:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Cancel the run before deleting it.")
+    return {"deleted": delete_runs([run_id])}
+
+
+@router.post("/runs/delete")
+async def delete_runs_batch(ids: Annotated[str, Form()] = "") -> dict[str, Any]:
+    """Delete several finished runs at once (Today's 'Clear' on failures).
+    Live runs in the list are skipped, not refused."""
+    from bran.persistence import delete_runs
+
+    wanted = [x for x in (s.strip() for s in ids.split(",")) if x]
+    finished = [r for r in wanted if (rec := get_run(r)) is not None and rec.status not in _LIVE]
+    return {"deleted": delete_runs(finished), "skipped": len(wanted) - len(finished)}
+
+
 @router.post("/runs/{run_id}/cancel")
 async def cancel_run(run_id: str) -> dict[str, Any]:
     from bran.background import cancel_background
