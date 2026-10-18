@@ -15,6 +15,8 @@ export interface ToolItem {
   isError: boolean
   startedAt: number
   durationMs: number | null
+  at?: string // wall-clock ISO (from the event), when known
+  endedAt?: string
   // The child run bran recorded for an Agent-tool delegation (server-attached).
   runId?: string | null
 }
@@ -24,7 +26,7 @@ export type ChatItem =
   // or the live stream's own clock). Absent on older transcripts.
   | { kind: 'user'; text: string; at?: string }
   | { kind: 'assistant'; text: string; at?: string }
-  | { kind: 'thinking'; text: string }
+  | { kind: 'thinking'; text: string; at?: string }
   | { kind: 'routed'; agent: string }
   | { kind: 'footer'; numTurns: number | null; cost: number | null; stopped?: boolean }
   | { kind: 'error'; message: string }
@@ -48,6 +50,12 @@ export function toolDisplayName(name: string): string {
   if (!name.startsWith('mcp__')) return name
   const parts = name.split('__')
   return parts.length >= 3 ? parts.slice(2).join('__') : name
+}
+
+/** True while the tool was pushed by the live stream moments ago — replayed
+ * history is applied in one burst, so its client-side timing means nothing. */
+function isLiveTool(tool: ToolItem): boolean {
+  return performance.now() - tool.startedAt > 50
 }
 
 function close(st: ReducerState): void {
@@ -86,7 +94,7 @@ export function applyEvent(items: ChatItem[], st: ReducerState, ev: ChatEvent): 
 
     case 'thinking':
       close(st)
-      items.push({ kind: 'thinking', text: ev.text })
+      items.push({ kind: 'thinking', text: ev.text, at: ev.ts })
       return {}
 
     case 'routed':
@@ -107,6 +115,7 @@ export function applyEvent(items: ChatItem[], st: ReducerState, ev: ChatEvent): 
         startedAt: performance.now(),
         durationMs: null,
         runId: ev.run_id ?? null,
+        at: ev.ts,
       }
       items.push(tool)
       if (ev.tool_id) st.tools[ev.tool_id] = items.length - 1
@@ -121,8 +130,15 @@ export function applyEvent(items: ChatItem[], st: ReducerState, ev: ChatEvent): 
         tool.status = ev.is_error ? 'error' : 'done'
         tool.isError = ev.is_error
         tool.resultText = ev.text
-        const d = performance.now() - tool.startedAt
-        tool.durationMs = d > 50 ? d : null
+        tool.endedAt = ev.ts
+        // Replayed history carries wall-clock stamps on both ends; a live
+        // stream is timed on the client (performance.now) instead.
+        const stamped = tool.at && ev.ts ? Date.parse(ev.ts) - Date.parse(tool.at) : NaN
+        if (!Number.isNaN(stamped) && stamped >= 0 && !isLiveTool(tool)) tool.durationMs = stamped
+        else {
+          const d = performance.now() - tool.startedAt
+          tool.durationMs = d > 50 ? d : null
+        }
       } else {
         // Orphan result (no matching call) — surface it standalone.
         items.push({

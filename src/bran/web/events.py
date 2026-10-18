@@ -150,13 +150,14 @@ def events_from_message(message: Any) -> list[dict[str, Any]]:
                 if text:
                     out.append({"type": "text", "text": text, "ts": _now_iso()})
             elif btype == "ThinkingBlock":
-                out.append({"type": "thinking", "text": getattr(block, "thinking", "")})
+                out.append({"type": "thinking", "text": getattr(block, "thinking", ""), "ts": _now_iso()})
             elif btype == "ToolUseBlock":
                 out.append({
                     "type": "tool_use",
                     "name": getattr(block, "name", ""),
                     "input": getattr(block, "input", None) or {},
                     "tool_id": getattr(block, "id", None),
+                    "ts": _now_iso(),
                 })
         return out
 
@@ -176,6 +177,7 @@ def events_from_message(message: Any) -> list[dict[str, Any]]:
                         "tool_id": block.get("tool_use_id"),
                         "is_error": bool(block.get("is_error")),
                         "text": _text_from_tool_result_content(block.get("content")),
+                        "ts": _now_iso(),
                     })
         return out
 
@@ -210,28 +212,28 @@ def events_from_transcript_entry(entry: Entry) -> list[dict[str, Any]]:
     if k == "assistant_text":
         return [_with_ts({"type": "text", "text": entry.text or ""}, entry.timestamp)]
     if k == "thinking":
-        return [{"type": "thinking", "text": entry.text or ""}]
+        return [_with_ts({"type": "thinking", "text": entry.text or ""}, entry.timestamp)]
     if k == "tool_call":
-        return [{
+        return [_with_ts({
             "type": "tool_use",
             "name": entry.tool_name or "",
             "input": entry.tool_input or {},
             "tool_id": entry.tool_id,
-        }]
+        }, entry.timestamp)]
     if k == "delegation":
         # Delegation is just an Agent/Task tool call; fold it into tool_use so the
         # client has one render path (input carries subagent_type + prompt).
-        return [{
+        return [_with_ts({
             "type": "tool_use",
             "name": entry.tool_name or "Agent",
             "input": entry.tool_input or {},
             "tool_id": entry.tool_id,
-        }]
+        }, entry.timestamp)]
     if k == "tool_result":
-        return [{
+        return [_with_ts({
             "type": "tool_result",
             "tool_id": entry.tool_id,
             "is_error": bool(entry.tool_is_error),
             "text": entry.text or "",
-        }]
+        }, entry.timestamp)]
     return []

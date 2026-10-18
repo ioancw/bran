@@ -69,7 +69,7 @@ def test_user_message_tool_results():
          "content": [{"type": "text", "text": "ok"}]},
         {"type": "tool_result", "tool_use_id": "t2", "is_error": True, "content": "boom"},
     ])
-    assert events_from_message(msg) == [
+    assert _no_ts(events_from_message(msg)) == [
         {"type": "tool_result", "tool_id": "t1", "is_error": False, "text": "ok"},
         {"type": "tool_result", "tool_id": "t2", "is_error": True, "text": "boom"},
     ]
@@ -123,6 +123,20 @@ def test_live_and_replay_text_events_are_identical():
     live = events_from_message(AssistantMessage([TextBlock("same")]))
     replay = events_from_transcript_entry(Entry(kind="assistant_text", text="same"))
     assert _no_ts(live) == _no_ts(replay)
+
+
+def test_tool_events_carry_timestamps_live_and_on_replay():
+    live = events_from_message(AssistantMessage([ToolUseBlock("Grep", {"pattern": "x"}, "t1")]))
+    assert live[0]["type"] == "tool_use" and live[0]["ts"]
+    ts = "2026-07-25T09:37:27.818Z"
+    replay = events_from_transcript_entry(
+        Entry(kind="tool_call", tool_name="Grep", tool_input={"pattern": "x"}, tool_id="t1", timestamp=ts)
+    )
+    assert replay[0]["ts"] == ts
+    res = events_from_transcript_entry(Entry(kind="tool_result", tool_id="t1", text="ok", timestamp=ts))
+    assert res[0]["ts"] == ts
+    # No timestamp known → no key, so the shape tests above stay exact.
+    assert "ts" not in events_from_transcript_entry(Entry(kind="thinking", text="hm"))[0]
 
 
 def test_replay_carries_the_transcript_timestamp_when_known():

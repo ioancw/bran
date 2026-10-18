@@ -9,13 +9,18 @@
   import { toast } from '../lib/toast.svelte'
   import { errorText } from '../lib/errors'
   import { paletteSignal } from '../lib/palette.svelte'
-  import type { ScheduleRecord } from '../lib/types'
+  import type { RunRecord, ScheduleRecord } from '../lib/types'
+  import { sourceLabel } from '../lib/labels'
+  import { relativeTime } from '../lib/time'
 
   interface Cmd {
     label: string
     meta: string
     run: () => void | Promise<void>
     keep?: boolean // stay open after running (e.g. pause/resume toggles)
+    section?: string // group header shown when it changes down the list
+    detail?: string // second line: where the match was found
+    key?: string
   }
 
   let open = $state(false)
@@ -83,10 +88,65 @@
     return cmds
   })
 
+  // Content search: from three characters, every conversation turn and output
+  // whose prompt or result contains the text (server-side LIKE over runs).
+  let content = $state<Cmd[]>([])
+  let searchSeq = 0
+  function snippet(text: string, needle: string, span = 70): string {
+    const hay = text.replace(/\s+/g, ' ')
+    const at = hay.toLowerCase().indexOf(needle.toLowerCase())
+    if (at < 0) return hay.slice(0, span * 2) + (hay.length > span * 2 ? '…' : '')
+    const start = Math.max(0, at - span)
+    const end = Math.min(hay.length, at + needle.length + span)
+    return (start > 0 ? '…' : '') + hay.slice(start, end) + (end < hay.length ? '…' : '')
+  }
+  function toCmd(r: RunRecord, needle: string): Cmd {
+    const isChat = r.source === 'chat'
+    const where = (r.result ?? '').toLowerCase().includes(needle.toLowerCase()) ? (r.result ?? '') : r.task
+    const title = r.task.replace(/\s+/g, ' ').slice(0, 90)
+    return {
+      label: title.length < r.task.trim().length ? title + '…' : title,
+      meta: isChat
+        ? `conversation · ${relativeTime(r.started_at)}`
+        : `${sourceLabel(r.source).toLowerCase()} · ${r.agent} · ${relativeTime(r.started_at)}`,
+      section: isChat ? 'Found in conversations' : 'Found in outputs',
+      detail: snippet(where, needle),
+      key: 'run:' + r.id,
+      run: () =>
+        navigate(isChat && r.session_id ? '/chat/' + encodeURIComponent(r.session_id) : '/runs/' + r.id),
+    }
+  }
+  $effect(() => {
+    const needle = q.trim()
+    const seq = ++searchSeq
+    if (!open || needle.length < 3) {
+      content = []
+      return
+    }
+    const t = setTimeout(() => {
+      void api
+        .runs({ q: needle, limit: 30 })
+        .then((rows) => {
+          if (seq !== searchSeq) return
+          const chats = rows.filter((r) => r.source === 'chat').slice(0, 8)
+          const outputs = rows.filter((r) => r.source !== 'chat' && r.source !== 'subagent').slice(0, 8)
+          content = [...chats, ...outputs].map((r) => toCmd(r, needle))
+        })
+        .catch(() => {
+          if (seq === searchSeq) content = []
+        })
+    }, 180)
+    return () => clearTimeout(t)
+  })
+
   const shown = $derived.by(() => {
     const needle = q.trim().toLowerCase()
     if (!needle) return all.slice(0, 10)
-    return all.filter((c) => `${c.label} ${c.meta}`.toLowerCase().includes(needle)).slice(0, 10)
+    const jump = all
+      .filter((c) => `${c.label} ${c.meta}`.toLowerCase().includes(needle))
+      .slice(0, 8)
+      .map((c) => ({ ...c, section: 'Jump to' }))
+    return [...jump, ...content]
   })
 
   $effect(() => {
@@ -184,10 +244,14 @@
       aria-autocomplete="list"
     />
     <div class="pal-list" role="listbox" id="pal-listbox" aria-label="commands">
-      {#each shown as cmd, i (cmd.meta + cmd.label)}
+      {#each shown as cmd, i (cmd.key ?? cmd.meta + cmd.label)}
+        {#if cmd.section && cmd.section !== shown[i - 1]?.section}
+          <div class="pal-section label-cap">{cmd.section}</div>
+        {/if}
         <button
           class="pal-item"
           class:on={i === idx}
+          class:two-line={!!cmd.detail}
           id="pal-opt-{i}"
           role="option"
           aria-selected={i === idx}
@@ -197,9 +261,14 @@
         >
           <span class="pal-label">{cmd.label}</span>
           <span class="pal-meta label-cap">{cmd.meta}</span>
+          {#if cmd.detail}<span class="pal-detail">{cmd.detail}</span>{/if}
         </button>
       {:else}
-        <div class="pal-none text-muted">Nothing matches “{q}”</div>
+        <div class="pal-none text-muted">
+          {q.trim().length < 3
+            ? `Nothing matches “${q}” — type 3+ characters to search conversations and outputs`
+            : `Nothing matches “${q}”`}
+        </div>
       {/each}
     </div>
     <div class="pal-foot"><kbd>↑</kbd><kbd>↓</kbd> navigate <kbd>↵</kbd> open <kbd>esc</kbd> close</div>
@@ -255,6 +324,21 @@
     cursor: pointer;
     color: var(--fg);
     font-size: 13px;
+  }
+  .pal-item.two-line {
+    flex-wrap: wrap;
+  }
+  .pal-detail {
+    flex-basis: 100%;
+    font-size: 12px;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-top: 1px;
+  }
+  .pal-section {
+    padding: 8px 10px 4px;
   }
   .pal-item.on {
     background: var(--accent-glow);

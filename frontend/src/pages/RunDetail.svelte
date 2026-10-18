@@ -12,6 +12,7 @@
   import Prose from '../components/Prose.svelte'
   import Icon from '../components/Icon.svelte'
   import ChatLog from '../chat/ChatLog.svelte'
+  import Timeline from '../chat/Timeline.svelte'
   import { applyEvent, freshState, type ChatItem } from '../chat/events'
   import type { ArtifactEntry, RunRecord, Verification } from '../lib/types'
 
@@ -338,23 +339,44 @@
             <div class="reading-col"><Prose text={run.result ?? ''} /></div>
           </div>
           {#if transcript.length}
+            <div class="card">
+              <h2 class="card-title">
+                Timeline <span class="title-count">{transcript.length} steps</span>
+              </h2>
+              <Timeline items={transcript} />
+            </div>
             <!-- The transcript repeats the final answer at its tail; it's the
-                 debug view, collapsed by default once the result is on top. -->
+                 long form, collapsed by default once the result is on top. -->
             <button
               class="transcript-toggle"
               aria-expanded={showTranscript}
               onclick={() => (showTranscript = !showTranscript)}
             >
               <Icon name={showTranscript ? 'chevron-down' : 'chevron-right'} size={14} />
-              Transcript <span class="text-muted">{transcript.length} steps</span>
+              Full transcript
             </button>
             {#if showTranscript}
               <div class="space-y-3"><ChatLog items={transcript} /></div>
             {/if}
           {/if}
         {:else if transcript.length}
-          <h2 class="card-title">Transcript</h2>
-          <div class="space-y-3"><ChatLog items={transcript} /></div>
+          <div class="card">
+            <h2 class="card-title">
+              Timeline <span class="title-count">{transcript.length} steps</span>
+            </h2>
+            <Timeline items={transcript} />
+          </div>
+          <button
+            class="transcript-toggle"
+            aria-expanded={!showTranscript}
+            onclick={() => (showTranscript = !showTranscript)}
+          >
+            <Icon name={!showTranscript ? 'chevron-down' : 'chevron-right'} size={14} />
+            Full transcript
+          </button>
+          {#if !showTranscript}
+            <div class="space-y-3"><ChatLog items={transcript} /></div>
+          {/if}
         {:else if run.result}
           <div class="card">
             <h2 class="card-title">Result</h2>
@@ -367,6 +389,11 @@
 </Page>
 
 <style>
+  .title-count {
+    font-weight: 400;
+    color: var(--muted);
+    margin-left: 6px;
+  }
   .child-row {
     display: flex;
     align-items: center;

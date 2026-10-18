@@ -142,15 +142,16 @@ export type ChatEvent =
   | { type: 'routed'; agent: string }
   | { type: 'user'; text: string; ts?: string } // ts: ISO-8601, present when known
   | { type: 'text'; text: string; ts?: string }
-  | { type: 'thinking'; text: string }
+  | { type: 'thinking'; text: string; ts?: string }
   | {
       type: 'tool_use'
       name: string
       input: Record<string, unknown>
       tool_id: string | null
       run_id?: string // the child run bran recorded for an Agent-tool delegation
+      ts?: string
     }
-  | { type: 'tool_result'; tool_id: string | null; text: string; is_error: boolean }
+  | { type: 'tool_result'; tool_id: string | null; text: string; is_error: boolean; ts?: string }
   | { type: 'result'; num_turns: number | null; total_cost_usd: number | null; session_id: string | null }
   | { type: 'error'; message: string }
   | { type: 'done' }

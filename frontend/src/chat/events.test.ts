@@ -179,3 +179,28 @@ describe('delegations', () => {
     expect(isDelegation('Task')).toBe(true)
   })
 })
+
+describe('replayed timestamps', () => {
+  it('derives a tool duration from tool_use/tool_result stamps on replay', () => {
+    const items: ChatItem[] = []
+    const st = freshState()
+    applyEvent(items, st, {
+      type: 'tool_use',
+      name: 'Grep',
+      input: {},
+      tool_id: 't1',
+      ts: '2026-07-01T10:00:00.000Z',
+    })
+    applyEvent(items, st, {
+      type: 'tool_result',
+      tool_id: 't1',
+      text: 'x',
+      is_error: false,
+      ts: '2026-07-01T10:00:02.500Z',
+    })
+    const tool = items[0] as ToolItem
+    expect(tool.at).toBe('2026-07-01T10:00:00.000Z')
+    expect(tool.endedAt).toBe('2026-07-01T10:00:02.500Z')
+    expect(tool.durationMs).toBe(2500)
+  })
+})
