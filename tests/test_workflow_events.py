@@ -227,3 +227,9 @@ def test_workflow_completed_update_without_notification_still_counts_as_success(
     ])
     (wf,) = list_runs(parent_run_id=parent.id)
     assert wf.status == "completed"
+
+
+def test_finance_news_runs_the_fact_check_itself():
+    a = get_agent("finance-news")
+    assert "Workflow" in a.tools and "research" in a.subagents and a.budget_usd == 8
+    assert "fact-check" in a.system_prompt and "output" in a.system_prompt

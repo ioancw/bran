@@ -1,8 +1,12 @@
 // fact-check — verify a document's factual claims against the web and
 // produce a corrected copy.
 //
-// Run by name from the orchestrator: Workflow({ name: 'fact-check', args: { path } })
-// where `path` is a file the agents can Read (a briefing, a report). The
+// Run by name: Workflow({ name: 'fact-check', args: { path, output? } })
+// where `path` is a file the agents can Read (a briefing, a report) and
+// `output`, if given, is where the checked document goes — pass the same
+// path to correct the document in place (the morning-brief runner does; the
+// verification note then records what changed). Without `output` the
+// original is left alone and the copy goes to <name>.checked.md. The
 // script holds the plan; agents do the reading, searching, judging and
 // rewriting; the hand-offs between stages are data, not prose, so nothing
 // gets retyped.
@@ -34,7 +38,9 @@ export const meta = {
 const MAX_CLAIMS = 12
 const path = typeof args === 'string' ? args : args && args.path
 if (!path) throw new Error('fact-check needs args.path: the document to check')
-const checkedPath = path.replace(/\.(md|markdown|txt)$/i, '') + '.checked.md'
+const explicitOutput = typeof args === 'object' && args && typeof args.output === 'string' && args.output.trim()
+const checkedPath = explicitOutput || path.replace(/\.(md|markdown|txt)$/i, '') + '.checked.md'
+const inPlace = checkedPath === path
 
 const CLAIMS = {
   type: 'object',
@@ -111,7 +117,7 @@ const extracted = await agent(
 )
 const claims = ((extracted && extracted.claims) || []).slice(0, MAX_CLAIMS)
 log(`${claims.length} claims extracted from ${extracted && extracted.document_title ? extracted.document_title : path}`)
-if (!claims.length) return { path, checked_path: null, claims: [], changes: [], report: 'No checkable claims were found in the document.' }
+if (!claims.length) return { path, checked_path: inPlace ? path : null, claims: [], changes: [], report: 'No checkable claims were found in the document.' }
 
 // --- Verify, then Refute — each claim flows through both stages on its own ---
 const checked = await pipeline(
@@ -160,12 +166,15 @@ log(`verdicts: ${JSON.stringify(counts)} — ${edits.length} passage(s) to edit`
 
 // --- Correct ---------------------------------------------------------------
 let corrected = null
-if (edits.length) {
+if (edits.length || explicitOutput) {
   phase('Correct')
   corrected = await agent(
     `You are editing a document so that it no longer states things the evidence does not support. ` +
-      `Read ${path} with the Read tool, apply the edits below, and save the full edited document with the Write tool to ` +
-      `exactly this path: ${checkedPath}. Leave the original file untouched. Change nothing except the listed passages.\n\n` +
+      `Read ${path} with the Read tool, apply the edits below (there may be none), and save the full edited document with ` +
+      `the Write tool to exactly this path: ${checkedPath}` +
+      (inPlace ? ` (the same file — overwrite it). ` : `. Leave the original file untouched. `) +
+      `Change nothing except the listed passages — but if the same wrong or disputed fact is repeated elsewhere in the ` +
+      `document (a summary bullet, a "So what" line), fix it there too, the same way.\n\n` +
       `Edits (JSON). For each: find the sentence in "quote" (it is verbatim from the document; if the wording differs ` +
       `slightly, find the sentence that makes the same claim).\n` +
       `- action "corrected": replace the sentence with the verdict's "correction" — a minimal fix of the original, not a ` +
@@ -177,15 +186,17 @@ if (edits.length) {
       `(e.g. ", though <source> reports <contrary point>").\n` +
       `- action "flagged": keep the sentence and append " [unverified]".\n\n` +
       `${JSON.stringify(edits.map((e) => ({ action: e.action, quote: e.quote, claim: e.claim, correction: e.verdict && e.verdict.correction, url: e.verdict && e.verdict.url, reason: e.refutation && e.refutation.reason, refutation_url: e.refutation && e.refutation.url })), null, 2)}\n\n` +
-      `At the very end of the document add a section "## Verification note" with one line per edit (what changed and why, ` +
-      `with the source), and one line saying how many claims were checked and confirmed (${JSON.stringify(counts)}). ` +
+      `At the very end of the document add a section "## Verification note" with one line per edit (the original ` +
+      `wording in quotes, what it now says and why, with the source), and one line saying how many claims were checked ` +
+      `and confirmed (${JSON.stringify(counts)}). ` +
       `Return the output path and, for every edit you made, the sentence before and after.`,
-    { schema: EDITS, label: 'apply corrections' },
+    { schema: EDITS, label: edits.length ? 'apply corrections' : 'add verification note', effort: edits.length ? undefined : 'low' },
   )
   if (!corrected) log('the editor failed; no corrected copy was written')
 } else {
   log('every claim held up; no corrected copy needed')
 }
+if (corrected && edits.length) log(`${corrected.changes.length} passage(s) edited → ${corrected.output_path}`)
 
 // --- Report ----------------------------------------------------------------
 phase('Report')
@@ -193,9 +204,10 @@ const report = await agent(
   `Write a short changelog in markdown for a fact-check of the document at ${path}. Use the JSON below verbatim — ` +
     `do not re-verify or soften anything.\n\n` +
     `Verdicts: ${JSON.stringify(rows, null, 2)}\n\n` +
-    `Edits applied${corrected ? ` (corrected copy saved to ${corrected.output_path})` : ' (none; no copy written)'}: ` +
+    `Edits applied${corrected ? (inPlace ? ` (the document was corrected in place at ${corrected.output_path})` : ` (corrected copy saved to ${corrected.output_path})`) : ' (none; no copy written)'}: ` +
     `${JSON.stringify(corrected ? corrected.changes : [], null, 2)}\n\n` +
-    `Structure: one paragraph with the counts (${JSON.stringify(counts)}) and, if a corrected copy exists, its path. ` +
+    `Structure: one paragraph with the counts (${JSON.stringify(counts)}) and, if a checked document was written, its path ` +
+    `(say "in place" when it is the original's path). ` +
     `Then "## Changed": one bullet per edit — the sentence before, the sentence after, and the source as a markdown link; ` +
     `mark high-importance ones with ⚠. Then "## Confirmed": one short line per supported claim with its source link ` +
     `(no evidence text). Then "## Could not check" if any. Return only the markdown.`,
