@@ -219,13 +219,16 @@ def _build_project_context(project: ProjectRecord) -> str:
     return "\n\n".join(parts)
 
 
-def delegation_prompt(agent: str, request: str) -> str:
-    """Turn an `@agent …` message into an orchestrator instruction that
-    delegates to that agent's subagent form — inside the SAME session, so the
-    conversation keeps its context instead of forking into a new chat."""
+def delegation_prompt(agent: str) -> str:
+    """The per-turn system-prompt note that makes an `@agent …` message a
+    delegation to that agent's subagent form — inside the SAME session, so
+    the conversation keeps its context instead of forking into a new chat.
+    It rides in the system prompt, not the user message, so the transcript
+    and the chat title keep the user's own words."""
     return (
-        f"Use the `{agent}` subagent (via the Agent tool) for the request below "
-        "and relay its answer to the user faithfully.\n\n" + request
+        "## Delegation request\n"
+        f"For this message, use the `{agent}` subagent (via the Agent tool) to do "
+        "the work and relay its answer to the user faithfully."
     )
 
 
@@ -1015,7 +1018,6 @@ async def chat_stream(
             # An @mention in an orchestrator chat is a one-off delegation
             # inside this conversation — not a fork into a new chat.
             target_agent = "orchestrator"
-            actual_prompt = delegation_prompt(mentioned_agent, actual_prompt)
             delegated = True
         else:
             target_agent = mentioned_agent
@@ -1037,6 +1039,9 @@ async def chat_stream(
     if target_project_id and project_record is None:
         target_project_id = None  # stale/unknown id → loose
     append_system = _build_project_context(project_record) if project_record else None
+    if delegated:
+        note = delegation_prompt(mentioned_agent)
+        append_system = (append_system + "\n\n" + note) if append_system else note
 
     # Resuming needs the SDK's transcript file. When Claude Code has pruned it
     # (it keeps sessions ~30 days) `--resume` exits with "No conversation

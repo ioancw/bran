@@ -211,8 +211,8 @@ def test_session_lock_is_per_session_and_exclusive():
 def test_delegation_prompt_names_the_subagent():
     from bran.web.spa_api import delegation_prompt
 
-    p = delegation_prompt("research", "what is the BoE base rate?")
-    assert "`research` subagent" in p and p.endswith("what is the BoE base rate?")
+    p = delegation_prompt("research")
+    assert "`research` subagent" in p and p.startswith("## Delegation request")
 
 
 def test_mention_in_orchestrator_chat_keeps_the_session(monkeypatch):
@@ -233,8 +233,8 @@ def test_mention_in_orchestrator_chat_keeps_the_session(monkeypatch):
     monkeypatch.setattr(spa, "find_session_file", lambda _sid: Path("/tmp/present.jsonl"))
     seen: dict = {}
 
-    async def fake_stream(agent, prompt, *, resume_session=None, **kw):
-        seen.update(agent=agent, prompt=prompt, resume=resume_session)
+    async def fake_stream(agent, prompt, *, resume_session=None, append_system=None, **kw):
+        seen.update(agent=agent, prompt=prompt, resume=resume_session, append_system=append_system)
         return
         yield  # pragma: no cover
 
@@ -244,5 +244,6 @@ def test_mention_in_orchestrator_chat_keeps_the_session(monkeypatch):
         assert r.status_code == 200
     assert seen["agent"] == "orchestrator"
     assert seen["resume"] == sid
-    assert "`research` subagent" in seen["prompt"] and seen["prompt"].endswith("find the rate")
+    assert seen["prompt"] == "find the rate"  # the user's own words stay the user's message
+    assert "`research` subagent" in (seen["append_system"] or "")
     assert '"routed"' in r.text and '"research"' in r.text
