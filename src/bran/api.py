@@ -311,7 +311,9 @@ def _mount_spa(app: FastAPI) -> None:
                 {"detail": "Frontend not built. Run: cd frontend && npm run build"},
                 status_code=503,
             )
-        return FileResponse(index)
+        # The shell must always be revalidated: its hashed asset names are
+        # what point the browser at a new build. (ETag makes the check cheap.)
+        return FileResponse(index, headers={"Cache-Control": "no-cache"})
 
 
 def _spa_built() -> bool:
