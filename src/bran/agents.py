@@ -160,6 +160,19 @@ BUILTIN_TOOLS = (
 )
 
 
+def session_tools(agent: Agent) -> list[str]:
+    """Every tool the SESSION must allow: the agent's own plus those of the
+    subagents it can delegate to. Allow/deny rules and MCP servers are
+    session-wide in Claude Code — a deny on the parent reaches into every
+    subagent — so the union is what the SDK options have to describe."""
+    out = list(agent.tools)
+    for sub in agent.subagents.values():
+        for t in sub.tools or []:
+            if t not in out:
+                out.append(t)
+    return out
+
+
 def deny_list_for(tools: list[str]) -> list[str]:
     """Built-in tools to strip from an agent's request: every known built-in
     it did not explicitly grant ("Agent" and "Task" are one tool across CLI
@@ -228,6 +241,11 @@ def agent_from_spec(spec: AgentSpec, specs: dict[str, AgentSpec]) -> Agent:
         subagents[name] = _subagent_definition(sub, specs)
     if subagents and "Agent" not in tools and "Task" not in tools:
         tools = ["Agent", *tools]  # the SDK's delegation tool, required for subagents
+    # MCP servers are configured per session, so a subagent's servers must be
+    # wired on the parent too (its definition only names them).
+    all_tools = list(tools)
+    for sub in subagents.values():
+        all_tools += [t for t in (sub.tools or []) if t not in all_tools]
     return Agent(
         name=spec.name,
         description=spec.description,
@@ -236,7 +254,7 @@ def agent_from_spec(spec: AgentSpec, specs: dict[str, AgentSpec]) -> Agent:
         model=_model_for(spec),
         permission_mode=spec.permission_mode,
         subagents=subagents,
-        mcp_servers=servers_for(tools),
+        mcp_servers=servers_for(all_tools),
         skills=list(spec.skills),
         max_turns=spec.max_turns,
         hooks=_WRITE_CONFINEMENT_HOOKS,
@@ -303,12 +321,15 @@ def build_options_for(
         system_prompt = f"{system_prompt}\n\n## About the user\n{about}"
     if append_system:
         system_prompt = f"{system_prompt}\n\n{append_system}"
+    allowed = session_tools(agent)
     return ClaudeAgentOptions(
         system_prompt=system_prompt,
-        allowed_tools=list(agent.tools),
+        # Pre-approve the agent's tools AND its subagents' (rules are
+        # session-wide; dontAsk would otherwise deny a subagent's WebSearch).
+        allowed_tools=allowed,
         # allowed_tools only pre-approves; this is what actually keeps the
-        # ungranted built-ins (Bash above all) out of the agent's reach.
-        disallowed_tools=deny_list_for(agent.tools),
+        # ungranted built-ins (Bash above all) out of the whole session's reach.
+        disallowed_tools=deny_list_for(allowed),
         model=agent.model,
         permission_mode=agent.permission_mode,
         agents=dict(agent.subagents) if agent.subagents else None,

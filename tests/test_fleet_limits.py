@@ -47,9 +47,19 @@ def test_deny_list_strips_ungranted_builtins():
 
 
 def test_orchestrator_does_not_browse_the_web_itself():
+    """The orchestrator's own file grants no web tools (its prompt delegates
+    research), but the SESSION must still allow them: permission rules are
+    session-wide and the research subagent needs WebSearch/WebFetch."""
     o = get_agent("orchestrator")
     assert "WebFetch" not in o.tools and "WebSearch" not in o.tools
-    assert "WebFetch" in build_options_for(o).disallowed_tools
+    opts = build_options_for(o)
+    assert "WebSearch" in opts.allowed_tools and "WebFetch" in opts.allowed_tools
+    assert "WebSearch" not in opts.disallowed_tools and "WebFetch" not in opts.disallowed_tools
+    assert "Bash" in opts.disallowed_tools
+    # And the subagents' MCP servers are wired on the session.
+    for sub in o.subagents.values():
+        for server in sub.mcpServers or []:
+            assert server in o.mcp_servers, server
 
 
 def test_inline_subagent_caps_travel_in_env():
