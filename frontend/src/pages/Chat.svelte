@@ -63,6 +63,7 @@
   let attachments = $state<Attachment[]>([])
   // Sources the conversation cited or read (right rail + citation chips).
   let sources = $state<SourceRef[]>([])
+  let sourcesOpen = $state(false) // the narrow-window sheet (rail hidden ≤1100px)
   async function loadSources(sid: string) {
     try {
       const next = await api.chatSources(sid)
@@ -590,7 +591,31 @@
       {#if activeChat}<span class="pill mute crumb-agent">{activeChat.agent}</span>{/if}
     </div>
     {#if streaming}<span class="ml-auto thinking"><span class="live-dot sm"></span>Thinking…</span>{/if}
+    {#if sources.length}
+      <!-- Narrow windows hide the right rail; the sources stay one click away. -->
+      <button
+        class="btn-ghost btn-sm sources-btn"
+        class:ml-auto={!streaming}
+        aria-expanded={sourcesOpen}
+        onclick={() => (sourcesOpen = !sourcesOpen)}
+        title="Where this conversation's answers came from"
+      >
+        <Icon name="link" size={13} />Sources <span class="text-muted">{sources.length}</span>
+      </button>
+    {/if}
   {/snippet}
+
+  {#if sourcesOpen && sources.length}
+    <div class="sources-sheet card elev-md">
+      <div class="sources-sheet-head">
+        <span class="label-cap">Sources</span>
+        <button class="btn-icon ml-auto" aria-label="Close sources" onclick={() => (sourcesOpen = false)}>
+          <Icon name="x" size={14} />
+        </button>
+      </div>
+      <SourcesPanel {sources} />
+    </div>
+  {/if}
 
   <div style="display: flex; gap: 16px; flex: 1; min-height: 0;">
     <!-- Center: conversation + composer -->
@@ -756,6 +781,35 @@
 <style>
   .rail-sources {
     margin-top: 10px;
+  }
+  /* The header's Sources button and its sheet exist for windows too narrow
+     for the rail; on wide windows the rail is the one place for them. */
+  .sources-btn {
+    display: none;
+  }
+  .sources-sheet {
+    display: none;
+    margin: 12px 28px 0;
+    max-height: 45vh;
+    overflow-y: auto;
+  }
+  .sources-sheet-head {
+    display: flex;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+  @media (max-width: 1100px) {
+    .sources-btn {
+      display: inline-flex;
+    }
+    .sources-sheet {
+      display: block;
+    }
+  }
+  @media (max-width: 768px) {
+    .sources-sheet {
+      margin: 10px 16px 0;
+    }
   }
   /* The conversation is a reading column: every turn (and the composer below)
      caps at --chat-col and centres. On narrow panes the cap is inert. */
