@@ -10,6 +10,7 @@
   import { bumpActivity } from '../lib/workspace.svelte'
   import { isAlertResult, isSuperseded, verifyBadge } from '../lib/verification'
   import { toast } from '../lib/toast.svelte'
+  import { sourceLabel, sourceHint } from '../lib/labels'
   import Page from '../components/Page.svelte'
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import Skeleton from '../components/Skeleton.svelte'
@@ -28,10 +29,9 @@
   let loadingMore = $state(false)
   const maybeMore = $derived(runs.length >= limit)
 
-  // Free-text search (server-side, over every completed output) + a starred-only
-  // view. Read/star state is durable + cross-browser (server output_state).
+  // Free-text search (server-side, over every completed output). Read/star
+  // state is durable + cross-browser (server output_state).
   let q = $state('')
-  let starredOnly = $state(false)
 
   // Which outputs were unread when this view loaded — kept so the cards that
   // were new at that moment stay highlighted for the visit, even though we mark
@@ -43,8 +43,81 @@
   // Outputs come from autonomous/managed runs, never interactive chat turns.
   const SOURCES = ['all', 'runner', 'spawn', 'manual'] as const
   type Source = (typeof SOURCES)[number]
-  let filter = $state<Source>('all')
-  const label = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
+  // The last view you used comes back next visit (per browser).
+  const FILTER_KEY = 'bran.outputs.filter'
+  const STARRED_KEY = 'bran.outputs.starred'
+  function readPref<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
+    try {
+      const v = localStorage.getItem(key)
+      return v && (allowed as readonly string[]).includes(v) ? (v as T) : fallback
+    } catch {
+      return fallback
+    }
+  }
+  let filter = $state<Source>(readPref(FILTER_KEY, SOURCES, 'all'))
+  let starredOnly = $state(readPref(STARRED_KEY, ['0', '1'] as const, '0') === '1')
+  $effect(() => {
+    try {
+      localStorage.setItem(FILTER_KEY, filter)
+      localStorage.setItem(STARRED_KEY, starredOnly ? '1' : '0')
+    } catch {
+      /* ignore */
+    }
+  })
+  const label = (s: string) => (s === 'all' ? 'All' : sourceLabel(s))
+
+  // Keyboard reading: j/k move a highlight between cards, Enter/o opens the
+  // run, s stars it. Only when nothing else owns the keys (no input focused,
+  // no modifier held).
+  let focusedId = $state<string | null>(null)
+  function isTyping(e: KeyboardEvent): boolean {
+    const t = e.target as HTMLElement | null
+    return (
+      !!t &&
+      (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)
+    )
+  }
+  function onKeydown(e: KeyboardEvent) {
+    if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e)) return
+    if (!shown.length) return
+    const ids = shown.map((r) => r.id)
+    const i = focusedId ? ids.indexOf(focusedId) : -1
+    if (e.key === 'j' || e.key === 'k') {
+      e.preventDefault()
+      const next = e.key === 'j' ? Math.min(ids.length - 1, i + 1) : Math.max(0, i - 1)
+      focusedId = ids[next]
+      requestAnimationFrame(() => {
+        document.getElementById('out-' + focusedId)?.scrollIntoView({ block: 'nearest' })
+      })
+    } else if ((e.key === 'Enter' || e.key === 'o') && focusedId) {
+      e.preventDefault()
+      navigate('/runs/' + focusedId)
+    } else if (e.key === 's' && focusedId) {
+      e.preventDefault()
+      const r = shown.find((x) => x.id === focusedId)
+      if (r) void toggleStar(r, e)
+    }
+  }
+
+  // New outputs that landed while the page was open stay highlighted (and
+  // unread on the server) until you clear them.
+  const anyFresh = $derived(freshIds.size > 0)
+  let markingAll = $state(false)
+  async function markAllRead() {
+    if (markingAll) return
+    markingAll = true
+    const unread = outputs.filter((r) => !r.read_at).map((r) => r.id)
+    try {
+      if (unread.length) await api.markOutputsRead(unread)
+      runs = runs.map((r) => (r.read_at ? r : { ...r, read_at: new Date().toISOString() }))
+      freshIds = new Set()
+      bumpActivity()
+    } catch {
+      toast('Could not mark outputs read', 'err')
+    } finally {
+      markingAll = false
+    }
+  }
 
   // A runner-fired output is titled by the *runner* (the thing you named),
   // not the agent that powers it.
@@ -195,6 +268,8 @@
   })
 </script>
 
+<svelte:window onkeydown={onKeydown} />
+
 <Page title="Outputs">
   {#snippet subtitle()}What your agents produced{/snippet}
 
@@ -233,6 +308,16 @@
             title="Show starred only"><Icon name="star" size={12} />Starred</button
           >
         </div>
+        {#if anyFresh}
+          <button
+            class="btn-outline btn-sm"
+            disabled={markingAll}
+            onclick={markAllRead}
+            title="Clear the new markers"
+          >
+            <Icon name="check" size={13} />Mark all read
+          </button>
+        {/if}
       </div>
     {/if}
 
@@ -264,16 +349,18 @@
             {@const runner = runnerFor(r)}
             {@const badge = verifyBadge(r)}
             <article
+              id={'out-' + r.id}
               class="card output"
               class:fresh={freshIds.has(r.id)}
               class:quiet={isQuietDelta(r)}
               class:alerted={isAlertResult(r)}
+              class:focused={focusedId === r.id}
             >
               <header class="out-head">
                 {#if freshIds.has(r.id)}<span class="dot accent" title="New since your last visit"
                   ></span>{/if}
                 <a href={href('/runs/' + r.id)} use:link class="out-agent">{titleFor(r)}</a>
-                <span class="src src-{r.source}">{r.source}</span>
+                <span class="src src-{r.source}" title={sourceHint(r.source)}>{sourceLabel(r.source)}</span>
                 {#if isAlertResult(r)}<span class="pill err" title="This run crossed its alert bar"
                     ><Icon name="alert-triangle" size={12} />Alert</span
                   >{/if}
@@ -381,6 +468,11 @@
   /* A sensing runner that crossed its bar — the one card that must not be missed. */
   .output.alerted {
     border-color: color-mix(in srgb, var(--red) 55%, var(--border));
+  }
+  /* The keyboard cursor (j/k). */
+  .output.focused {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-glow);
   }
   .out-head {
     display: flex;

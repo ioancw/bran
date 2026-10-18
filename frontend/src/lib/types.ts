@@ -37,6 +37,8 @@ export interface RunRecord {
   metadata: Record<string, unknown>
   project_id: string | null // null = standalone (not attached to a project)
   source: 'chat' | 'runner' | 'spawn' | 'manual' | 'synthesis' | 'subagent' // how the run was triggered
+  // One-sentence human version of a failure (null unless failed/cancelled).
+  error_summary?: FailureSummary | null
   schedule_id: string | null // the runner this run belongs to, if any
   actor?: string | null // named API token that triggered the run, if any
   artifacts?: string[] // file paths the run produced (list endpoints only)
@@ -141,8 +143,63 @@ export type ChatEvent =
   | { type: 'user'; text: string; ts?: string } // ts: ISO-8601, present when known
   | { type: 'text'; text: string; ts?: string }
   | { type: 'thinking'; text: string }
-  | { type: 'tool_use'; name: string; input: Record<string, unknown>; tool_id: string | null }
+  | {
+      type: 'tool_use'
+      name: string
+      input: Record<string, unknown>
+      tool_id: string | null
+      run_id?: string // the child run bran recorded for an Agent-tool delegation
+    }
   | { type: 'tool_result'; tool_id: string | null; text: string; is_error: boolean }
   | { type: 'result'; num_turns: number | null; total_cost_usd: number | null; session_id: string | null }
   | { type: 'error'; message: string }
   | { type: 'done' }
+
+// --- Failure summary (bran.errors) ---
+export interface FailureSummary {
+  title: string
+  hint: string
+  kind:
+    | 'auth'
+    | 'budget'
+    | 'timeout'
+    | 'pruned'
+    | 'api'
+    | 'restart'
+    | 'cancelled'
+    | 'process'
+    | 'permission'
+    | 'other'
+}
+
+// --- Health strip (GET /spa/health, bran.health) ---
+export interface HealthSnapshot {
+  ok: boolean
+  login: {
+    method: 'claude.ai' | 'api_key' | 'none'
+    ok: boolean
+    expires_at: string | null
+    subscription: string | null
+    detail: string
+    failed_run_id?: string
+  }
+  integrations: { tavily: boolean; webhook: boolean }
+  limits: {
+    run_budget_usd: number
+    run_timeout_s: number
+    max_concurrent_runs: number
+    max_spawn_depth: number
+    subagent_depth: number
+    subagent_concurrency: number
+    runner_retries: number
+    default_model: string
+  }
+  slots: { in_use: number; max: number }
+  spend: {
+    today: { cost: number; runs: number }
+    week: { cost: number; runs: number }
+    month: { cost: number; runs: number }
+    runners_30d: Record<string, { cost: number; runs: number }>
+  }
+  paths: { bran_home: string; agents_dir: string }
+}

@@ -9,8 +9,11 @@
   import Icon from '../components/Icon.svelte'
   import Page from '../components/Page.svelte'
   import Skeleton from '../components/Skeleton.svelte'
+  import type { HealthSnapshot } from '../lib/types'
 
   let instructions = $state('')
+  let health = $state<HealthSnapshot | null>(null)
+  let healthFailed = $state(false)
   let loaded = $state(false)
   let error = $state<string | null>(null) // load failure — banner with retry
   let saveError = $state('') // save failure — inline, so retry can't reload over typed text
@@ -59,6 +62,18 @@
   }
   $effect(() => {
     void load()
+    api
+      .health()
+      .then((h) => (health = h))
+      .catch(() => (healthFailed = true))
+  })
+
+  const loginText = $derived.by(() => {
+    if (!health) return ''
+    const l = health.login
+    const who = l.method === 'api_key' ? 'API key' : l.method === 'claude.ai' ? 'claude.ai' : 'none'
+    const sub = l.subscription ? ` · ${l.subscription}` : ''
+    return `${who}${sub} · ${l.ok ? 'ok' : 'expired'}`
   })
 
   async function save() {
@@ -110,6 +125,54 @@
             >{/if}
           {#if saveError}<span role="alert" class="save-err">{saveError}</span>{/if}
         </div>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">Limits and integrations</h2>
+        <p class="card-desc">What bounds every run, and what bran is connected to.</p>
+        {#if health}
+          <dl class="defs">
+            <dt>Default model</dt>
+            <dd>{health.limits.default_model}</dd>
+            <dt>Per-run budget</dt>
+            <dd>${health.limits.run_budget_usd}</dd>
+            <dt>Run timeout</dt>
+            <dd>{health.limits.run_timeout_s ? `${health.limits.run_timeout_s} s` : 'off'}</dd>
+            <dt>Concurrent background runs</dt>
+            <dd>{health.limits.max_concurrent_runs}</dd>
+            <dt>Spawn depth</dt>
+            <dd>{health.limits.max_spawn_depth}</dd>
+            <dt>Subagent depth / concurrency</dt>
+            <dd>{health.limits.subagent_depth} / {health.limits.subagent_concurrency}</dd>
+            <dt>Runner retries</dt>
+            <dd>{health.limits.runner_retries}</dd>
+          </dl>
+          <div class="defs-head">Integrations</div>
+          <dl class="defs">
+            <dt>Claude login</dt>
+            <dd class:bad={!health.login.ok}>{loginText}</dd>
+            <dt>Tavily</dt>
+            <dd class:muted={!health.integrations.tavily}>
+              {health.integrations.tavily ? 'Configured' : 'Not set'}
+            </dd>
+            <dt>Push notifications</dt>
+            <dd class:muted={!health.integrations.webhook}>
+              {health.integrations.webhook ? 'Configured' : 'Not set'}
+            </dd>
+          </dl>
+          <div class="defs-head">Paths</div>
+          <dl class="defs">
+            <dt>Data folder</dt>
+            <dd class="mono small">{health.paths.bran_home}</dd>
+            <dt>Agents folder</dt>
+            <dd class="mono small">{health.paths.agents_dir}</dd>
+          </dl>
+          <p class="foot">Set these in <code>.env</code> and restart <code>bran serve</code>.</p>
+        {:else if healthFailed}
+          <p class="card-desc" style="margin: 0;">Could not load the status snapshot.</p>
+        {:else}
+          <Skeleton rows={4} />
+        {/if}
       </section>
 
       <section class="card">
@@ -178,6 +241,48 @@
   .save-err {
     color: var(--red);
     font-size: 12px;
+  }
+  .defs {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 6px 16px;
+    margin: 0;
+    font-size: 13px;
+  }
+  .defs dt {
+    font-size: 12px;
+    color: var(--muted);
+    padding-top: 1px;
+  }
+  .defs dd {
+    margin: 0;
+    min-width: 0;
+    color: var(--fg);
+    overflow-wrap: anywhere;
+  }
+  .defs dd.bad {
+    color: var(--red);
+  }
+  .defs dd.muted {
+    color: var(--muted);
+  }
+  .defs dd.small {
+    font-size: 12px;
+  }
+  .defs-head {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--muted);
+    margin: 14px 0 6px;
+  }
+  .foot {
+    font-size: 12px;
+    color: var(--muted);
+    margin: 14px 0 0;
+  }
+  .foot code {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
   }
   .theme-grid {
     display: grid;

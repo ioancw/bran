@@ -20,7 +20,9 @@
   import Icon from '../components/Icon.svelte'
   import ChatLog from '../chat/ChatLog.svelte'
   import { applyEvent, freshState, toolDisplayName, type ChatItem, type ReducerState } from '../chat/events'
-  import type { Attachment, Catalog, ChatSummary, RunRecord } from '../lib/types'
+  import type { Attachment, Catalog, ChatSummary, RunRecord, ScheduleRecord } from '../lib/types'
+  import { relativeTime } from '../lib/time'
+  import { sourceLabel } from '../lib/labels'
 
   let { sessionId }: { sessionId: string | null } = $props()
 
@@ -337,6 +339,33 @@
   // Card actions (PlanCard approve/revise, "Edit" on a user message): approve
   // sends the canned reply immediately; the rest seed the composer for the
   // user to finish.
+  // "Pick up where the fleet left off": the newest finished outputs, fetched
+  // only while the empty state is on screen.
+  let recentOutputs = $state<RunRecord[]>([])
+  let recentRunners = $state<ScheduleRecord[]>([])
+  let recentLoaded = false
+  async function loadRecentOutputs() {
+    if (recentLoaded) return
+    recentLoaded = true
+    try {
+      const [runs, runners] = await Promise.all([
+        api.runs({ exclude_chats: true, limit: 12 }),
+        api.schedules().catch(() => [] as ScheduleRecord[]),
+      ])
+      recentRunners = runners
+      recentOutputs = runs
+        .filter((r) => r.status === 'completed' && (r.result ?? '').trim() && r.source !== 'subagent')
+        .slice(0, 3)
+    } catch {
+      /* the block simply stays hidden */
+    }
+  }
+  const outputTitle = (r: RunRecord) =>
+    (r.schedule_id && recentRunners.find((s) => s.id === r.schedule_id)?.name) || r.agent
+  $effect(() => {
+    if (!items.length && !historyLoading) void loadRecentOutputs()
+  })
+
   function onComposerAction(text: string, sendNow: boolean) {
     if (streaming) return
     input = text
@@ -563,6 +592,26 @@
                 }}>Digest a topic</button
               >
             </div>
+            {#if recentOutputs.length}
+              <div class="pickup">
+                <div class="label-cap pickup-label">Pick up where the fleet left off</div>
+                {#each recentOutputs as r (r.id)}
+                  <div class="pickup-row">
+                    <a href={href('/runs/' + r.id)} use:link class="pickup-title">{outputTitle(r)}</a>
+                    <span class="src src-{r.source}">{sourceLabel(r.source)}</span>
+                    <span class="pickup-time">{relativeTime(r.started_at)}</span>
+                    <button
+                      class="btn-text"
+                      onclick={() =>
+                        onComposerAction(
+                          `Let's discuss the output of run ${r.id} (${outputTitle(r)}).`,
+                          false,
+                        )}>Discuss</button
+                    >
+                  </div>
+                {/each}
+              </div>
+            {/if}
           </div>
         {:else}
           <ChatLog {items} {streamingIndex} onaction={onComposerAction} onretry={retryFailed} />
@@ -691,6 +740,42 @@
     flex-wrap: wrap;
     gap: 8px;
     margin-top: 20px;
+  }
+  .pickup {
+    margin: 28px auto 0;
+    max-width: 520px;
+    text-align: left;
+  }
+  .pickup-label {
+    display: block;
+    margin-bottom: 6px;
+  }
+  .pickup-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+    border-top: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .pickup-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+    color: var(--fg-bright);
+  }
+  .pickup-time {
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  @media (max-width: 768px) {
+    .composer-col {
+      padding-right: 6px;
+    }
   }
 
   /* Agent picker in the composer footer. A fixed label once the chat exists;

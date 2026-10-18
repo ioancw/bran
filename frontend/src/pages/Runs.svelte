@@ -8,6 +8,7 @@
   import EmptyState from '../components/EmptyState.svelte'
   import StatusBadge from '../components/StatusBadge.svelte'
   import Icon from '../components/Icon.svelte'
+  import { sourceLabel, sourceHint } from '../lib/labels'
   import type { RunRecord } from '../lib/types'
 
   let runs = $state<RunRecord[]>([])
@@ -102,7 +103,7 @@
             aria-pressed={filter === s}
             onclick={() => (filter = s)}
           >
-            {label(s)} <span class="seg-n">{countFor(s)}</span>
+            {s === 'all' ? 'All' : sourceLabel(s)} <span class="seg-n">{countFor(s)}</span>
           </button>
         {/each}
       </div>
@@ -141,15 +142,21 @@
                 </span>
               </td>
               <td style="color: var(--fg-bright);">{r.agent}</td>
-              <td><span class="src src-{r.source}">{r.source}</span></td>
+              <td
+                ><span class="src src-{r.source}" title={sourceHint(r.source)}>{sourceLabel(r.source)}</span
+                ></td
+              >
               <td><StatusBadge status={r.status} /></td>
               <td class="text-dim" style="white-space: nowrap;">{localDateTime(r.started_at)}</td>
               <td class="num mono">{fmtDuration(r.duration_ms)}</td>
               <td class="num mono">{fmtCost(r.total_cost_usd)}</td>
               <td class="text-dim" style="max-width: 320px;">
                 <div class="task-line">{r.task}</div>
-                {#if r.status === 'failed' && r.error}
-                  <div class="task-err" title={r.error}>{r.error}</div>
+                {#if r.status === 'failed' && (r.error_summary || r.error)}
+                  <div class="task-err" title={r.error ?? ''}>{r.error_summary?.title ?? r.error}</div>
+                  {#if r.error_summary?.hint}
+                    <div class="task-hint">{r.error_summary.hint}</div>
+                  {/if}
                 {/if}
               </td>
             </tr>
@@ -235,6 +242,13 @@
   }
   .task-err {
     color: var(--red);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .task-hint {
+    color: var(--muted);
     font-size: 12px;
     overflow: hidden;
     text-overflow: ellipsis;

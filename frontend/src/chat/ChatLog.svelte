@@ -2,13 +2,14 @@
   // Renders a list of ChatItems — the one render path for both live chat and
   // transcript replay. `streamingIndex` marks the assistant bubble that should
   // show a blinking cursor (live only).
-  import { groupRows, type ChatItem, type Row, SPAWN_TOOL, PLAN_TOOL } from './events'
+  import { groupRows, type ChatItem, type Row, SPAWN_TOOL, PLAN_TOOL, isDelegation } from './events'
   import { clock, fullStamp, dayKey, dayLabel } from './format'
   import Prose from '../components/Prose.svelte'
   import Icon from '../components/Icon.svelte'
   import ToolBlock from './ToolBlock.svelte'
   import ToolGroup from './ToolGroup.svelte'
   import SpawnCard from './SpawnCard.svelte'
+  import SubagentCard from './SubagentCard.svelte'
   import PlanCard from './PlanCard.svelte'
   import { toast } from '../lib/toast.svelte'
 
@@ -148,6 +149,8 @@
           <SpawnCard tool={item} />
         {:else if item.name === PLAN_TOOL}
           <PlanCard tool={item} {onaction} answered={items.slice(i + 1).some((x) => x.kind === 'user')} />
+        {:else if isDelegation(item.name)}
+          <SubagentCard tool={item} />
         {:else}
           <ToolBlock tool={item} />
         {/if}

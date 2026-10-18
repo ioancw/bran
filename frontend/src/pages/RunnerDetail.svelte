@@ -8,6 +8,7 @@
   import { toast } from '../lib/toast.svelte'
   import { confirmDialog } from '../lib/confirm.svelte'
   import { validateTrigger, nowLocal, describeCron } from '../lib/schedule'
+  import { sourceLabel, sourceHint } from '../lib/labels'
   import EmptyState from '../components/EmptyState.svelte'
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import Page from '../components/Page.svelte'
@@ -15,11 +16,13 @@
   import StatusBadge from '../components/StatusBadge.svelte'
   import CronField from '../components/CronField.svelte'
   import Icon from '../components/Icon.svelte'
-  import type { AgentInfo, ProjectSummary, RunRecord, ScheduleRecord } from '../lib/types'
+  import type { AgentInfo, HealthSnapshot, ProjectSummary, RunRecord, ScheduleRecord } from '../lib/types'
 
   let { runnerName }: { runnerName: string } = $props()
 
   let runner = $state<ScheduleRecord | null>(null)
+  let health = $state<HealthSnapshot | null>(null)
+  const spend30 = $derived(runner && health ? (health.spend.runners_30d[runner.id] ?? null) : null)
   let runs = $state<RunRecord[]>([])
   let projects = $state<ProjectSummary[]>([])
   let agents = $state<AgentInfo[]>([])
@@ -56,6 +59,11 @@
       error = String(e)
     } finally {
       loaded = true
+    }
+    try {
+      health = await api.health()
+    } catch {
+      /* the cost rows simply don't show */
     }
   }
 
@@ -282,7 +290,7 @@
             <div class="run-list">
               {#each runs.slice(0, 20) as r (r.id)}
                 <a href={href('/runs/' + r.id)} use:link class="run-row">
-                  <span class="src src-{r.source}">{r.source}</span>
+                  <span class="src src-{r.source}" title={sourceHint(r.source)}>{sourceLabel(r.source)}</span>
                   <StatusBadge status={r.status} />
                   <span class="run-task">{r.task}</span>
                   <span class="run-meta" title={localDateTime(r.started_at)}
@@ -362,6 +370,12 @@
             {#if runner.alert}
               <dt>Alert when</dt>
               <dd><span class="alert-line"><Icon name="alert-triangle" size={13} />{runner.alert}</span></dd>
+            {/if}
+            {#if health}
+              <dt>30-day cost</dt>
+              <dd class="num">{fmtCost(spend30?.cost ?? 0)}</dd>
+              <dt>30-day runs</dt>
+              <dd class="num">{spend30?.runs ?? 0}</dd>
             {/if}
           </dl>
         </div>

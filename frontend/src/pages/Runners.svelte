@@ -6,7 +6,7 @@
   import { confirmDialog } from '../lib/confirm.svelte'
   import { errorText } from '../lib/errors'
   import { toast } from '../lib/toast.svelte'
-  import { localDateTime } from '../lib/time'
+  import { localDateTime, fmtCost } from '../lib/time'
   import { validateTrigger, nowLocal, describeCron } from '../lib/schedule'
   import EmptyState from '../components/EmptyState.svelte'
   import ErrorBanner from '../components/ErrorBanner.svelte'
@@ -14,9 +14,12 @@
   import Skeleton from '../components/Skeleton.svelte'
   import CronField from '../components/CronField.svelte'
   import Icon from '../components/Icon.svelte'
-  import type { AgentInfo, ProjectSummary, RunRecord, ScheduleRecord } from '../lib/types'
+  import type { AgentInfo, HealthSnapshot, ProjectSummary, RunRecord, ScheduleRecord } from '../lib/types'
 
   let runners = $state<ScheduleRecord[]>([])
+  // 30-day cost/run counts per runner (health.spend.runners_30d); optional.
+  let health = $state<HealthSnapshot | null>(null)
+  const spend30 = (id: string) => health?.spend.runners_30d[id] ?? null
   let agents = $state<AgentInfo[]>([])
   let projects = $state<ProjectSummary[]>([])
   let recentRuns = $state<RunRecord[]>([])
@@ -61,6 +64,11 @@
       error = String(e)
     } finally {
       loaded = true
+    }
+    try {
+      health = await api.health()
+    } catch {
+      /* cost columns show a dash */
     }
   }
   $effect(() => {
@@ -296,12 +304,12 @@
       </EmptyState>
     {:else}
       <div style="overflow-x: auto;">
-        <table class="bran-table" style="min-width: 820px;">
+        <table class="bran-table" style="min-width: 960px;">
           <thead>
             <tr>
-              <th>Name</th><th>Agent</th><th>Trigger</th><th>Next run</th><th>Project</th><th>State</th><th
-                >Task</th
-              ><th></th>
+              <th>Name</th><th>Agent</th><th>Trigger</th><th>Next run</th><th class="num">30-day cost</th><th
+                class="num">Runs</th
+              ><th>Project</th><th>State</th><th>Task</th><th></th>
             </tr>
           </thead>
           <tbody>
@@ -344,6 +352,8 @@
                 <td class="text-dim" style="white-space: nowrap;"
                   >{r.enabled && r.next_run ? localDateTime(r.next_run) : '—'}</td
                 >
+                <td class="num mono">{health ? fmtCost(spend30(r.id)?.cost ?? 0) : '—'}</td>
+                <td class="num mono">{health ? (spend30(r.id)?.runs ?? 0) : '—'}</td>
                 <td class="text-dim">{projName(r.project_id) ?? '—'}</td>
                 <td>
                   <span class="state-cell">

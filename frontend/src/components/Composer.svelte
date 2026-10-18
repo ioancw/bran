@@ -340,6 +340,11 @@
       display: none;
     }
   }
+  /* Narrow panes: the footer may wrap; the send button stays bottom-right. */
+  :global(.composer-footer) {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
   :global(.icon.spin) {
     animation: composer-spin 0.9s linear infinite;
   }

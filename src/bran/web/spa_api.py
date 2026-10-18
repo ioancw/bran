@@ -15,12 +15,24 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+    status,
+)
 from fastapi.responses import FileResponse, StreamingResponse
 
 from bran.agents import get_agent, list_agents
 from bran.background import session_lock, spawn_background
 from bran.config import SETTINGS
+from bran.errors import summarize_failure
+from bran.health import health_snapshot
 from bran.persistence import (
     ChatRecord,
     ProjectRecord,
@@ -78,6 +90,33 @@ from bran.web.events import (
 )
 
 
+def _run_dict(r: Any) -> dict[str, Any]:
+    """asdict(run) plus `error_summary` — the one-sentence human version of
+    a failure (None for runs that didn't fail)."""
+    d = asdict(r)
+    summary = summarize_failure(r.error, r.result) if r.status in ("failed", "cancelled") else None
+    d["error_summary"] = summary.as_dict() if summary else None
+    return d
+
+
+_DELEGATION_TOOLS = ("Agent", "Task")
+
+
+def attach_child_run(ev: dict[str, Any]) -> dict[str, Any]:
+    """Give an Agent-tool call event the id of the child run bran recorded
+    for it, so the chat can link the delegation to its run."""
+    if ev.get("type") == "tool_use" and ev.get("name") in _DELEGATION_TOOLS and ev.get("tool_id"):
+        from bran.persistence import find_subagent_run
+
+        child = find_subagent_run(str(ev["tool_id"]))
+        if child is not None:
+            ev = {**ev, "run_id": child.id}
+    return ev
+
+
+
+
+
 async def _require_same_origin(request: Request) -> None:
     """CSRF guard for the unauthenticated SPA surface.
 
@@ -112,6 +151,12 @@ async def _require_same_origin(request: Request) -> None:
 router = APIRouter(
     prefix="/spa", tags=["spa"], dependencies=[Depends(_require_same_origin)]
 )
+
+
+@router.get("/health")
+async def health() -> dict[str, Any]:
+    """Login, integrations, limits, slots and spend — the health strip."""
+    return health_snapshot()
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +272,8 @@ async def agents() -> list[dict[str, Any]]:
 
 @router.get("/runs")
 async def runs(
-    agent: str | None = None, status_: str | None = None,
+    agent: str | None = None,
+    status_: Annotated[str | None, Query(alias="status")] = None,
     project_id: str | None = None, schedule_id: str | None = None,
     exclude_chats: bool = False, limit: int = 200, q: str | None = None,
     session_id: str | None = None, parent_run_id: str | None = None,
@@ -245,7 +291,7 @@ async def runs(
     states = get_output_states(ids)
     out = []
     for r in records:
-        d = asdict(r)
+        d = _run_dict(r)
         d["artifacts"] = artifacts.get(r.id, [])
         st = states.get(r.id)
         d["starred"] = bool(st["starred"]) if st else False
@@ -259,7 +305,7 @@ async def run_detail(run_id: str) -> dict[str, Any]:
     rec = get_run(run_id)
     if rec is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"No run {run_id}")
-    return asdict(rec)
+    return _run_dict(rec)
 
 
 # --- Output reading state (star / read) — durable, cross-browser ----------
@@ -337,7 +383,7 @@ async def run_transcript(run_id: str) -> dict[str, Any]:
         # SDK transcript pruned (or never on this host): replay the copy the
         # run kept, or at least its prompt + final result.
         events = events_from_runs([rec])
-    return {"run": asdict(rec), "events": events}
+    return {"run": _run_dict(rec), "events": [attach_child_run(e) for e in events]}
 
 
 @router.get("/runs/{run_id}/stream")
@@ -931,11 +977,11 @@ async def chat_history(chat_id: str) -> dict[str, Any]:
         # that was continued after its file was pruned stays on this path:
         # its new file holds only the turns since, the database holds all.
         turns = list_runs(session_id=chat_id, limit=1000)
-        return {"session_id": chat_id, "events": events_from_runs(turns)}
+        return {"session_id": chat_id, "events": [attach_child_run(e) for e in events_from_runs(turns)]}
     events: list[dict[str, Any]] = []
     for entry in parse_transcript(path):
         events.extend(events_from_transcript_entry(entry))
-    return {"session_id": chat_id, "events": events}
+    return {"session_id": chat_id, "events": [attach_child_run(e) for e in events]}
 
 
 # app_settings marker: this chat's history is served from the database even
@@ -1042,7 +1088,7 @@ async def chat_stream(
                         else:
                             touch_chat(sid_now)
                         chat_initialised = True
-                    yield sse(ev)
+                    yield sse(attach_child_run(ev))
         except Exception as exc:  # noqa: BLE001 — surface any failure to the client
             yield sse({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
         finally:

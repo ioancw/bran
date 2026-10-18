@@ -426,6 +426,50 @@ def get_run_by_session(session_id: str) -> RunRecord | None:
     return RunRecord.from_row(row) if row else None
 
 
+def spend_summary() -> dict[str, Any]:
+    """Estimated spend (SDK client-side cost) for today / 7 days / 30 days,
+    plus per-runner 30-day totals. Chat turns count — they cost money too."""
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    windows = {
+        "today": now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat(),
+        "week": (now - timedelta(days=7)).isoformat(),
+        "month": (now - timedelta(days=30)).isoformat(),
+    }
+    out: dict[str, Any] = {}
+    with _lock, _conn() as conn:
+        for key, since in windows.items():
+            row = conn.execute(
+                "SELECT COALESCE(SUM(total_cost_usd), 0) AS cost, COUNT(*) AS runs "
+                "FROM runs WHERE started_at >= ?",
+                (since,),
+            ).fetchone()
+            out[key] = {"cost": float(row["cost"] or 0), "runs": int(row["runs"] or 0)}
+        per = conn.execute(
+            "SELECT schedule_id, COALESCE(SUM(total_cost_usd), 0) AS cost, COUNT(*) AS runs "
+            "FROM runs WHERE schedule_id IS NOT NULL AND started_at >= ? GROUP BY schedule_id",
+            (windows["month"],),
+        ).fetchall()
+    out["runners_30d"] = {
+        r["schedule_id"]: {"cost": float(r["cost"] or 0), "runs": int(r["runs"] or 0)} for r in per
+    }
+    return out
+
+
+def find_subagent_run(tool_use_id: str) -> RunRecord | None:
+    """The child run recorded for an Agent-tool call (by its tool_use id)."""
+    if not tool_use_id:
+        return None
+    with _lock, _conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM runs WHERE source = 'subagent' "
+            "AND json_extract(metadata, '$.tool_use_id') = ? LIMIT 1",
+            (tool_use_id,),
+        ).fetchone()
+    return RunRecord.from_row(row) if row else None
+
+
 def reconcile_interrupted_runs() -> int:
     """Mark any run still 'pending'/'running' as failed. Called once at server
     startup: after a restart these are orphans — the asyncio task that was

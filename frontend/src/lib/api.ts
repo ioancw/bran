@@ -13,6 +13,7 @@ import type {
   ProjectSummary,
   RunRecord,
   ScheduleRecord,
+  HealthSnapshot,
 } from './types'
 
 import { flagAuthError } from './auth.svelte'
@@ -103,6 +104,7 @@ export const api = {
     form<{ run_id: string; starred: boolean }>(`/spa/outputs/${encodeURIComponent(id)}/star`, {
       starred: starred ? 'true' : 'false',
     }),
+  health: () => getJSON<HealthSnapshot>('/spa/health'),
   markOutputsRead: (ids: string[]) => form<{ read: number }>('/spa/outputs/read', { ids: ids.join(',') }),
   run: (id: string) => getJSON<RunRecord>(`/spa/runs/${encodeURIComponent(id)}`),
   runTranscript: (id: string) =>

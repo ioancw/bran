@@ -13,6 +13,7 @@
   import EmptyState from '../components/EmptyState.svelte'
   import Composer from '../components/Composer.svelte'
   import StatusBadge from '../components/StatusBadge.svelte'
+  import { sourceLabel, sourceHint } from '../lib/labels'
   import type { AgentInfo, RunRecord, ScheduleRecord } from '../lib/types'
 
   let { agentName }: { agentName: string } = $props()
@@ -104,7 +105,7 @@
             <div class="run-list">
               {#each runs.slice(0, 20) as r (r.id)}
                 <a href={href('/runs/' + r.id)} use:link class="run-row">
-                  <span class="src src-{r.source}">{r.source}</span>
+                  <span class="src src-{r.source}" title={sourceHint(r.source)}>{sourceLabel(r.source)}</span>
                   <StatusBadge status={r.status} />
                   <span class="run-task">{r.task}</span>
                   <span class="run-meta"

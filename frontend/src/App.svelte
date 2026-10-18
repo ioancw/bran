@@ -4,7 +4,7 @@
   import { api } from './lib/api'
   import { authState, clearAuthError } from './lib/auth.svelte'
   import { workspace } from './lib/workspace.svelte'
-  import type { RunRecord } from './lib/types'
+  import type { HealthSnapshot, RunRecord } from './lib/types'
   import Sidebar from './components/Sidebar.svelte'
   import ConfirmHost from './components/ConfirmHost.svelte'
   import CommandPalette from './components/CommandPalette.svelte'
@@ -129,6 +129,33 @@
     clearAuthError()
     void loadCounts()
   }
+
+  // Health: the Claude login bran's agents run on can expire silently (the
+  // first sign used to be a failed run). Poll it and say so up front.
+  let health = $state<HealthSnapshot | null>(null)
+  async function loadHealth() {
+    try {
+      health = await api.health()
+    } catch {
+      /* leave the last snapshot */
+    }
+  }
+  $effect(() => {
+    void loadHealth()
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') void loadHealth()
+    }, 60_000)
+    const refresh = () => {
+      if (document.visibilityState === 'visible') void loadHealth()
+    }
+    window.addEventListener('focus', refresh)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      clearInterval(timer)
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  })
 </script>
 
 <svelte:window onkeydown={onShellKeydown} />
@@ -155,6 +182,17 @@
 </button>
 {#if sidebarOpen}
   <button class="nav-overlay" aria-label="close navigation" onclick={closeDrawer}></button>
+{/if}
+
+{#if health && !health.login.ok}
+  <div class="auth-banner" role="alert">
+    <span>{health.login.detail || 'Claude login expired.'}</span>
+    <span class="auth-hint"
+      >In a WSL terminal run <code>claude auth login</code>, then retry. bran's agents use WSL's login, not
+      Windows'.</span
+    >
+    <button class="btn-outline btn-sm" onclick={loadHealth}>Check again</button>
+  </div>
 {/if}
 
 {#if authState.blocked}
@@ -235,5 +273,10 @@
   }
   .auth-banner button {
     margin-left: 0;
+  }
+  .auth-banner code {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--fg-bright);
   }
 </style>

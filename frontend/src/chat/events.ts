@@ -15,6 +15,8 @@ export interface ToolItem {
   isError: boolean
   startedAt: number
   durationMs: number | null
+  // The child run bran recorded for an Agent-tool delegation (server-attached).
+  runId?: string | null
 }
 
 export type ChatItem =
@@ -104,6 +106,7 @@ export function applyEvent(items: ChatItem[], st: ReducerState, ev: ChatEvent): 
         isError: false,
         startedAt: performance.now(),
         durationMs: null,
+        runId: ev.run_id ?? null,
       }
       items.push(tool)
       if (ev.tool_id) st.tools[ev.tool_id] = items.length - 1
@@ -163,7 +166,11 @@ export type Row =
 
 export const SPAWN_TOOL = 'mcp__bran__spawn_agent'
 export const PLAN_TOOL = 'mcp__bran__propose_plan'
-const NEVER_GROUP = new Set([SPAWN_TOOL, PLAN_TOOL])
+// The SDK's delegation tool ("Task" before Claude Code 2.1.63). Each call is
+// its own card, never folded into a tool burst.
+export const DELEGATION_TOOLS = new Set(['Agent', 'Task'])
+export const isDelegation = (name: string) => DELEGATION_TOOLS.has(name)
+const NEVER_GROUP = new Set([SPAWN_TOOL, PLAN_TOOL, ...DELEGATION_TOOLS])
 export const GROUP_MIN = 3
 
 export function groupRows(items: ChatItem[]): Row[] {

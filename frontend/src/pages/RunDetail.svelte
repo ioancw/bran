@@ -4,6 +4,7 @@
   import { errorText } from '../lib/errors'
   import { navigate, href, link } from '../lib/router.svelte'
   import { fmtBytes, fmtCost, fmtDuration, localDateTime } from '../lib/time'
+  import { sourceHint, sourceLabel } from '../lib/labels'
   import Page from '../components/Page.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import ErrorBanner from '../components/ErrorBanner.svelte'
@@ -24,6 +25,7 @@
   let error = $state<string | null>(null)
   let showTranscript = $state(false)
   let cancelling = $state(false)
+  let showRawError = $state(false)
   let rerunning = $state(false)
   // Bumping this re-runs the load effect — the error banner's retry lever.
   let reloadTick = $state(0)
@@ -300,8 +302,9 @@
             <div class="space-y-1">
               {#each children as c (c.id)}
                 <a href={href('/runs/' + c.id)} use:link class="origin-link child-row">
-                  <span class="src src-{c.source}">{c.source}</span>
+                  <span class="src src-{c.source}" title={sourceHint(c.source)}>{sourceLabel(c.source)}</span>
                   <span class="child-agent">{c.agent}</span>
+                  {#if c.duration_ms != null}<span class="child-dur">{fmtDuration(c.duration_ms)}</span>{/if}
                   <StatusBadge status={c.status} />
                 </a>
               {/each}
@@ -310,7 +313,23 @@
         {/if}
       </aside>
       <div class="col-span-3 space-y-3">
-        {#if run.error}
+        {#if run.error_summary && (run.status === 'failed' || run.status === 'cancelled')}
+          <div class="card wrong-card" class:cancelled={run.status === 'cancelled'}>
+            <h2 class="card-title">What went wrong</h2>
+            <div class="wrong-title">{run.error_summary.title}</div>
+            {#if run.error_summary.hint}<p class="wrong-hint">{run.error_summary.hint}</p>{/if}
+            {#if run.error}
+              <button
+                class="btn-text"
+                aria-expanded={showRawError}
+                onclick={() => (showRawError = !showRawError)}
+              >
+                {showRawError ? 'Hide details' : 'Show details'}
+              </button>
+              {#if showRawError}<div class="tool-code full wrong-raw">{run.error}</div>{/if}
+            {/if}
+          </div>
+        {:else if run.error}
           <div class="card err-card">{run.error}</div>
         {/if}
         {#if resultFirst}
@@ -406,6 +425,28 @@
     font-family: var(--font-prose);
     font-size: 16.5px;
     line-height: 1.7;
+  }
+  .wrong-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--red);
+  }
+  .wrong-card.cancelled .wrong-title {
+    color: var(--fg-dim);
+  }
+  .wrong-hint {
+    margin: 4px 0 8px;
+    font-size: 13px;
+    color: var(--fg-dim);
+    line-height: 1.5;
+  }
+  .wrong-raw {
+    margin-top: 8px;
+  }
+  .child-dur {
+    font-size: 11px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
   }
   .err-card {
     color: var(--red);

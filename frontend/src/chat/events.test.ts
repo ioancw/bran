@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { applyEvent, freshState, toolDisplayName, type ChatItem } from './events'
+import {
+  applyEvent,
+  freshState,
+  groupRows,
+  isDelegation,
+  toolDisplayName,
+  type ChatItem,
+  type ToolItem,
+} from './events'
 import type { ChatEvent } from '../lib/types'
 
 // Run a sequence of events through a fresh reducer and return the items.
@@ -137,5 +145,37 @@ describe('toolDisplayName', () => {
   it('leaves plain and malformed names alone', () => {
     expect(toolDisplayName('Read')).toBe('Read')
     expect(toolDisplayName('mcp__only')).toBe('mcp__only')
+  })
+})
+
+describe('delegations', () => {
+  it('copies the server-attached run id onto the tool item', () => {
+    const items: ChatItem[] = []
+    const st = freshState()
+    applyEvent(items, st, {
+      type: 'tool_use',
+      name: 'Agent',
+      input: { subagent_type: 'research', prompt: 'p' },
+      tool_id: 'd1',
+      run_id: 'run-123',
+    })
+    expect((items[0] as ToolItem).runId).toBe('run-123')
+  })
+
+  it('never folds an Agent call into a tool burst', () => {
+    const mk = (name: string, id: string): ToolItem => ({
+      kind: 'tool',
+      toolId: id,
+      name,
+      input: {},
+      status: 'done',
+      resultText: '',
+      isError: false,
+      startedAt: 0,
+      durationMs: null,
+    })
+    const rows = groupRows([mk('Read', 'a'), mk('Agent', 'b'), mk('Grep', 'c'), mk('Read', 'd')])
+    expect(rows.map((r) => r.group)).toEqual([false, false, false, false])
+    expect(isDelegation('Task')).toBe(true)
   })
 })

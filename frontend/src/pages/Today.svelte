@@ -8,14 +8,17 @@
   import { href, link } from '../lib/router.svelte'
   import { relativeTime, localDateTime, localClock, countdown, fmtCost } from '../lib/time'
   import { isAlertResult, isSuperseded, verifyBadge } from '../lib/verification'
+  import { sourceLabel, sourceHint } from '../lib/labels'
   import Page from '../components/Page.svelte'
   import Icon from '../components/Icon.svelte'
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import EmptyState from '../components/EmptyState.svelte'
-  import type { RunRecord, ScheduleRecord } from '../lib/types'
+  import HealthStrip from '../components/HealthStrip.svelte'
+  import type { HealthSnapshot, RunRecord, ScheduleRecord } from '../lib/types'
 
   let runs = $state<RunRecord[]>([])
+  let health = $state<HealthSnapshot | null>(null)
   let schedules = $state<ScheduleRecord[]>([])
   let loaded = $state(false)
   let error = $state<string | null>(null)
@@ -111,6 +114,12 @@
     } finally {
       loaded = true
     }
+    // The health strip is best-effort: the page is complete without it.
+    try {
+      health = await api.health()
+    } catch {
+      /* keep whatever we had */
+    }
   }
   $effect(() => {
     void load()
@@ -145,6 +154,7 @@
       <a href={href('/chat')} use:link class="btn-outline">Start a chat</a>
     </EmptyState>
   {:else}
+    <HealthStrip {health} />
     <div class="grid grid-cols-3 gap-6">
       <!-- Main column: attention + deliveries -->
       <div class="col-span-2 space-y-6">
@@ -157,10 +167,10 @@
               {#each attention as r (r.id)}
                 <a href={href('/runs/' + r.id)} use:link class="att card">
                   <span class="att-title">{titleFor(r)}</span>
-                  <span class="src src-{r.source}">{r.source}</span>
+                  <span class="src src-{r.source}" title={sourceHint(r.source)}>{sourceLabel(r.source)}</span>
                   <span class="ml-auto meta">{relativeTime(r.started_at)}</span>
                   <span class="att-err" title={r.error ?? ''}
-                    >{r.error ?? 'Failed with no error message'}</span
+                    >{r.error_summary?.title ?? r.error ?? 'Failed with no error message'}</span
                   >
                 </a>
               {/each}
@@ -183,7 +193,9 @@
                   <header class="dlv-head">
                     {#if !r.read_at}<span class="dot accent" title="Unread"></span>{/if}
                     <span class="dlv-title">{titleFor(r)}</span>
-                    <span class="src src-{r.source}">{r.source}</span>
+                    <span class="src src-{r.source}" title={sourceHint(r.source)}
+                      >{sourceLabel(r.source)}</span
+                    >
                     {#if isAlertResult(r)}<span class="pill err" title="This run crossed its alert bar"
                         ><Icon name="alert-triangle" size={12} />Alert</span
                       >{/if}
@@ -249,6 +261,16 @@
               <span class="stat-num num">{fmtCost(stats.cost)}</span>
               <span class="stat-label">Cost</span>
             </div>
+            {#if health}
+              <div class="stat">
+                <span class="stat-num num">${health.spend.week.cost.toFixed(2)}</span>
+                <span class="stat-label">This week</span>
+              </div>
+              <div class="stat">
+                <span class="stat-num num">${health.spend.month.cost.toFixed(2)}</span>
+                <span class="stat-label">This month</span>
+              </div>
+            {/if}
           </div>
           <a href={href('/runs')} use:link class="sec-more" style="margin-top: 12px;"
             >Activity log<Icon name="arrow-right" size={13} /></a
