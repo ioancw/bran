@@ -12,6 +12,17 @@
   import Icon from './Icon.svelte'
   import type { Attachment, Catalog } from '../lib/types'
 
+  export interface ModelChoice {
+    value: string
+    label: string
+  }
+  const DEFAULT_MODELS: ModelChoice[] = [
+    { value: '', label: 'Agent default' },
+    { value: 'sonnet', label: 'Sonnet' },
+    { value: 'opus', label: 'Opus' },
+    { value: 'haiku', label: 'Haiku' },
+  ]
+
   let {
     value = $bindable(''),
     placeholder = 'Message…',
@@ -24,6 +35,8 @@
     onstop,
     attach = false,
     attachments = $bindable([]),
+    model = $bindable(''),
+    models = DEFAULT_MODELS,
   }: {
     value?: string
     placeholder?: string
@@ -40,7 +53,31 @@
     // immediately; the parent reads `attachments` on submit and clears it.
     attach?: boolean
     attachments?: Attachment[]
+    // Model override for this message ('' = the agent's own). The parent
+    // persists it per chat; an empty `models` list hides the picker.
+    model?: string
+    models?: ModelChoice[]
   } = $props()
+
+  // --- model picker ---
+  let modelOpen = $state(false)
+  const modelLabel = $derived(models.find((m) => m.value === model)?.label ?? model ?? 'Agent default')
+  function pickModel(value: string) {
+    model = value
+    modelOpen = false
+  }
+  function onModelWindowClick(e: MouseEvent) {
+    if (!modelOpen) return
+    const t = e.target as HTMLElement | null
+    if (t?.closest('.model-pick')) return
+    modelOpen = false
+  }
+  function onModelWindowKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape' && modelOpen) {
+      e.preventDefault()
+      modelOpen = false
+    }
+  }
 
   // --- textarea: auto-grow with content, focusable from the parent ---
   let taEl = $state<HTMLTextAreaElement | null>(null)
@@ -193,6 +230,8 @@
   }
 </script>
 
+<svelte:window onclick={onModelWindowClick} onkeydown={onModelWindowKeydown} />
+
 <div class="composer-wrap">
   {#if acOpen}
     <!-- Listbox semantics (as in CommandPalette): the textarea drives selection
@@ -275,6 +314,36 @@
         </button>
         <input bind:this={attInput} type="file" multiple style="display: none;" onchange={onAttPick} />
       {/if}
+      {#if models.length}
+        <div class="model-pick">
+          <button
+            class="btn-ghost btn-sm"
+            onclick={() => (modelOpen = !modelOpen)}
+            title="Model for this chat"
+            aria-label="Model for this chat: {modelLabel}"
+            aria-haspopup="menu"
+            aria-expanded={modelOpen}
+          >
+            <Icon name="sparkles" size={13} />{modelLabel}<Icon name="chevron-down" size={12} />
+          </button>
+          {#if modelOpen}
+            <div class="model-menu card elev-md" role="menu" aria-label="Model">
+              {#each models as m (m.value)}
+                <button
+                  class="menu-item"
+                  role="menuitemradio"
+                  aria-checked={m.value === model}
+                  onclick={() => pickModel(m.value)}
+                >
+                  <span class="menu-check"
+                    >{#if m.value === model}<Icon name="check" size={12} />{/if}</span
+                  >{m.label}
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/if}
       {#if hint}<span class="composer-hint">{hint}</span>{/if}
       {#if busy && onstop}
         <!-- Streaming and cancellable: the send button becomes Stop. -->
@@ -302,6 +371,45 @@
 <style>
   .composer-wrap {
     position: relative;
+  }
+  .model-pick {
+    position: relative;
+  }
+  .model-menu {
+    position: absolute;
+    bottom: calc(100% + 4px);
+    left: 0;
+    z-index: 80;
+    min-width: 160px;
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 8px;
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius);
+    color: var(--fg);
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .menu-item:hover,
+  .menu-item:focus-visible {
+    background: var(--surface2);
+  }
+  .menu-check {
+    display: inline-flex;
+    width: 14px;
+    justify-content: center;
+    color: var(--accent-soft);
+    flex-shrink: 0;
   }
   .composer.drag-over {
     outline: 2px dashed var(--accent);

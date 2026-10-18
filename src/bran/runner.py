@@ -380,6 +380,7 @@ async def stream_agent(
     on_message=None,
     project_id: str | None = None,
     source: str = "chat",
+    model: str | None = None,
 ) -> AsyncIterator[Any]:
     """Async generator that yields SDK messages while persisting the run.
 
@@ -396,8 +397,11 @@ async def stream_agent(
     record = _begin_run(agent, task, parent_run_id, None, project_id, source)
     options = build_options_for(
         agent_def, resume=resume_session, session_id=session_id, max_turns=max_turns,
-        append_system=append_system,
+        append_system=append_system, model=model,
     )
+    if model:
+        record.metadata["model"] = model  # the override asked for; models used land at the end
+        update_run(record)
     gen = _drive(record, task, options, on_message)
     try:
         async for message in gen:
@@ -548,6 +552,9 @@ def _absorb_message(record: RunRecord, message: Any) -> None:
                 if target_path is not None:
                     add_artifact(record.id, str(target_path))
     elif isinstance(message, ResultMessage):
+        usage = getattr(message, "model_usage", None)
+        if isinstance(usage, dict) and usage:
+            record.metadata["models"] = sorted(str(k) for k in usage)
         record.session_id = message.session_id or record.session_id
         record.num_turns = message.num_turns
         record.total_cost_usd = message.total_cost_usd

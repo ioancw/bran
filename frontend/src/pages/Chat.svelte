@@ -16,11 +16,13 @@
   import Page from '../components/Page.svelte'
   import Composer from '../components/Composer.svelte'
   import ProjectRail from '../components/ProjectRail.svelte'
+  import Section from '../components/Section.svelte'
+  import SourcesPanel from '../components/SourcesPanel.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import Icon from '../components/Icon.svelte'
   import ChatLog from '../chat/ChatLog.svelte'
   import { applyEvent, freshState, toolDisplayName, type ChatItem, type ReducerState } from '../chat/events'
-  import type { Attachment, Catalog, ChatSummary, RunRecord, ScheduleRecord } from '../lib/types'
+  import type { Attachment, Catalog, ChatSummary, RunRecord, ScheduleRecord, SourceRef } from '../lib/types'
   import { relativeTime } from '../lib/time'
   import { sourceLabel } from '../lib/labels'
 
@@ -33,7 +35,42 @@
   let streamingIndex = $state(-1)
   let pendingAgent = $state<string | null>(null)
   let input = $state('')
+  // Model override for this chat ('' = the agent's own), remembered per chat.
+  let model = $state('')
+  let modelKeyLoaded: string | null = null
+  const modelKey = (sid: string | null) => 'bran.model:' + (sid ?? 'new')
+  function readModel(sid: string | null): string {
+    try {
+      return localStorage.getItem(modelKey(sid)) ?? ''
+    } catch {
+      return ''
+    }
+  }
+  function writeModel(sid: string | null, v: string) {
+    try {
+      if (v) localStorage.setItem(modelKey(sid), v)
+      else localStorage.removeItem(modelKey(sid))
+    } catch {
+      /* ignore */
+    }
+  }
+  $effect(() => {
+    void model
+    // Only persist once the chat's own saved choice has been loaded, so the
+    // route change doesn't write the previous chat's model under the new key.
+    if (modelKeyLoaded === modelKey(loadedId)) writeModel(loadedId, model)
+  })
   let attachments = $state<Attachment[]>([])
+  // Sources the conversation cited or read (right rail + citation chips).
+  let sources = $state<SourceRef[]>([])
+  async function loadSources(sid: string) {
+    try {
+      const next = await api.chatSources(sid)
+      if (activeChat?.id === sid || loadedId === sid) sources = next
+    } catch {
+      /* sources are a nicety */
+    }
+  }
 
   let rstate: ReducerState = freshState()
   let loadedId: string | null = null
@@ -255,6 +292,7 @@
     if (streaming) streamAbort?.abort()
     viewEpoch++
     loadedId = sid
+    sources = []
     clearFanoutWatchers()
     watchedSpawnIds = new Set()
     items = []
@@ -263,6 +301,8 @@
     // Each conversation gets its own composer contents — a draft typed in the
     // previous chat must not follow us here (it's saved under its own key).
     input = readDraft(sid)
+    model = readModel(sid)
+    modelKeyLoaded = modelKey(sid)
     attachments = []
     focusComposer()
     if (sid) {
@@ -320,6 +360,7 @@
   async function loadHistory(sid: string) {
     historyLoading = true
     try {
+      void loadSources(sid)
       const { events } = await api.history(sid)
       if (loadedId !== sid) return // a newer navigation owns the view now
       const next: ChatItem[] = []
@@ -416,6 +457,7 @@
       const proj = router.route.query.get('project')
       if (proj) fields.project_id = proj // else loose
     }
+    if (model) fields.model = model
 
     streamAbort = new AbortController()
     const epoch = viewEpoch
@@ -448,6 +490,9 @@
             /* ignore */
           }
           loadedId = id // pre-set so the route effect won't reload + wipe
+          // A model chosen for the new chat belongs to this session now.
+          if (model) writeModel(id, model)
+          modelKeyLoaded = modelKey(id)
           if (mounted) navigate('/chat/' + id) // don't yank a user who already left
         }
         streamingIndex = rstate.openAssistant
@@ -476,6 +521,7 @@
       if (mounted) {
         void loadChats() // refresh the sidebar Recents
         bumpActivity() // refresh the rail's Progress (new run recorded)
+        if (activeChat) void loadSources(activeChat.id)
         // Auto fan-in: if this turn fanned out >=2 new background runs, the
         // server will synthesise when they finish — watch for that synthesis
         // run and refresh the conversation when it lands.
@@ -614,7 +660,7 @@
             {/if}
           </div>
         {:else}
-          <ChatLog {items} {streamingIndex} onaction={onComposerAction} onretry={retryFailed} />
+          <ChatLog {items} {streamingIndex} {sources} onaction={onComposerAction} onretry={retryFailed} />
           {#if showPending}
             <div class="pending-turn" aria-label="working on a reply">
               <span class="pending-dot"></span><span class="pending-dot"></span><span class="pending-dot"
@@ -653,6 +699,7 @@
           bind:this={composer}
           bind:value={input}
           bind:attachments
+          bind:model
           attach={true}
           {catalog}
           hint="Enter to send · Shift+Enter for a new line"
@@ -683,21 +730,33 @@
     </div>
 
     <!-- Right rail: project context (Cowork-style), only when in a project. -->
-    {#if scopeId}
+    {#if scopeId || sources.length}
       <aside class="chat-rail">
-        <div style="margin-bottom: 10px; display: flex; align-items: baseline; gap: 8px;">
-          <a href={href('/projects/' + encodeURIComponent(scopeId))} use:link class="rail-title"
-            >{scopeName}</a
-          >
-          <span class="label-cap">Project</span>
-        </div>
-        <ProjectRail projectId={scopeId} mode="chat" sessionId={activeChat?.id ?? null} />
+        {#if scopeId}
+          <div style="margin-bottom: 10px; display: flex; align-items: baseline; gap: 8px;">
+            <a href={href('/projects/' + encodeURIComponent(scopeId))} use:link class="rail-title"
+              >{scopeName}</a
+            >
+            <span class="label-cap">Project</span>
+          </div>
+          <ProjectRail projectId={scopeId} mode="chat" sessionId={activeChat?.id ?? null} />
+        {/if}
+        {#if sources.length}
+          <div class="rail-sources">
+            <Section label="Sources">
+              <SourcesPanel {sources} />
+            </Section>
+          </div>
+        {/if}
       </aside>
     {/if}
   </div>
 </Page>
 
 <style>
+  .rail-sources {
+    margin-top: 10px;
+  }
   /* The conversation is a reading column: every turn (and the composer below)
      caps at --chat-col and centres. On narrow panes the cap is inert. */
   .chat-scroll > :global(*) {

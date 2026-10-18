@@ -853,8 +853,14 @@ def delete_chat(chat_id: str) -> bool:
         return cur.rowcount > 0
 
 
-def move_chat_to_project(chat_id: str, project_id: str) -> bool:
-    """Reassign a chat to a different project. Used by the UI's drag/drop."""
+def rename_chat(chat_id: str, title: str) -> bool:
+    with _lock, _conn() as conn:
+        cur = conn.execute("UPDATE chats SET title = ? WHERE id = ?", (title, chat_id))
+        return cur.rowcount > 0
+
+
+def move_chat_to_project(chat_id: str, project_id: str | None) -> bool:
+    """Reassign a chat to a project, or to none (a loose chat) with None."""
     with _lock, _conn() as conn:
         cur = conn.execute(
             "UPDATE chats SET project_id = ?, updated_at = ? WHERE id = ?",

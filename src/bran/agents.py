@@ -301,6 +301,7 @@ def build_options_for(
     session_id: str | None = None,
     max_turns: int | None = None,
     append_system: str | None = None,
+    model: str | None = None,
 ) -> ClaudeAgentOptions:
     """Translate an Agent into the SDK's ClaudeAgentOptions.
 
@@ -330,7 +331,7 @@ def build_options_for(
         # allowed_tools only pre-approves; this is what actually keeps the
         # ungranted built-ins (Bash above all) out of the whole session's reach.
         disallowed_tools=deny_list_for(allowed),
-        model=agent.model,
+        model=model or agent.model,
         permission_mode=agent.permission_mode,
         agents=dict(agent.subagents) if agent.subagents else None,
         mcp_servers=dict(agent.mcp_servers) if agent.mcp_servers else {},

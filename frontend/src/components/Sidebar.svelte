@@ -91,12 +91,94 @@
     if (activeChatId === id) newChat()
   }
 
+  // --- Per-chat "…" menu: rename / move to project / delete ---------------
+  let menuFor = $state<string | null>(null) // chat id whose menu is open
+  let moveOpen = $state(false) // the "Move to project" list is expanded
+  let renamingId = $state<string | null>(null)
+  let renameText = $state('')
+  let renameInput = $state<HTMLInputElement | null>(null)
+  let renameSaving = false
+
+  function openMenu(id: string, e: Event) {
+    e.preventDefault()
+    e.stopPropagation()
+    moveOpen = false
+    menuFor = menuFor === id ? null : id
+  }
+  function closeMenu() {
+    menuFor = null
+    moveOpen = false
+  }
+  function onWindowClick(e: MouseEvent) {
+    if (menuFor === null) return
+    const t = e.target as HTMLElement | null
+    if (t?.closest('.recent-menu, .recent-more')) return
+    closeMenu()
+  }
+  function onWindowKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape' && menuFor !== null) {
+      e.preventDefault()
+      closeMenu()
+    }
+  }
+
+  function startRename(c: { id: string; title: string }) {
+    closeMenu()
+    renamingId = c.id
+    renameText = c.title
+    requestAnimationFrame(() => {
+      renameInput?.focus()
+      renameInput?.select()
+    })
+  }
+  async function commitRename(c: { id: string; title: string }) {
+    if (renamingId !== c.id || renameSaving) return
+    const title = renameText.trim()
+    renamingId = null
+    if (!title || title === c.title) return
+    renameSaving = true
+    try {
+      await api.renameChat(c.id, title)
+      await loadChats()
+    } catch (err) {
+      toast(errorText(err), 'err')
+    } finally {
+      renameSaving = false
+    }
+  }
+  function cancelRename() {
+    renamingId = null
+  }
+  function onRenameKeydown(e: KeyboardEvent, c: { id: string; title: string }) {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      void commitRename(c)
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      cancelRename()
+    }
+  }
+
+  async function moveChat(id: string, projectId: string | null) {
+    closeMenu()
+    try {
+      await api.moveChat(id, projectId)
+      toast(projectId ? `Moved to ${projectName(projectId)}` : 'Moved out of project', 'ok')
+    } catch (err) {
+      toast(errorText(err), 'err')
+      return
+    }
+    await Promise.all([loadChats(), loadProjects()])
+  }
+
   // Onboarding signals (derived from real state).
   const chatDone = $derived(
     workspace.chats.length > 0 ||
       (typeof localStorage !== 'undefined' && localStorage.getItem('bran.didChat') === '1'),
   )
 </script>
+
+<svelte:window onclick={onWindowClick} onkeydown={onWindowKeydown} />
 
 <aside class="sidebar shrink-0 flex flex-col" class:open class:collapsed>
   <div class="side-head">
@@ -182,30 +264,97 @@
     {#each workspace.chats as c (c.id)}
       <!-- Delete sits BESIDE the link, not inside it — interactive content
            inside <a> is invalid HTML and confuses keyboard/screen-reader use. -->
-      <div class="recent-row" class:active={activeChatId === c.id}>
-        <a
-          href={chatHref(c.id)}
-          use:link
-          class="recent-link"
-          aria-current={activeChatId === c.id ? 'page' : undefined}
-        >
-          <span class="recent-title">{c.title}</span>
-          <span class="recent-meta">
-            <span>{relativeTime(c.updated_at)}</span>
-            <!-- Global Recents shows every chat, so say where each one lives. -->
-            {#if !workspace.scopeProjectId && c.project_id}<span class="recent-proj"
-                >{projectName(c.project_id)}</span
-              >{/if}
-          </span>
-        </a>
-        <button
-          class="btn-icon danger recent-x"
-          onclick={(e) => deleteChat(c.id, c.title, e)}
-          title="Delete chat"
-          aria-label="Delete chat {c.title}"
-        >
-          <Icon name="x" size={13} />
-        </button>
+      <div class="recent-row" class:active={activeChatId === c.id} class:menu-open={menuFor === c.id}>
+        {#if renamingId === c.id}
+          <div class="recent-rename">
+            <input
+              class="field"
+              bind:this={renameInput}
+              bind:value={renameText}
+              aria-label="Rename chat"
+              onkeydown={(e) => onRenameKeydown(e, c)}
+              onblur={() => commitRename(c)}
+            />
+          </div>
+        {:else}
+          <a
+            href={chatHref(c.id)}
+            use:link
+            class="recent-link"
+            aria-current={activeChatId === c.id ? 'page' : undefined}
+          >
+            <span class="recent-title">{c.title}</span>
+            <span class="recent-meta">
+              <span>{relativeTime(c.updated_at)}</span>
+              <!-- Global Recents shows every chat, so say where each one lives. -->
+              {#if !workspace.scopeProjectId && c.project_id}<span class="recent-proj"
+                  >{projectName(c.project_id)}</span
+                >{/if}
+            </span>
+          </a>
+          <button
+            class="btn-icon recent-more"
+            onclick={(e) => openMenu(c.id, e)}
+            title="Chat options"
+            aria-label="Options for chat {c.title}"
+            aria-haspopup="menu"
+            aria-expanded={menuFor === c.id}
+          >
+            <Icon name="more" size={14} />
+          </button>
+          {#if menuFor === c.id}
+            <div class="recent-menu card elev-md" role="menu" aria-label="Chat options">
+              <button class="menu-item" role="menuitem" onclick={() => startRename(c)}>
+                <Icon name="pencil" size={13} />Rename
+              </button>
+              <button
+                class="menu-item"
+                role="menuitem"
+                aria-expanded={moveOpen}
+                onclick={() => (moveOpen = !moveOpen)}
+              >
+                <Icon name="folder" size={13} />Move to project
+                <Icon name={moveOpen ? 'chevron-up' : 'chevron-down'} size={12} class="menu-chev" />
+              </button>
+              {#if moveOpen}
+                <div class="menu-sub" role="group" aria-label="Projects">
+                  {#each workspace.projects as p (p.id)}
+                    <button
+                      class="menu-item sub"
+                      role="menuitemradio"
+                      aria-checked={c.project_id === p.id}
+                      onclick={() => moveChat(c.id, p.id)}
+                    >
+                      <span class="menu-check"
+                        >{#if c.project_id === p.id}<Icon name="check" size={12} />{/if}</span
+                      >{p.name}
+                    </button>
+                  {/each}
+                  <button
+                    class="menu-item sub"
+                    role="menuitemradio"
+                    aria-checked={!c.project_id}
+                    onclick={() => moveChat(c.id, null)}
+                  >
+                    <span class="menu-check"
+                      >{#if !c.project_id}<Icon name="check" size={12} />{/if}</span
+                    >No project
+                  </button>
+                </div>
+              {/if}
+              <button
+                class="menu-item danger"
+                role="menuitem"
+                onclick={(e) => {
+                  closeMenu()
+                  void deleteChat(c.id, c.title, e)
+                }}
+              >
+                <Icon name="trash" size={13} />Delete
+              </button>
+            </div>
+          {/if}
+        {/if}
       </div>
     {:else}
       <div class="recents-empty">No conversations yet.</div>
@@ -410,22 +559,91 @@
     content: '·';
     margin-right: 6px;
   }
-  .recent-x {
+  .recent-more {
     opacity: 0;
     transition: opacity var(--dur-1) var(--transition);
   }
   /* Reveal on hover AND on keyboard focus — a control you can't see when
-     you Tab to it may as well not exist. */
-  .recent-row:hover .recent-x,
-  .recent-row:focus-within .recent-x,
-  .recent-x:focus-visible {
+     you Tab to it may as well not exist. Stays visible while its menu is open. */
+  .recent-row:hover .recent-more,
+  .recent-row:focus-within .recent-more,
+  .recent-row.menu-open .recent-more,
+  .recent-more:focus-visible {
     opacity: 1;
   }
   /* No hover on touch — the control must simply be there. */
   @media (hover: none) {
-    .recent-x {
+    .recent-more {
       opacity: 1;
     }
+  }
+  .recent-row {
+    position: relative;
+  }
+  .recent-rename {
+    grid-column: 1 / -1;
+    padding: 4px 4px 4px 6px;
+  }
+  .recent-rename .field {
+    padding: 4px 8px;
+    font-size: 13px;
+  }
+  .recent-menu {
+    position: absolute;
+    top: calc(100% - 2px);
+    right: 4px;
+    z-index: 80;
+    min-width: 190px;
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 8px;
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius);
+    color: var(--fg);
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .menu-item:hover,
+  .menu-item:focus-visible {
+    background: var(--surface2);
+  }
+  .menu-item.danger:hover,
+  .menu-item.danger:focus-visible {
+    color: var(--red);
+    background: var(--red-soft);
+  }
+  .menu-item :global(.menu-chev) {
+    margin-left: auto;
+    color: var(--muted);
+  }
+  .menu-sub {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 2px 0 2px 6px;
+    max-height: 220px;
+    overflow-y: auto;
+  }
+  .menu-item.sub {
+    font-size: 12.5px;
+    padding: 5px 8px;
+  }
+  .menu-check {
+    display: inline-flex;
+    width: 14px;
+    justify-content: center;
+    color: var(--accent-soft);
+    flex-shrink: 0;
   }
 
   .side-foot {

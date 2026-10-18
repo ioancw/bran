@@ -15,13 +15,16 @@
   import ChatLog from '../chat/ChatLog.svelte'
   import Timeline from '../chat/Timeline.svelte'
   import { applyEvent, freshState, type ChatItem } from '../chat/events'
-  import type { ArtifactEntry, RunRecord, Verification } from '../lib/types'
+  import type { ArtifactEntry, RunRecord, SourceRef, Verification } from '../lib/types'
+  import SourcesPanel from '../components/SourcesPanel.svelte'
 
   let { runId }: { runId: string } = $props()
 
   let run = $state<RunRecord | null>(null)
   // Inline subagents this run delegated to (recorded as child runs).
   let children = $state<RunRecord[]>([])
+  // Where the answer came from (cited links + pages read, incl. subagents').
+  let sources = $state<SourceRef[]>([])
   let transcript = $state<ChatItem[]>([])
   let artifacts = $state<ArtifactEntry[]>([])
   let error = $state<string | null>(null)
@@ -79,6 +82,10 @@
       api
         .runs({ parent_run_id: runId, limit: 50 })
         .then((r) => (children = r))
+        .catch(() => {})
+      api
+        .runSources(runId)
+        .then((r) => (sources = r))
         .catch(() => {})
       if (run.status === 'running' || run.status === 'pending') {
         // Live: stream the run's events into the transcript as it executes
@@ -320,6 +327,12 @@
             {/if}
           </div>
         </div>
+        {#if sources.length}
+          <div class="card">
+            <h2 class="card-title">Sources <span class="title-count">{sources.length}</span></h2>
+            <SourcesPanel {sources} />
+          </div>
+        {/if}
         {#if children.length}
           <div class="card">
             <h2 class="card-title">Delegated work</h2>
@@ -359,7 +372,7 @@
         {#if resultFirst}
           <div class="card">
             <h2 class="card-title">Result</h2>
-            <div class="reading-col"><Prose text={run.result ?? ''} /></div>
+            <div class="reading-col"><Prose text={run.result ?? ''} {sources} /></div>
           </div>
           {#if transcript.length}
             <div class="card">
@@ -403,7 +416,7 @@
         {:else if run.result}
           <div class="card">
             <h2 class="card-title">Result</h2>
-            <div class="reading-col"><Prose text={run.result} /></div>
+            <div class="reading-col"><Prose text={run.result} {sources} /></div>
           </div>
         {/if}
       </div>

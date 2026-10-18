@@ -81,6 +81,7 @@ from bran.project_files import (
     save_upload as save_project_file,
 )
 from bran.runner import run_agent, stream_agent
+from bran.sources import sources_for_run
 from bran.transcript import find_session_file, parse_transcript
 from bran.web.events import (
     events_from_message,
@@ -418,6 +419,14 @@ async def run_transcript(run_id: str) -> dict[str, Any]:
     return {"run": _run_dict(rec), "events": [attach_child_run(e) for e in events]}
 
 
+@router.get("/runs/{run_id}/sources")
+async def run_sources(run_id: str) -> list[dict[str, Any]]:
+    rec = get_run(run_id)
+    if rec is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No run {run_id}")
+    return sources_for_run(rec)
+
+
 @router.get("/runs/{run_id}/stream")
 async def run_stream(run_id: str) -> StreamingResponse:
     """Watch a background run execute: SSE of its unified events, live.
@@ -730,12 +739,50 @@ async def remove_schedule(name: str) -> dict[str, Any]:
 
 
 @router.post("/chats/{chat_id}/move")
-async def move_chat(chat_id: str, project_id: Annotated[str, Form()]) -> dict[str, Any]:
-    if get_project(project_id) is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No project {project_id}")
-    if not move_chat_to_project(chat_id, project_id):
+async def move_chat(chat_id: str, project_id: Annotated[str, Form()] = "") -> dict[str, Any]:
+    """Move a chat into a project, or out of every project (empty id)."""
+    target = project_id.strip() or None
+    if target is not None and get_project(target) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No project {target}")
+    if not move_chat_to_project(chat_id, target):
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"No chat {chat_id}")
-    return {"chat_id": chat_id, "project_id": project_id}
+    return {"chat_id": chat_id, "project_id": target}
+
+
+@router.post("/chats/{chat_id}/rename")
+async def rename_chat_endpoint(chat_id: str, title: Annotated[str, Form()]) -> dict[str, Any]:
+    from bran.persistence import rename_chat
+
+    clean = " ".join(title.split())[:120]
+    if not clean:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "A title is required.")
+    if not rename_chat(chat_id, clean):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No chat {chat_id}")
+    return {"chat_id": chat_id, "title": clean}
+
+
+def _chat_turns(session_id: str, limit: int = 1000) -> list[Any]:
+    """The conversation's own turns, newest first. list_runs(session_id=…)
+    also returns the background runs spawned FROM those turns (the Progress
+    rail wants them); for history, restore and sources they must not count."""
+    return [r for r in list_runs(session_id=session_id, limit=limit) if r.source in ("chat", "synthesis")]
+
+
+@router.get("/chats/{chat_id}/sources")
+async def chat_sources(chat_id: str) -> list[dict[str, Any]]:
+    """Every source the conversation's turns cited or fetched, newest turn first."""
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for turn in _chat_turns(chat_id, limit=40):
+        for s in sources_for_run(turn):
+            key = s["url"] or ("dom:" + s["domain"])
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({**s, "run_id": turn.id})
+        if len(out) >= 60:
+            break
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1008,7 +1055,7 @@ async def chat_history(chat_id: str) -> dict[str, Any]:
         # as chat runs in bran's own database, so rebuild from those. A chat
         # that was continued after its file was pruned stays on this path:
         # its new file holds only the turns since, the database holds all.
-        turns = list_runs(session_id=chat_id, limit=1000)
+        turns = _chat_turns(chat_id)
         return {"session_id": chat_id, "events": [attach_child_run(e) for e in events_from_runs(turns)]}
     events: list[dict[str, Any]] = []
     for entry in parse_transcript(path):
@@ -1027,6 +1074,7 @@ async def chat_stream(
     session_id: Annotated[str | None, Form()] = None,
     chat_agent: Annotated[str | None, Form()] = None,
     project_id: Annotated[str | None, Form()] = None,
+    model: Annotated[str | None, Form()] = None,
 ):
     """Stream an agent reply as SSE using the unified event schema.
 
@@ -1081,10 +1129,16 @@ async def chat_stream(
     if sid and existing_chat is not None and find_session_file(sid) is None:
         resume_sid = None
         fresh_sid = sid
-        restored = restored_context(events_from_runs(list_runs(session_id=sid, limit=1000)))
+        restored = restored_context(events_from_runs(_chat_turns(sid)))
         if restored:
             append_system = (append_system + "\n\n" + restored) if append_system else restored
         set_setting(_DB_HISTORY_KEY + sid, "1")
+
+    # Per-chat model override (the composer's picker). An alias or a full id;
+    # anything else is ignored rather than handed to the CLI.
+    model_override = (model or "").strip()
+    if model_override and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,80}", model_override):
+        model_override = ""
 
     first_prompt = actual_prompt.strip()
     title_seed = (first_prompt[:80].rstrip() + ("…" if len(first_prompt) > 80 else "")) or "(new chat)"
@@ -1105,6 +1159,7 @@ async def chat_stream(
             async for msg in stream_agent(
                 target_agent, actual_prompt, resume_session=resume_sid, session_id=fresh_sid,
                 append_system=append_system, project_id=target_project_id,
+                model=model_override or None,
             ):
                 # Inside-subagent messages belong to the child run (see
                 # runner._child_run_for) — the chat shows the Agent tool call

@@ -14,6 +14,7 @@ import type {
   RunRecord,
   ScheduleRecord,
   HealthSnapshot,
+  SourceRef,
 } from './types'
 
 import { flagAuthError } from './auth.svelte'
@@ -250,6 +251,14 @@ export const api = {
   deleteRuns: (ids: string[]) =>
     form<{ deleted: number; skipped: number }>('/spa/runs/delete', { ids: ids.join(',') }),
   chat: (id: string) => getJSON<ChatSummary>(`/spa/chats/${encodeURIComponent(id)}`),
+  renameChat: (id: string, title: string) =>
+    form<{ chat_id: string; title: string }>(`/spa/chats/${encodeURIComponent(id)}/rename`, { title }),
+  moveChat: (id: string, projectId: string | null) =>
+    form<{ chat_id: string; project_id: string | null }>(`/spa/chats/${encodeURIComponent(id)}/move`, {
+      project_id: projectId ?? '',
+    }),
+  chatSources: (id: string) => getJSON<SourceRef[]>(`/spa/chats/${encodeURIComponent(id)}/sources`),
+  runSources: (id: string) => getJSON<SourceRef[]>(`/spa/runs/${encodeURIComponent(id)}/sources`),
   deleteChat: async (id: string): Promise<void> => {
     const url = `/spa/chats/${encodeURIComponent(id)}`
     const r = await fetch(url, { method: 'DELETE' })

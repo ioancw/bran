@@ -156,6 +156,15 @@ export type ChatEvent =
   | { type: 'error'; message: string }
   | { type: 'done' }
 
+// --- Sources (bran.sources): where an answer came from ---
+export interface SourceRef {
+  url: string | null // null when only a domain was cited
+  domain: string
+  title: string | null
+  via: 'cited' | 'fetched'
+  run_id?: string // chat sources: the turn that produced it
+}
+
 // --- Failure summary (bran.errors) ---
 export interface FailureSummary {
   title: string

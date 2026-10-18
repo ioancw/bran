@@ -164,3 +164,19 @@ def test_run_transcript_falls_back_to_stored_events(client):
     r = client.get(f"/spa/runs/{rec.id}/transcript")
     assert r.status_code == 200
     assert [e["type"] for e in r.json()["events"]] == ["user", "text"]
+
+
+def test_spawned_children_are_not_conversation_turns(client):
+    """list_runs(session_id=…) also returns the background runs a turn spawned
+    (the Progress rail wants them); the history replay must not show them as
+    turns of the conversation."""
+    sid = "gone-" + uuid.uuid4().hex
+    turn = _turn(sid, "fan out please", result="Started two runs.", started="2026-06-02T09:00:00+00:00")
+    insert_run(turn)
+    child = RunRecord.new(agent="research", task="subtask", source="spawn", parent_run_id=turn.id)
+    child.status = "completed"
+    child.result = "child result"
+    insert_run(child)
+    events = client.get(f"/spa/chats/{sid}/history").json()["events"]
+    assert [e["type"] for e in events] == ["user", "text"]
+    assert all("subtask" not in (e.get("text") or "") for e in events)

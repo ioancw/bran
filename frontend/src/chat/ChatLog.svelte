@@ -12,12 +12,14 @@
   import SubagentCard from './SubagentCard.svelte'
   import PlanCard from './PlanCard.svelte'
   import { toast } from '../lib/toast.svelte'
+  import type { SourceRef } from '../lib/types'
 
   let {
     items,
     streamingIndex = -1,
     onaction,
     onretry,
+    sources = [],
   }: {
     items: ChatItem[]
     streamingIndex?: number
@@ -28,6 +30,8 @@
     // Re-send the turn that produced a trailing error row. Only the live chat
     // passes this; transcript replays render errors as plain records.
     onretry?: () => void
+    // Where the conversation's answers came from — turns "(Source: x)" into chips.
+    sources?: SourceRef[]
   } = $props()
 
   // Copy a turn's text; brief "Copied" feedback inline.
@@ -119,7 +123,7 @@
         <!-- bran's turn: prose flows on the canvas, no card chrome — the answer is
          the page, not a boxed message. Actions reveal on hover/focus. -->
         <div class="msg-assistant">
-          <Prose text={item.text} streaming={i === streamingIndex} class="reading" />
+          <Prose text={item.text} streaming={i === streamingIndex} class="reading" {sources} />
           {#if i !== streamingIndex}
             <div class="row-actions">
               <button
