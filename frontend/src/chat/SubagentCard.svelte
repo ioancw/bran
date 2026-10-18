@@ -28,7 +28,17 @@
 
   let { tool }: { tool: ToolItem } = $props()
 
-  const agentName = $derived((tool.input?.subagent_type as string) || 'general-purpose')
+  const isWorkflow = $derived(tool.name === 'Workflow')
+  const workflowName = $derived.by(() => {
+    const named = tool.input?.name as string | undefined
+    if (named) return named
+    const script = String(tool.input?.script ?? '')
+    const m = script.match(/name\s*:\s*['"]([^'"]{1,80})['"]/)
+    return m ? m[1] : 'workflow'
+  })
+  const agentName = $derived(
+    isWorkflow ? workflowName : (tool.input?.subagent_type as string) || 'general-purpose',
+  )
   const prompt = $derived(((tool.input?.prompt ?? tool.input?.description) as string) ?? '')
   const RESULT_PREVIEW = 400
   let showPrompt = $state(false)
@@ -55,7 +65,7 @@
 
 <div class="card sub-card" class:errored={tool.status === 'error'}>
   <div class="sub-head">
-    <span class="sub-title"><Icon name="bot" size={14} />Delegated to <strong>{agentName}</strong></span>
+    <span class="sub-title"><Icon name="bot" size={14} />{isWorkflow ? 'Running workflow' : 'Delegated to'} <strong>{agentName}</strong></span>
     <span class="sub-status">
       <span class="dot {dotClass}"></span>
       <span>{statusWord}</span>

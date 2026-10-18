@@ -184,7 +184,7 @@ export const SPAWN_TOOL = 'mcp__bran__spawn_agent'
 export const PLAN_TOOL = 'mcp__bran__propose_plan'
 // The SDK's delegation tool ("Task" before Claude Code 2.1.63). Each call is
 // its own card, never folded into a tool burst.
-export const DELEGATION_TOOLS = new Set(['Agent', 'Task'])
+export const DELEGATION_TOOLS = new Set(['Agent', 'Task', 'Workflow'])
 export const isDelegation = (name: string) => DELEGATION_TOOLS.has(name)
 const NEVER_GROUP = new Set([SPAWN_TOOL, PLAN_TOOL, ...DELEGATION_TOOLS])
 export const GROUP_MIN = 3

@@ -200,7 +200,13 @@ def events_from_message(message: Any) -> list[dict[str, Any]]:
 
 
 # Message kinds we know carry nothing the UI renders.
-_IGNORED_TYPES = {"SystemMessage", "StreamEvent", "RateLimitEvent", "ConversationResetMessage"}
+_IGNORED_TYPES = {
+    "SystemMessage", "StreamEvent", "RateLimitEvent", "ConversationResetMessage",
+    # Task lifecycle (workflow agents, background subagents) is recorded by the
+    # runner as child runs; it carries nothing the chat renders.
+    "TaskStartedMessage", "TaskProgressMessage", "TaskNotificationMessage", "TaskUpdatedMessage",
+    "HookEventMessage",
+}
 _warned_types: set[str] = set()
 
 

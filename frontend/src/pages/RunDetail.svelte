@@ -80,7 +80,7 @@
         return
       }
       api
-        .runs({ parent_run_id: runId, limit: 50 })
+        .runs({ parent_run_id: runId, limit: 200 })
         .then((r) => (children = r))
         .catch(() => {})
       api

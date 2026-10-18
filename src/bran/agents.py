@@ -144,6 +144,9 @@ class Agent:
     # Skills to preload at startup (subset of .claude/skills/*).
     skills: list[str] = field(default_factory=list)
     max_turns: int | None = None
+    # Per-run spend ceiling (USD); None = SETTINGS.run_budget_usd. Agents that
+    # run workflows need more headroom than a chat turn.
+    budget_usd: float | None = None
     # SDK hooks (e.g. PreToolUse write confinement). Maps HookEvent -> matchers.
     hooks: dict[str, Any] | None = None
     # The file this agent was loaded from (None for programmatic agents).
@@ -257,6 +260,7 @@ def agent_from_spec(spec: AgentSpec, specs: dict[str, AgentSpec]) -> Agent:
         mcp_servers=servers_for(all_tools),
         skills=list(spec.skills),
         max_turns=spec.max_turns,
+        budget_usd=spec.budget_usd,
         hooks=_WRITE_CONFINEMENT_HOOKS,
         source=_source_label(spec.path),
     )
@@ -353,7 +357,11 @@ def build_options_for(
         max_buffer_size=SETTINGS.max_buffer_size,
         # Spend ceiling for this run (client-side estimate; the query ends with
         # error_max_budget_usd). Resumed-session history doesn't count.
-        max_budget_usd=SETTINGS.run_budget_usd if SETTINGS.run_budget_usd > 0 else None,
+        max_budget_usd=(
+            agent.budget_usd
+            if agent.budget_usd
+            else (SETTINGS.run_budget_usd if SETTINGS.run_budget_usd > 0 else None)
+        ),
         # Bound the inline Agent-tool tree inside this run. The Python SDK
         # merges env into the inherited environment.
         env={

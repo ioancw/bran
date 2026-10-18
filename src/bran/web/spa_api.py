@@ -100,7 +100,7 @@ def _run_dict(r: Any) -> dict[str, Any]:
     return d
 
 
-_DELEGATION_TOOLS = ("Agent", "Task")
+_DELEGATION_TOOLS = ("Agent", "Task", "Workflow")
 
 
 def attach_child_run(ev: dict[str, Any]) -> dict[str, Any]:

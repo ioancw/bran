@@ -21,7 +21,7 @@ def test_every_agent_has_a_turn_ceiling_and_a_budget():
     for a in list_agents():
         opts = build_options_for(a)
         assert opts.max_turns is not None and opts.max_turns > 0, a.name
-        assert opts.max_budget_usd == SETTINGS.run_budget_usd
+        assert opts.max_budget_usd == (a.budget_usd or SETTINGS.run_budget_usd), a.name
         assert opts.permission_mode == "dontAsk"
     # Subagent definitions carry their own ceilings.
     for sub in get_agent("orchestrator").subagents.values():

@@ -362,12 +362,13 @@ def update_run(record: RunRecord) -> None:
     with _lock, _conn() as conn:
         conn.execute(
             """UPDATE runs SET
-                status = ?, session_id = ?, result = ?, error = ?,
+                status = ?, task = ?, session_id = ?, result = ?, error = ?,
                 total_cost_usd = ?, num_turns = ?, duration_ms = ?,
                 ended_at = ?, metadata = ?
                WHERE id = ?""",
             (
                 record.status,
+                record.task,
                 record.session_id,
                 record.result,
                 record.error,

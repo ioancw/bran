@@ -18,7 +18,8 @@ delegate to through the Agent tool.
     You are a careful web research analyst. …
 
 Keys: `name`, `description` (required), `model`, `tools` (list, or a
-comma-separated string as Claude Code writes it), `max_turns`, `subagents`,
+comma-separated string as Claude Code writes it), `max_turns`, `budget_usd`
+(per-run spend ceiling, overrides BRAN_RUN_BUDGET_USD), `subagents`,
 `permission_mode`, `skills`. `mcp__<server>__*` expands to every tool of that
 server; MCP servers an agent needs are derived from the tool names, never
 declared. The prompt may use `{{briefings_dir}}` and `{{roster}}` (a bullet
@@ -48,6 +49,7 @@ class AgentSpec:
     tools: list[str]
     model: str | None
     max_turns: int | None
+    budget_usd: float | None  # per-run spend ceiling; None = the global default
     subagents: list[str]
     permission_mode: str
     skills: list[str]
@@ -130,6 +132,15 @@ def spec_from_text(text: str, *, default_name: str, path: Path | None = None) ->
     max_turns = meta.get("max_turns")
     if max_turns is not None and max_turns != "" and not isinstance(max_turns, int):
         raise AgentFileError("`max_turns` must be an integer")
+    budget_raw = meta.get("budget_usd")
+    budget_usd: float | None = None
+    if budget_raw not in (None, ""):
+        try:
+            budget_usd = float(budget_raw)
+        except (TypeError, ValueError):
+            raise AgentFileError("`budget_usd` must be a number") from None
+        if budget_usd <= 0:
+            raise AgentFileError("`budget_usd` must be positive")
     model = meta.get("model")
     return AgentSpec(
         name=name,
@@ -138,6 +149,7 @@ def spec_from_text(text: str, *, default_name: str, path: Path | None = None) ->
         tools=_as_list(meta.get("tools"), "tools"),
         model=(str(model).strip() or None) if model not in (None, "") else None,
         max_turns=max_turns if isinstance(max_turns, int) else None,
+        budget_usd=budget_usd,
         subagents=_as_list(meta.get("subagents"), "subagents"),
         permission_mode=str(meta.get("permission_mode") or "dontAsk"),
         skills=_as_list(meta.get("skills"), "skills"),
