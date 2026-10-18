@@ -22,6 +22,13 @@ export function nowLocal(): string {
   return new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
 }
 
+/** The top of the next hour, as a datetime-local value — a sensible default for a one-shot runner. */
+export function nextHourLocal(): string {
+  const d = new Date(Date.now() + 3_600_000)
+  d.setMinutes(0, 0, 0)
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
+}
+
 const DAY_LABELS: Record<string, string> = {
   mon: 'Monday',
   tue: 'Tuesday',

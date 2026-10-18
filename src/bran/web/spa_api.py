@@ -10,6 +10,7 @@ fire requests at it (CSRF).
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import asdict
 from pathlib import Path
@@ -149,6 +150,8 @@ async def _require_same_origin(request: Request) -> None:
             )
 
 
+log = logging.getLogger(__name__)
+
 router = APIRouter(
     prefix="/spa", tags=["spa"], dependencies=[Depends(_require_same_origin)]
 )
@@ -208,6 +211,10 @@ def _build_project_context(project: ProjectRecord) -> str:
     brief = (project.instructions or "").strip()
     if brief:
         parts.append("## Instructions\n" + brief)
+    summary = (project.summary or "").strip()
+    if summary:
+        when = (project.summary_at or "")[:10]
+        parts.append(f"## Project summary (auto-written{' ' + when if when else ''})\n" + summary)
     memories = list_project_memories(project.id)
     if memories:
         parts.append("## Memory\n" + "\n".join(f"- {m.text}" for m in memories))
@@ -589,6 +596,21 @@ async def parse_schedule(expr: str) -> dict[str, Any]:
         return {"ok": False, "cron": "", "human": "", "error": str(e)}
 
 
+@router.post("/schedules/draft")
+async def draft_schedule(text: Annotated[str, Form()]) -> dict[str, Any]:
+    """One sentence → a filled-in runner form for the user to confirm."""
+    from bran.runner_draft import draft_runner
+
+    text = text.strip()
+    if len(text) < 8:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Say what the runner should do and when.")
+    try:
+        return await draft_runner(text)
+    except Exception as exc:  # noqa: BLE001 — surfaced as a form error
+        log.exception("runner draft failed")
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Could not draft a runner: {exc}")
+
+
 @router.get("/schedules")
 async def schedules(project_id: str | None = None) -> list[dict[str, Any]]:
     return [_schedule_dict(s) for s in list_schedules(project_id=project_id or None)]
@@ -793,6 +815,7 @@ def _project_dict(p: ProjectRecord, n_chats: int) -> dict[str, Any]:
     return {
         "id": p.id, "name": p.name, "description": p.description,
         "instructions": p.instructions, "work_dir": p.work_dir,
+        "summary": p.summary, "summary_at": p.summary_at,
         "n_chats": n_chats,
         "updated_at": p.updated_at,
     }
@@ -811,9 +834,14 @@ async def project_detail(project_id: str) -> dict[str, Any]:
     project = get_project(project_id)
     if project is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"No project {project_id}")
+    from bran.project_summary import find_summary_schedule
+
     chats = list_chats(limit=200, project_id=project_id)
+    daily = find_summary_schedule(project_id)
     return {
         "project": _project_dict(project, len(chats)),
+        "n_archived": len(list_chats(limit=1000, project_id=project_id, archived=True)),
+        "daily_summary": daily.name if daily else None,
         "chats": [
             {"id": c.id, "title": c.title, "agent": c.agent,
              "updated_at": c.updated_at, "created_at": c.created_at}
@@ -832,13 +860,59 @@ async def project_detail(project_id: str) -> dict[str, Any]:
 async def new_project(
     name: Annotated[str, Form()],
     description: Annotated[str, Form()] = "",
+    daily_summary: Annotated[str, Form()] = "",
 ) -> dict[str, Any]:
     name = name.strip()
     if not name:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "name is required")
     record = ProjectRecord.new(name=name, description=description.strip())
     insert_project(record)
+    if _form_flag(daily_summary):
+        from bran.project_summary import enable_daily_summary
+
+        enable_daily_summary(record)
     return _project_dict(record, 0)
+
+
+def _launch_run(agent: str, task: str, *, project_id: str | None, source: str = "manual") -> RunRecord:
+    record = RunRecord.new(agent=agent, task=task, project_id=project_id, source=source)
+    insert_run(record)
+
+    async def _go():
+        try:
+            await run_agent(agent, task, record=record)
+        except Exception:
+            pass  # the runner persists the failure
+
+    spawn_background(_go(), name=f"spa-run:{record.id}")
+    return record
+
+
+@router.post("/projects/{project_id}/summarise")
+async def summarise_project(project_id: str) -> dict[str, Any]:
+    """Refresh the project's summary now: one summariser run that reads the
+    project's recent activity and saves a new brief. Returns the run."""
+    from bran.project_summary import SUMMARY_AGENT, summary_task
+
+    if get_project(project_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No project {project_id}")
+    record = _launch_run(SUMMARY_AGENT, summary_task(project_id), project_id=project_id)
+    return asdict(record)
+
+
+@router.post("/projects/{project_id}/daily-summary")
+async def set_daily_summary(project_id: str, enabled: Annotated[str, Form()]) -> dict[str, Any]:
+    """Turn the daily summary runner on or off for a project."""
+    from bran.project_summary import disable_daily_summary, enable_daily_summary
+
+    project = get_project(project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No project {project_id}")
+    if _form_flag(enabled):
+        rec = enable_daily_summary(project)
+        return {"daily_summary": rec.name}
+    disable_daily_summary(project_id)
+    return {"daily_summary": None}
 
 
 @router.post("/projects/{project_id}")
@@ -1003,13 +1077,27 @@ async def remove_file(project_id: str, filename: str) -> dict[str, Any]:
 # Chats
 # ---------------------------------------------------------------------------
 
+def _chat_dict(c: ChatRecord) -> dict[str, Any]:
+    return {"id": c.id, "title": c.title, "agent": c.agent, "project_id": c.project_id,
+            "archived_at": c.archived_at,
+            "updated_at": c.updated_at, "created_at": c.created_at}
+
+
 @router.get("/chats")
-async def chats(project_id: str | None = None) -> list[dict[str, Any]]:
-    return [
-        {"id": c.id, "title": c.title, "agent": c.agent, "project_id": c.project_id,
-         "updated_at": c.updated_at, "created_at": c.created_at}
-        for c in list_chats(limit=100, project_id=project_id)
-    ]
+async def chats(project_id: str | None = None, archived: bool = False) -> list[dict[str, Any]]:
+    """Live chats by default; `archived=true` lists the archived ones instead."""
+    return [_chat_dict(c) for c in list_chats(limit=100, project_id=project_id, archived=archived)]
+
+
+@router.post("/chats/{chat_id}/archive")
+async def archive_chat(chat_id: str, archived: Annotated[str, Form()] = "true") -> dict[str, Any]:
+    """Archive a chat (hidden from Recents, kept whole) or restore it."""
+    from bran.persistence import set_chat_archived
+
+    if not set_chat_archived(chat_id, _form_flag(archived)):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No chat {chat_id}")
+    c = get_chat(chat_id)
+    return _chat_dict(c) if c else {"id": chat_id}
 
 
 @router.get("/chats/{chat_id}")
@@ -1026,8 +1114,7 @@ async def chat_detail(chat_id: str) -> dict[str, Any]:
     """
     c = get_chat(chat_id)
     if c is not None:
-        return {"id": c.id, "title": c.title, "agent": c.agent, "project_id": c.project_id,
-                "updated_at": c.updated_at, "created_at": c.created_at}
+        return _chat_dict(c)
     from bran.persistence import get_run_by_session
 
     run = get_run_by_session(chat_id)

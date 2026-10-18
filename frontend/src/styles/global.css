@@ -541,6 +541,45 @@ kbd {
   background: var(--accent);
 }
 
+/* Segmented filter: a row of small toggles with optional counts. */
+.seg {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.seg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+.seg-btn:hover {
+  background: var(--surface2);
+  color: var(--fg-bright);
+}
+.seg-btn.on {
+  background: var(--accent-glow);
+  border-color: transparent;
+  color: var(--accent-soft);
+}
+.seg-n {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.seg-btn.on .seg-n {
+  color: inherit;
+  opacity: 0.75;
+}
+
 .chip {
   display: inline-flex;
   align-items: center;

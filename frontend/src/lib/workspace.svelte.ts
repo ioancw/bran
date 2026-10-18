@@ -12,6 +12,7 @@ import type { ChatSummary, ProjectSummary } from './types'
 export const workspace = $state<{
   scopeProjectId: string | null
   chats: ChatSummary[]
+  archived: ChatSummary[] // archived chats in the same scope (shown on demand)
   projects: ProjectSummary[]
   activityTick: number // bumped when a run/chat completes, so the rail's Progress reloads
   streaming: boolean // a chat in the current scope is actively streaming
@@ -19,6 +20,7 @@ export const workspace = $state<{
 }>({
   scopeProjectId: null,
   chats: [],
+  archived: [],
   projects: [],
   activityTick: 0,
   streaming: false,
@@ -42,8 +44,11 @@ export async function loadChats(): Promise<void> {
   // A's slower response land last and show A's chats under scope B.
   const scope = workspace.scopeProjectId
   try {
-    const chats = await api.chats(scope)
-    if (scope === workspace.scopeProjectId) workspace.chats = chats
+    const [chats, archived] = await Promise.all([api.chats(scope), api.chats(scope, true)])
+    if (scope === workspace.scopeProjectId) {
+      workspace.chats = chats
+      workspace.archived = archived
+    }
   } catch {
     /* leave the previous list in place */
   }

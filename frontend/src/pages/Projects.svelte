@@ -16,6 +16,7 @@
   let showForm = $state(false)
   let newName = $state('')
   let newDesc = $state('')
+  let newDaily = $state(false) // keep a daily auto-written summary
   let creating = $state(false)
   let formError = $state<string | null>(null)
 
@@ -44,7 +45,7 @@
     creating = true
     let p
     try {
-      p = await api.newProject(newName.trim(), newDesc.trim())
+      p = await api.newProject(newName.trim(), newDesc.trim(), newDaily)
     } catch (err) {
       formError = errorText(err)
       return
@@ -53,6 +54,7 @@
     }
     newName = ''
     newDesc = ''
+    newDaily = false
     showForm = false
     navigate('/projects/' + p.id) // drop into the new workspace
   }
@@ -81,6 +83,16 @@
           placeholder="Description (optional)"
           aria-label="Project description"
         />
+        <label class="daily-check">
+          <input type="checkbox" bind:checked={newDaily} />
+          <span>
+            <strong>Keep a daily summary</strong>
+            <span class="daily-help"
+              >Each evening the summariser reads the project's chats and runs and rewrites a short brief, so
+              every new chat starts informed. One small run a day.</span
+            >
+          </span>
+        </label>
         {#if formError}<div role="alert" class="form-error">{formError}</div>{/if}
         <div class="form-actions">
           <button
@@ -133,6 +145,29 @@
 </Page>
 
 <style>
+  .daily-check {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--fg-dim);
+    cursor: pointer;
+  }
+  .daily-check input {
+    cursor: pointer;
+    margin-top: 2px;
+  }
+  .daily-check strong {
+    display: block;
+    color: var(--fg-bright);
+    font-weight: 500;
+  }
+  .daily-help {
+    display: block;
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.4;
+  }
   .form {
     max-width: 480px;
     display: flex;

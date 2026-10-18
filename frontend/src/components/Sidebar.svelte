@@ -91,7 +91,22 @@
     if (activeChatId === id) newChat()
   }
 
-  // --- Per-chat "…" menu: rename / move to project / delete ---------------
+  // --- Archive: out of Recents, kept whole, one click back -----------------
+  let archivedOpen = $state(false)
+  async function setArchived(id: string, archived: boolean) {
+    closeMenu()
+    try {
+      await api.archiveChat(id, archived)
+    } catch (err) {
+      toast(errorText(err), 'err')
+      return
+    }
+    toast(archived ? 'Archived' : 'Restored to Recents', 'ok')
+    await loadChats()
+    if (archived && activeChatId === id) newChat()
+  }
+
+  // --- Per-chat "…" menu: rename / move to project / archive / delete -------
   let menuFor = $state<string | null>(null) // chat id whose menu is open
   let moveOpen = $state(false) // the "Move to project" list is expanded
   let renamingId = $state<string | null>(null)
@@ -342,6 +357,9 @@
                   </button>
                 </div>
               {/if}
+              <button class="menu-item" role="menuitem" onclick={() => setArchived(c.id, true)}>
+                <Icon name="archive" size={13} />Archive
+              </button>
               <button
                 class="menu-item danger"
                 role="menuitem"
@@ -359,6 +377,42 @@
     {:else}
       <div class="recents-empty">No conversations yet.</div>
     {/each}
+
+    {#if workspace.archived.length}
+      <!-- Archived chats stay out of the way until asked for. -->
+      <button
+        class="archived-toggle"
+        onclick={() => (archivedOpen = !archivedOpen)}
+        aria-expanded={archivedOpen}
+      >
+        <Icon name={archivedOpen ? 'chevron-down' : 'chevron-right'} size={12} />
+        <span>Archived</span>
+        <span class="recents-count">{workspace.archived.length}</span>
+      </button>
+      {#if archivedOpen}
+        {#each workspace.archived as c (c.id)}
+          <div class="recent-row archived" class:active={activeChatId === c.id}>
+            <a
+              href={chatHref(c.id)}
+              use:link
+              class="recent-link"
+              aria-current={activeChatId === c.id ? 'page' : undefined}
+            >
+              <span class="recent-title">{c.title}</span>
+              <span class="recent-meta"><span>{relativeTime(c.archived_at ?? c.updated_at)}</span></span>
+            </a>
+            <button
+              class="btn-icon recent-more"
+              onclick={() => setArchived(c.id, false)}
+              title="Restore to Recents"
+              aria-label="Restore chat {c.title}"
+            >
+              <Icon name="archive-restore" size={14} />
+            </button>
+          </div>
+        {/each}
+      {/if}
+    {/if}
   </div>
 
   <div class="side-foot">
@@ -500,6 +554,29 @@
     overflow-y: auto;
     padding: 0 12px 8px;
     min-height: 60px;
+  }
+  .archived-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    margin-top: 8px;
+    padding: 6px 10px;
+    background: transparent;
+    border: 0;
+    border-top: 1px solid var(--border);
+    border-radius: 0;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--muted);
+    cursor: pointer;
+    text-align: left;
+  }
+  .archived-toggle:hover {
+    color: var(--fg-bright);
+  }
+  .recent-row.archived .recent-title {
+    color: var(--fg-dim);
   }
   .recents-empty {
     padding: 12px 10px;

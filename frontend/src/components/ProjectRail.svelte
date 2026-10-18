@@ -5,7 +5,7 @@
   // scheduled runners). Pass a projectId; it does the rest.
   import { api } from '../lib/api'
   import { href, link } from '../lib/router.svelte'
-  import { workspace, loadProjects } from '../lib/workspace.svelte'
+  import { workspace, loadProjects, bumpActivity } from '../lib/workspace.svelte'
   import { relativeTime, fmtCost } from '../lib/time'
   import { confirmDialog } from '../lib/confirm.svelte'
   import { toast } from '../lib/toast.svelte'
@@ -15,6 +15,7 @@
   import Skeleton from './Skeleton.svelte'
   import StatusBadge from './StatusBadge.svelte'
   import CronField from './CronField.svelte'
+  import Prose from './Prose.svelte'
   import { describeCron } from '../lib/schedule'
   import type { AgentInfo, ProjectDetail, RunRecord } from '../lib/types'
 
@@ -135,6 +136,46 @@
     }, 5000)
     return () => clearInterval(timer)
   })
+
+  // --- Summary: written by the summariser from the project's own activity ---
+  let summarising = $state(false)
+  let dailyBusy = $state(false)
+  async function refreshSummary() {
+    if (summarising) return
+    summarising = true
+    try {
+      const run = await api.summariseProject(projectId)
+      // One short run; poll it so the rail updates itself when the brief lands.
+      for (let i = 0; i < 80; i++) {
+        await new Promise((r) => setTimeout(r, 3000))
+        const r = await api.run(run.id)
+        if (r.status !== 'running' && r.status !== 'pending') {
+          if (r.status !== 'completed')
+            toast(r.error_summary?.title ?? r.error ?? 'The summary run did not finish', 'err')
+          break
+        }
+      }
+      await load()
+      bumpActivity()
+    } catch (e) {
+      toast(errorText(e), 'err')
+    } finally {
+      summarising = false
+    }
+  }
+  async function toggleDaily(e: Event) {
+    const on = (e.currentTarget as HTMLInputElement).checked
+    dailyBusy = true
+    try {
+      await api.setDailySummary(projectId, on)
+      toast(on ? 'Daily summary on: every evening at 18:00' : 'Daily summary off', 'ok')
+      await load()
+    } catch (err) {
+      toast(errorText(err), 'err')
+    } finally {
+      dailyBusy = false
+    }
+  }
 
   async function save() {
     if (saving) return
@@ -307,6 +348,45 @@
       </Section>
     {/if}
 
+    <!-- The brief that writes itself: what the project is about and where it
+         stands, from its own chats and runs. Every project chat starts from it. -->
+    <Section label="Summary" open={mode === 'home' || !!data.project.summary}>
+      {#snippet action()}
+        {#if mode === 'home'}
+          <button class="btn-ghost btn-sm" onclick={refreshSummary} disabled={summarising}>
+            {#if summarising}<Icon name="loader" size={13} class="spin" />Writing…{:else}<Icon
+                name="refresh"
+                size={13}
+              />{data?.project.summary ? 'Refresh' : 'Write one'}{/if}
+          </button>
+        {/if}
+      {/snippet}
+      {#if data.project.summary}
+        <Prose text={data.project.summary} class="reading summary-prose" />
+        <div class="summary-meta">
+          Written {relativeTime(data.project.summary_at ?? data.project.updated_at)}
+          {#if data.daily_summary}· refreshed daily{/if}
+        </div>
+      {:else}
+        <div class="rail-empty">
+          No summary yet. {mode === 'home'
+            ? "Write one reads this project's chats and runs and leaves a short brief here."
+            : 'The project page can write one.'}
+        </div>
+      {/if}
+      {#if mode === 'home'}
+        <label class="daily-check">
+          <input type="checkbox" checked={!!data.daily_summary} disabled={dailyBusy} onchange={toggleDaily} />
+          <span>
+            <strong>Refresh every evening</strong>
+            <span class="rail-help" style="margin: 0;"
+              >One summariser run at 18:00, so tomorrow's chats start informed.</span
+            >
+          </span>
+        </label>
+      {/if}
+    </Section>
+
     <!-- One "Knowledge" home for everything the agent knows: the always-on
          instructions (prose) and the discrete pinned facts. Expanded on the
          project page (configure), collapsed beside a chat (reference). -->
@@ -317,6 +397,7 @@
 
         <div class="label-cap" style="margin-bottom: 6px;">Instructions · always on</div>
         <textarea
+          id="project-instructions"
           class="field"
           bind:value={instructions}
           rows="7"
@@ -723,6 +804,45 @@
     height: 1px;
     background: var(--border);
     margin: 14px 0;
+  }
+  :global(.summary-prose) {
+    font-size: 14px;
+    max-height: 320px;
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+  .summary-meta {
+    font-size: 11.5px;
+    color: var(--muted);
+    margin-top: 8px;
+  }
+  .daily-check {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--fg-dim);
+    cursor: pointer;
+  }
+  .daily-check input {
+    cursor: pointer;
+    margin-top: 2px;
+  }
+  .daily-check strong {
+    display: block;
+    color: var(--fg-bright);
+    font-weight: 500;
+  }
+  :global(.spin) {
+    animation: rail-spin 0.8s linear infinite;
+  }
+  @keyframes rail-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
   .prog-live {
     display: flex;

@@ -12,6 +12,7 @@ import type {
   ProjectMemory,
   ProjectSummary,
   RunRecord,
+  RunnerDraft,
   ScheduleRecord,
   HealthSnapshot,
   SourceRef,
@@ -128,8 +129,13 @@ export const api = {
 
   projects: () => getJSON<ProjectSummary[]>('/spa/projects'),
   projectDetail: (id: string) => getJSON<ProjectDetail>(`/spa/projects/${encodeURIComponent(id)}`),
-  newProject: (name: string, description = '') =>
-    form<ProjectSummary>('/spa/projects', { name, description }),
+  newProject: (name: string, description = '', dailySummary = false) =>
+    form<ProjectSummary>('/spa/projects', { name, description, daily_summary: dailySummary ? 'true' : '' }),
+  summariseProject: (id: string) => form<RunRecord>(`/spa/projects/${encodeURIComponent(id)}/summarise`, {}),
+  setDailySummary: (id: string, enabled: boolean) =>
+    form<{ daily_summary: string | null }>(`/spa/projects/${encodeURIComponent(id)}/daily-summary`, {
+      enabled: enabled ? 'true' : 'false',
+    }),
   saveProject: (
     id: string,
     fields: { name: string; description?: string; instructions?: string; work_dir?: string },
@@ -239,10 +245,18 @@ export const api = {
   saveSettings: (fields: { user_instructions: string }) =>
     form<{ user_instructions: string }>('/spa/settings', fields),
 
-  chats: (projectId?: string | null) => {
-    const qs = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ''
-    return getJSON<ChatSummary[]>(`/spa/chats${qs}`)
+  chats: (projectId?: string | null, archived = false) => {
+    const p = new URLSearchParams()
+    if (projectId) p.set('project_id', projectId)
+    if (archived) p.set('archived', 'true')
+    const qs = p.toString()
+    return getJSON<ChatSummary[]>(`/spa/chats${qs ? '?' + qs : ''}`)
   },
+  archiveChat: (id: string, archived: boolean) =>
+    form<ChatSummary>(`/spa/chats/${encodeURIComponent(id)}/archive`, {
+      archived: archived ? 'true' : 'false',
+    }),
+  draftSchedule: (text: string) => form<RunnerDraft>('/spa/schedules/draft', { text }),
   deleteRun: async (id: string): Promise<void> => {
     const url = `/spa/runs/${encodeURIComponent(id)}`
     const r = await fetch(url, { method: 'DELETE' })

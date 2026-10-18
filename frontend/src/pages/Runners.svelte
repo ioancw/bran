@@ -1,20 +1,30 @@
 <script lang="ts">
   // Runners = standalone managed agents (scheduled, headless). Not owned by a
   // project; optionally *attached* to one to borrow its context/visibility.
+  //
+  // Creating one starts from a sentence ("every weekday at 7, brief me on FX
+  // and fact-check it") or a template; bran drafts the form, the user checks
+  // it and creates it. The full form is always one click away.
   import { api } from '../lib/api'
   import { router, href, link } from '../lib/router.svelte'
   import { confirmDialog } from '../lib/confirm.svelte'
   import { errorText } from '../lib/errors'
   import { toast } from '../lib/toast.svelte'
   import { localDateTime, fmtCost } from '../lib/time'
-  import { validateTrigger, nowLocal, describeCron } from '../lib/schedule'
-  import EmptyState from '../components/EmptyState.svelte'
+  import { validateTrigger, nowLocal, nextHourLocal, describeCron } from '../lib/schedule'
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import Page from '../components/Page.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import CronField from '../components/CronField.svelte'
   import Icon from '../components/Icon.svelte'
-  import type { AgentInfo, HealthSnapshot, ProjectSummary, RunRecord, ScheduleRecord } from '../lib/types'
+  import type {
+    AgentInfo,
+    HealthSnapshot,
+    ProjectSummary,
+    RunRecord,
+    RunnerDraft,
+    ScheduleRecord,
+  } from '../lib/types'
 
   let runners = $state<ScheduleRecord[]>([])
   // 30-day cost/run counts per runner (health.spend.runners_30d); optional.
@@ -36,7 +46,14 @@
     return m
   })
 
+  // --- New runner: describe → draft → check → create ----------------------
   let showForm = $state(false)
+  let stage = $state<'describe' | 'form'>('describe')
+  let draftText = $state('')
+  let drafting = $state(false)
+  let draftError = $state<string | null>(null)
+  let draftNote = $state('') // what the draft decided, shown above the form
+
   let fName = $state('')
   let fAgent = $state('orchestrator')
   let fKind = $state<'cron' | 'once'>('cron')
@@ -50,6 +67,146 @@
   let creating = $state(false)
   let formError = $state<string | null>(null)
   const uid = $props.id()
+
+  // Templates: the runners most people make first. Each fills the form; the
+  // task text leaves a <blank> where the user's own subject goes.
+  type Template = {
+    key: string
+    icon: string
+    title: string
+    desc: string
+    name: string
+    agent: string
+    kind: 'cron' | 'once'
+    schedule?: string
+    task: string
+    verify?: boolean
+    delta?: boolean
+    alert?: string
+  }
+  const TEMPLATES: Template[] = [
+    {
+      key: 'brief',
+      icon: 'sun',
+      title: 'Morning brief',
+      desc: 'A finance briefing on your desk before you are, fact-checked before it lands.',
+      name: 'morning-brief',
+      agent: 'finance-news',
+      kind: 'cron',
+      schedule: 'every weekday at 7am',
+      task: 'Produce a structured morning finance briefing covering overnight markets, rates, FX, commodities and macro.',
+      verify: true,
+    },
+    {
+      key: 'digest',
+      icon: 'file-text',
+      title: 'Weekly digest',
+      desc: 'What changed this week on a topic, with sources, and only what is new.',
+      name: 'weekly-digest',
+      agent: 'research',
+      kind: 'cron',
+      schedule: 'every Monday at 8am',
+      task: 'Round up what changed this week in <topic>: the five developments that matter most, each with a source, and what they imply.',
+      delta: true,
+    },
+    {
+      key: 'watch',
+      icon: 'radar',
+      title: 'Watch and alert',
+      desc: 'Checks every couple of hours and only raises its hand when the bar is crossed.',
+      name: 'gbp-watch',
+      agent: 'research',
+      kind: 'cron',
+      schedule: 'every 2 hours',
+      task: 'Check the latest GBP/USD and EUR/GBP moves and the reasons behind them.',
+      alert: 'GBP moves more than 1% intraday',
+    },
+    {
+      key: 'factcheck',
+      icon: 'shield-check',
+      title: 'Fact-check a document',
+      desc: 'Verify every claim in a file against the web and correct it in place. Runs once.',
+      name: 'fact-check',
+      agent: 'orchestrator',
+      kind: 'once',
+      task: 'Run the fact-check workflow on <path to the document> and correct it in place.',
+    },
+  ]
+
+  const tplMeta = (t: Template) =>
+    t.kind === 'once' ? `${t.agent} · once` : t.schedule ? `${t.agent} · ${t.schedule}` : t.agent
+
+  function applyTemplate(t: Template) {
+    fName = t.name
+    fAgent = agents.some((a) => a.name === t.agent) ? t.agent : 'orchestrator'
+    fKind = t.kind
+    if (t.kind === 'once') fRunAt = nextHourLocal()
+    else fCron = t.schedule ?? 'every day at 8am'
+    fTask = t.task
+    fVerify = !!t.verify
+    fDelta = !!t.delta
+    fAlert = t.alert ?? ''
+    draftNote = `Template: ${t.title}. Replace anything in angle brackets, then create.`
+    formError = null
+    stage = 'form'
+  }
+
+  function applyDraft(d: RunnerDraft) {
+    fName = d.name
+    fAgent = agents.some((a) => a.name === d.agent) ? d.agent : 'orchestrator'
+    fKind = d.kind
+    if (d.kind === 'once') fRunAt = d.run_at || nextHourLocal()
+    else fCron = d.cron || d.schedule || 'every day at 8am'
+    fTask = d.task
+    fProject = d.project_id || fProject
+    fVerify = d.verify
+    fDelta = d.delta
+    fAlert = d.alert
+    const bits = [`${d.agent} agent`]
+    if (d.kind === 'once') bits.push('runs once')
+    else if (d.human) bits.push(d.human)
+    if (d.verify) bits.push('verified')
+    if (d.delta) bits.push('changes only')
+    if (d.alert) bits.push(`alerts when ${d.alert}`)
+    draftNote = `Drafted from your sentence: ${bits.join(', ')}. Check it, then create.`
+    if (d.schedule_error) draftNote += ` The schedule needs a hand: ${d.schedule_error}`
+    formError = null
+    stage = 'form'
+  }
+
+  async function draft(e?: Event) {
+    e?.preventDefault()
+    const text = draftText.trim()
+    if (drafting) return
+    if (text.length < 8) {
+      draftError = 'Say what the runner should do and when.'
+      return
+    }
+    draftError = null
+    drafting = true
+    try {
+      applyDraft(await api.draftSchedule(text))
+    } catch (err) {
+      draftError = errorText(err)
+    } finally {
+      drafting = false
+    }
+  }
+  function onDraftKeydown(e: KeyboardEvent) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      void draft()
+    }
+  }
+  function startOver() {
+    stage = 'describe'
+    draftNote = ''
+    formError = null
+  }
+  function closePanel() {
+    showForm = false
+    startOver()
+  }
 
   async function load() {
     error = null // clear a stale banner so a recovered refresh shows clean
@@ -75,16 +232,24 @@
     void load()
   })
 
-  // Prefill the agent when arriving from the Agents page (/runners?agent=research).
+  // Prefill from the URL: /runners?agent=research (from the Agents page) or
+  // /runners?project=<id> (from a project's setup checklist).
   $effect(() => {
     const a = router.route.query.get('agent')
+    const p = router.route.query.get('project')
     if (a) {
       fAgent = a
+      showForm = true
+      stage = 'form'
+    }
+    if (p) {
+      fProject = p
       showForm = true
     }
   })
 
   const projName = (id: string | null) => (id ? (projects.find((p) => p.id === id)?.name ?? id) : null)
+  const panelOpen = $derived(showForm || (loaded && !runners.length))
 
   async function create(e?: Event) {
     e?.preventDefault()
@@ -95,6 +260,10 @@
     }
     if (!fTask.trim()) {
       formError = 'Describe the task: what should the agent do each run?'
+      return
+    }
+    if (/<[^>]+>/.test(fTask)) {
+      formError = 'Replace the <angle-bracket> placeholder in the task with your own subject.'
       return
     }
     const fields: {
@@ -142,7 +311,8 @@
     fVerify = false
     fDelta = false
     fAlert = ''
-    showForm = false
+    draftText = ''
+    closePanel()
     await load()
   }
   async function remove(name: string) {
@@ -180,129 +350,179 @@
 <Page title="Runners">
   {#snippet subtitle()}{runners.length} scheduled {runners.length === 1 ? 'agent' : 'agents'}{/snippet}
   {#snippet actions()}
-    <button class="btn-primary" onclick={() => (showForm = !showForm)}>
-      <Icon name="plus" size={14} stroke={2.2} />New runner
-    </button>
+    {#if runners.length}
+      <button class="btn-primary" onclick={() => (showForm ? closePanel() : (showForm = true))}>
+        <Icon name="plus" size={14} stroke={2.2} />New runner
+      </button>
+    {/if}
   {/snippet}
 
   <div class="space-y-4">
     {#if error}<ErrorBanner {error} onretry={load} />{/if}
 
-    {#if showForm}
-      <form class="card-quiet runner-form" onsubmit={create}>
-        <h2 class="form-title">New runner</h2>
-        <p class="form-hint">An agent on a schedule. Runners fire inside <code>bran serve</code>.</p>
-        <div class="grid grid-cols-2 gap-4">
-          <div class="fld">
-            <label for="{uid}-name">Name</label>
-            <input id="{uid}-name" class="field" bind:value={fName} placeholder="morning-brief" />
-          </div>
-          <div class="fld">
-            <label for="{uid}-agent">Agent</label>
-            <select id="{uid}-agent" class="field" bind:value={fAgent}>
-              {#each agents as a (a.name)}<option value={a.name}>{a.name}</option>{/each}
-            </select>
-          </div>
-          <div class="fld">
-            <label for="{uid}-kind">Trigger</label>
-            <select id="{uid}-kind" class="field" bind:value={fKind}>
-              <option value="cron">Recurring</option>
-              <option value="once">Once</option>
-            </select>
-          </div>
-          <div class="fld">
-            {#if fKind === 'once'}
-              <label for="{uid}-runat">Run at</label>
-              <input
-                id="{uid}-runat"
-                class="field"
-                type="datetime-local"
-                bind:value={fRunAt}
-                min={nowLocal()}
-              />
-            {:else}
-              <span class="fld-label">Schedule</span>
-              <CronField bind:value={fCron} />
-            {/if}
-          </div>
-          <div class="fld">
-            <label for="{uid}-project">Project</label>
-            <select id="{uid}-project" class="field" bind:value={fProject}>
-              <option value="">Standalone (no project)</option>
-              {#each projects as p (p.id)}<option value={p.id}>{p.name}</option>{/each}
-            </select>
-            <span class="fld-help">Attaching runs the agent with that project's instructions and memory.</span
-            >
-          </div>
-          <div class="fld span2">
-            <label for="{uid}-task">Task</label>
-            <textarea
-              id="{uid}-task"
-              class="field"
-              bind:value={fTask}
-              rows="4"
-              placeholder={fKind === 'once'
-                ? 'What should the agent do when it runs?'
-                : 'What should the agent do each time it runs?'}
-              style="resize: vertical; line-height: 1.5;"></textarea>
-          </div>
-          <label class="mode-check">
-            <input type="checkbox" bind:checked={fVerify} />
-            <span>
-              <strong>Verify</strong>
-              <span class="fld-help"
-                >An evaluator reviews each output against the task and re-runs once on a bad verdict.</span
-              >
-            </span>
-          </label>
-          <label class="mode-check">
-            <input type="checkbox" bind:checked={fDelta} />
-            <span>
-              <strong>Delta</strong>
-              <span class="fld-help">Each run sees the previous report and reports only what changed.</span>
-            </span>
-          </label>
-          <div class="fld span2">
-            <label for="{uid}-alert">Alert when <span class="text-muted">(optional)</span></label>
-            <input
-              id="{uid}-alert"
-              class="field"
-              bind:value={fAlert}
-              placeholder="e.g. GBP moves more than 1% intraday"
-            />
-            <span class="fld-help">A significance bar. A run that crosses it is escalated as an alert.</span>
-          </div>
-        </div>
-        {#if formError}<div role="alert" class="form-error">{formError}</div>{/if}
-        <div class="form-actions">
-          <button
-            type="button"
-            class="btn-ghost"
-            onclick={() => {
-              showForm = false
-              formError = null
-            }}>Cancel</button
-          >
-          <button type="submit" class="btn-primary" disabled={creating}
-            >{creating ? 'Creating…' : 'Create runner'}</button
-          >
-        </div>
-      </form>
-    {/if}
-
     {#if !loaded}
       <Skeleton rows={5} />
-    {:else if !runners.length}
-      <EmptyState
-        title="No runners yet"
-        hint="A runner is an agent on a schedule: a morning briefing, a weekly digest, a one-off job at 3pm."
-        icon="bot"
-      >
-        <button class="btn-primary" onclick={() => (showForm = true)}>
-          <Icon name="plus" size={14} stroke={2.2} />Create a runner
-        </button>
-      </EmptyState>
-    {:else}
+    {:else if panelOpen}
+      <section class="new-runner" class:first={!runners.length}>
+        {#if stage === 'describe'}
+          <div class="nr-intro">
+            <h2 class="nr-title">{runners.length ? 'New runner' : 'Put an agent on a schedule'}</h2>
+            <p class="nr-hint">
+              Say what should happen and when. bran drafts the runner from your sentence; you check it and
+              create it.
+            </p>
+          </div>
+          <form class="describe" onsubmit={draft}>
+            <textarea
+              class="describe-input"
+              bind:value={draftText}
+              rows="2"
+              placeholder="Every weekday at 7, brief me on FX and fact-check it"
+              aria-label="Describe the runner"
+              onkeydown={onDraftKeydown}
+              disabled={drafting}></textarea>
+            <div class="describe-foot">
+              <span class="describe-help">Enter to draft, Shift+Enter for a new line</span>
+              <button type="submit" class="btn-primary" disabled={drafting}>
+                {#if drafting}<Icon name="loader" size={14} class="spin" />Drafting…{:else}<Icon
+                    name="wand"
+                    size={14}
+                  />Draft runner{/if}
+              </button>
+            </div>
+          </form>
+          {#if draftError}<div role="alert" class="form-error">{draftError}</div>{/if}
+
+          <div class="label-cap tpl-label">Or start from a template</div>
+          <div class="templates">
+            {#each TEMPLATES as t (t.key)}
+              <button class="tpl" onclick={() => applyTemplate(t)}>
+                <span class="tpl-ico"><Icon name={t.icon} size={16} /></span>
+                <span class="tpl-title">{t.title}</span>
+                <span class="tpl-desc">{t.desc}</span>
+                <span class="tpl-meta">{tplMeta(t)}</span>
+              </button>
+            {/each}
+          </div>
+          <div class="nr-foot">
+            <button class="btn-text" onclick={() => (stage = 'form')}>Fill in the form yourself</button>
+            {#if runners.length}
+              <button class="btn-ghost" onclick={closePanel}>Cancel</button>
+            {/if}
+          </div>
+        {:else}
+          <form class="runner-form" onsubmit={create}>
+            <div class="nr-intro">
+              <h2 class="nr-title">New runner</h2>
+              {#if draftNote}
+                <p class="draft-note"><Icon name="wand" size={13} />{draftNote}</p>
+              {:else}
+                <p class="nr-hint">An agent on a schedule. Runners fire inside the server.</p>
+              {/if}
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+              <div class="fld">
+                <label for="{uid}-name">Name</label>
+                <input id="{uid}-name" class="field" bind:value={fName} placeholder="morning-brief" />
+              </div>
+              <div class="fld">
+                <label for="{uid}-agent">Agent</label>
+                <select id="{uid}-agent" class="field" bind:value={fAgent}>
+                  {#each agents as a (a.name)}<option value={a.name}>{a.name}</option>{/each}
+                </select>
+              </div>
+              <div class="fld">
+                <label for="{uid}-kind">Trigger</label>
+                <select id="{uid}-kind" class="field" bind:value={fKind}>
+                  <option value="cron">Recurring</option>
+                  <option value="once">Once</option>
+                </select>
+              </div>
+              <div class="fld">
+                {#if fKind === 'once'}
+                  <label for="{uid}-runat">Run at</label>
+                  <input
+                    id="{uid}-runat"
+                    class="field"
+                    type="datetime-local"
+                    bind:value={fRunAt}
+                    min={nowLocal()}
+                  />
+                {:else}
+                  <span class="fld-label">Schedule</span>
+                  <CronField bind:value={fCron} />
+                {/if}
+              </div>
+              <div class="fld">
+                <label for="{uid}-project">Project</label>
+                <select id="{uid}-project" class="field" bind:value={fProject}>
+                  <option value="">Standalone (no project)</option>
+                  {#each projects as p (p.id)}<option value={p.id}>{p.name}</option>{/each}
+                </select>
+                <span class="fld-help"
+                  >Attaching runs the agent with that project's instructions and memory.</span
+                >
+              </div>
+              <div class="fld span2">
+                <label for="{uid}-task">Task</label>
+                <textarea
+                  id="{uid}-task"
+                  class="field"
+                  bind:value={fTask}
+                  rows="4"
+                  placeholder={fKind === 'once'
+                    ? 'What should the agent do when it runs?'
+                    : 'What should the agent do each time it runs?'}
+                  style="resize: vertical; line-height: 1.5;"></textarea>
+              </div>
+              <label class="mode-check">
+                <input type="checkbox" bind:checked={fVerify} />
+                <span>
+                  <strong>Verify</strong>
+                  <span class="fld-help"
+                    >An evaluator reviews each output against the task and re-runs once on a bad verdict.</span
+                  >
+                </span>
+              </label>
+              <label class="mode-check">
+                <input type="checkbox" bind:checked={fDelta} />
+                <span>
+                  <strong>Delta</strong>
+                  <span class="fld-help"
+                    >Each run sees the previous report and reports only what changed.</span
+                  >
+                </span>
+              </label>
+              <div class="fld span2">
+                <label for="{uid}-alert">Alert when <span class="text-muted">(optional)</span></label>
+                <input
+                  id="{uid}-alert"
+                  class="field"
+                  bind:value={fAlert}
+                  placeholder="e.g. GBP moves more than 1% intraday"
+                />
+                <span class="fld-help"
+                  >A significance bar. A run that crosses it is escalated as an alert.</span
+                >
+              </div>
+            </div>
+            {#if formError}<div role="alert" class="form-error">{formError}</div>{/if}
+            <div class="form-actions">
+              <button type="button" class="btn-text" onclick={startOver}>Start over</button>
+              <span class="ml-auto"></span>
+              {#if runners.length}
+                <button type="button" class="btn-ghost" onclick={closePanel}>Cancel</button>
+              {/if}
+              <button type="submit" class="btn-primary" disabled={creating}
+                >{creating ? 'Creating…' : 'Create runner'}</button
+              >
+            </div>
+          </form>
+        {/if}
+      </section>
+    {/if}
+
+    {#if loaded && runners.length}
       <div style="overflow-x: auto;">
         <table class="bran-table" style="min-width: 960px;">
           <thead>
@@ -389,22 +609,149 @@
 </Page>
 
 <style>
-  .runner-form {
-    max-width: 720px;
+  /* The new-runner panel: a quiet surface when runners exist, the page's
+     whole opening when none do. */
+  .new-runner {
+    background: var(--surface2);
+    border-radius: var(--radius-lg);
+    padding: 20px 22px 18px;
+    max-width: 820px;
   }
-  .form-title {
-    font-size: 14px;
+  .new-runner.first {
+    max-width: 760px;
+    margin: 32px auto 0;
+    padding: 28px 28px 22px;
+  }
+  .nr-intro {
+    margin-bottom: 14px;
+  }
+  .nr-title {
+    font-size: 15px;
     font-weight: 600;
     color: var(--fg-bright);
   }
-  .form-hint {
-    font-size: 12.5px;
-    color: var(--muted);
-    margin: 2px 0 14px;
+  .first .nr-title {
+    font-size: 22px;
+    letter-spacing: -0.01em;
   }
-  .form-hint code {
-    font-family: var(--font-mono);
+  .nr-hint {
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 4px;
+    line-height: 1.45;
+  }
+  .first .nr-hint {
+    font-size: 14px;
+    max-width: 52ch;
+  }
+  .draft-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 7px;
+    font-size: 13px;
+    color: var(--fg-dim);
+    margin-top: 6px;
+    line-height: 1.45;
+  }
+  .draft-note :global(svg) {
+    color: var(--accent);
+    flex-shrink: 0;
+    margin-top: 3px;
+  }
+
+  /* The sentence box: one surface, the button inside its foot. */
+  .describe {
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius-lg);
+    padding: 12px 12px 10px;
+  }
+  .describe:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+  }
+  .describe-input {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    resize: none;
+    font: inherit;
+    font-size: 15px;
+    line-height: 1.5;
+    color: var(--fg);
+    outline: none;
+  }
+  .describe-input::placeholder {
+    color: var(--muted);
+  }
+  .describe-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 6px;
+  }
+  .describe-help {
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+
+  .tpl-label {
+    margin: 18px 0 8px;
+  }
+  .templates {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    gap: 8px;
+  }
+  .tpl {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 12px 12px 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    text-align: left;
+    color: inherit;
+    cursor: pointer;
+  }
+  .tpl:hover {
+    border-color: var(--border2);
+    background: var(--surface);
+  }
+  .tpl:hover .tpl-title {
+    color: var(--accent);
+  }
+  .tpl-ico {
+    color: var(--accent);
+    margin-bottom: 2px;
+  }
+  .tpl-title {
+    font-size: 13.5px;
+    font-weight: 500;
+    color: var(--fg-bright);
+  }
+  .tpl-desc {
     font-size: 12px;
+    color: var(--muted);
+    line-height: 1.4;
+  }
+  .tpl-meta {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+  .nr-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 14px;
+  }
+
+  .runner-form {
+    max-width: 720px;
   }
   .fld {
     display: flex;
@@ -434,8 +781,8 @@
   }
   .form-actions {
     display: flex;
+    align-items: center;
     gap: 6px;
-    justify-content: flex-end;
     margin-top: 14px;
   }
   .mode-check {
@@ -454,6 +801,14 @@
     display: block;
     color: var(--fg-bright);
     font-weight: 500;
+  }
+  :global(.spin) {
+    animation: runner-spin 0.8s linear infinite;
+  }
+  @keyframes runner-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .name-cell {
@@ -496,6 +851,11 @@
     .fld.span2,
     .runner-form :global(.grid-cols-2) {
       grid-column: auto;
+    }
+    .new-runner,
+    .new-runner.first {
+      padding: 16px;
+      margin-top: 0;
     }
   }
 </style>

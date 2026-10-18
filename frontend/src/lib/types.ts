@@ -57,6 +57,23 @@ export interface Verification {
   retry_of?: string
 }
 
+// One sentence → a runner form (POST /spa/schedules/draft).
+export interface RunnerDraft {
+  name: string
+  agent: string
+  kind: 'cron' | 'once'
+  schedule: string // what the model said, in words
+  cron: string // '' when the schedule could not be parsed
+  human: string
+  schedule_error: string
+  run_at: string
+  task: string
+  project_id: string
+  verify: boolean
+  delta: boolean
+  alert: string
+}
+
 export interface ScheduleRecord {
   id: string
   name: string
@@ -78,6 +95,7 @@ export interface ChatSummary {
   title: string
   agent: string
   project_id: string | null // null = loose chat (no project)
+  archived_at?: string | null // set = archived: out of Recents, kept whole
   updated_at: string
   created_at: string
 }
@@ -88,6 +106,8 @@ export interface ProjectSummary {
   description: string
   instructions: string
   work_dir: string // optional real folder agents may read AND write ('' = none)
+  summary: string // the auto-written brief ('' = none yet)
+  summary_at: string | null
   n_chats: number
   updated_at: string
 }
@@ -128,6 +148,8 @@ export interface ProjectFile {
 // The project "workspace hub": a project plus everything that flows through it.
 export interface ProjectDetail {
   project: ProjectSummary
+  n_archived: number
+  daily_summary: string | null // name of the daily summary runner, if on
   chats: ChatSummary[]
   memories: ProjectMemory[]
   files: ProjectFile[]

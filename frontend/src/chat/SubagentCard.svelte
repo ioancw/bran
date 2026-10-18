@@ -65,7 +65,10 @@
 
 <div class="card sub-card" class:errored={tool.status === 'error'}>
   <div class="sub-head">
-    <span class="sub-title"><Icon name="bot" size={14} />{isWorkflow ? 'Running workflow' : 'Delegated to'} <strong>{agentName}</strong></span>
+    <span class="sub-title"
+      ><Icon name="bot" size={14} />{isWorkflow ? 'Running workflow' : 'Delegated to'}
+      <strong>{agentName}</strong></span
+    >
     <span class="sub-status">
       <span class="dot {dotClass}"></span>
       <span>{statusWord}</span>

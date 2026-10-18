@@ -315,6 +315,7 @@ def _ensure_ready() -> None:
         _migrate_runs_schedules_add_project_id()
         _drop_inbox()
         _migrate_artifacts_to_table()
+        _migrate_archive_and_summary()
     except Exception:
         _initialized = False
         raise
@@ -763,14 +764,19 @@ class ChatRecord:
     # Optional project. None = a loose chat (shown in the global Chat/Recents
     # view); set = belongs to that project. No "Inbox" — loose is the default.
     project_id: str | None = None
+    # Set when the chat was archived: hidden from Recents and the project list
+    # but kept, resumable, and one click from coming back.
+    archived_at: str | None = None
     created_at: str = field(default_factory=utcnow_iso)
     updated_at: str = field(default_factory=utcnow_iso)
 
 
 def _row_to_chat(r: sqlite3.Row) -> ChatRecord:
+    keys = r.keys()
     return ChatRecord(
         id=r["id"], title=r["title"], agent=r["agent"],
-        project_id=(r["project_id"] if "project_id" in r.keys() else None),
+        project_id=(r["project_id"] if "project_id" in keys else None),
+        archived_at=(r["archived_at"] if "archived_at" in keys else None),
         created_at=r["created_at"], updated_at=r["updated_at"],
     )
 
@@ -797,24 +803,47 @@ def touch_chat(chat_id: str) -> None:
         )
 
 
-def list_chats(limit: int = 100, project_id: str | None = None) -> list[ChatRecord]:
+def list_chats(
+    limit: int = 100, project_id: str | None = None, archived: bool | None = False,
+) -> list[ChatRecord]:
     """Return chats sorted by most-recently updated.
 
     `project_id` given → chats in that project. `project_id` None → **all**
     chats — the global Recents view. (It used to mean loose-only, which read
     as data loss: a chat started inside a project silently vanished from the
     default sidebar until you re-scoped to that project.)
+
+    `archived` False (default) → live chats only; True → archived only;
+    None → both.
     """
     sql = "SELECT * FROM chats"
+    where: list[str] = []
     params: list[Any] = []
     if project_id:
-        sql += " WHERE project_id = ?"
+        where.append("project_id = ?")
         params.append(project_id)
+    if archived is True:
+        where.append("archived_at IS NOT NULL")
+    elif archived is False:
+        where.append("archived_at IS NULL")
+    if where:
+        sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY updated_at DESC LIMIT ?"
     params.append(limit)
     with _lock, _conn() as conn:
         rows = conn.execute(sql, params).fetchall()
     return [_row_to_chat(r) for r in rows]
+
+
+def set_chat_archived(chat_id: str, archived: bool) -> bool:
+    """Archive (or restore) a chat. Archived chats leave Recents and the
+    project list but keep everything: transcript, runs, project membership."""
+    with _lock, _conn() as conn:
+        cur = conn.execute(
+            "UPDATE chats SET archived_at = ? WHERE id = ?",
+            (utcnow_iso() if archived else None, chat_id),
+        )
+    return cur.rowcount > 0
 
 
 def get_chat(chat_id: str) -> ChatRecord | None:
@@ -881,6 +910,11 @@ class ProjectRecord:
     description: str = ""
     instructions: str = ""    # the inline memory blob — appended to chats' system prompt
     work_dir: str = ""        # optional real folder agents may read AND write ("" = none)
+    # The auto-written brief (see bran.project_summary): what the project is
+    # about and where it stands. Shown on the project page and prepended to
+    # every project chat. summary_at = when it was last written.
+    summary: str = ""
+    summary_at: str | None = None
     created_at: str = field(default_factory=utcnow_iso)
     updated_at: str = field(default_factory=utcnow_iso)
 
@@ -898,6 +932,8 @@ def _row_to_project(r: sqlite3.Row) -> ProjectRecord:
         id=r["id"], name=r["name"],
         description=r["description"] or "", instructions=r["instructions"] or "",
         work_dir=(r["work_dir"] if "work_dir" in keys else None) or "",
+        summary=(r["summary"] if "summary" in keys else None) or "",
+        summary_at=(r["summary_at"] if "summary_at" in keys else None),
         created_at=r["created_at"], updated_at=r["updated_at"],
     )
 
@@ -922,6 +958,15 @@ def update_project(record: ProjectRecord) -> None:
             (record.name, record.description, record.instructions, record.work_dir,
              record.updated_at, record.id),
         )
+
+
+def set_project_summary(project_id: str, text: str) -> bool:
+    with _lock, _conn() as conn:
+        cur = conn.execute(
+            "UPDATE projects SET summary = ?, summary_at = ? WHERE id = ?",
+            (text, utcnow_iso(), project_id),
+        )
+    return cur.rowcount > 0
 
 
 def get_project(project_id: str) -> ProjectRecord | None:
@@ -997,7 +1042,7 @@ def count_chats_per_project() -> dict[str, int]:
     """{project_id: n_chats} — used by the /projects grid for card stats."""
     with _lock, _conn() as conn:
         rows = conn.execute(
-            "SELECT project_id, COUNT(*) AS n FROM chats GROUP BY project_id"
+            "SELECT project_id, COUNT(*) AS n FROM chats WHERE archived_at IS NULL GROUP BY project_id"
         ).fetchall()
     return {r["project_id"]: r["n"] for r in rows}
 
@@ -1069,6 +1114,14 @@ def _migrate_runs_schedules_add_project_id() -> None:
         _add_column_if_missing(conn, "schedules", "alert", "TEXT NOT NULL DEFAULT ''")
         # Safe to index now that the column exists on both fresh and legacy DBs.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id)")
+
+
+def _migrate_archive_and_summary() -> None:
+    """Archived chats and the self-writing project summary."""
+    with _lock, _conn() as conn:
+        _add_column_if_missing(conn, "chats", "archived_at", "TEXT")
+        _add_column_if_missing(conn, "projects", "summary", "TEXT NOT NULL DEFAULT ''")
+        _add_column_if_missing(conn, "projects", "summary_at", "TEXT")
 
 
 def _migrate_artifacts_to_table() -> None:
