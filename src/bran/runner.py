@@ -160,6 +160,9 @@ async def _drive(
             *(record.metadata.get("task_runs") or {}).values(),
         ]:
             child = get_run(child_id)
+            if child is not None and child.status in ("running", "pending") and child.metadata.get("task_terminal") == "completed":
+                _finish_workflow_run(child, "completed", "", None, None)
+                continue
             if child is not None and child.status in ("running", "pending"):
                 _finish_subagent_run(
                     child_id, "", True,
@@ -543,7 +546,7 @@ _TERMINAL_TASK = frozenset({"completed", "failed", "stopped", "killed"})
 
 
 def _finish_task_run(record: RunRecord, task_id: str | None, status: str | None, summary: str,
-                     output_file: str | None = None, usage: Any = None) -> None:
+                     output_file: str | None = None, usage: Any = None, *, from_update: bool = False) -> None:
     """Close a task's child run on a terminal status. The SDK warns that a
     task's end can arrive as a task_notification OR only as a task_updated
     whose patch.status is terminal, so both feed through here."""
@@ -557,6 +560,11 @@ def _finish_task_run(record: RunRecord, task_id: str | None, status: str | None,
     if child is None or child.status in ("completed", "failed"):
         return  # already closed by the other message (or the tool result)
     if child.metadata.get("workflow"):
+        if from_update and status == "completed":
+            # The notification that follows carries the output file; wait for it.
+            child.metadata["task_terminal"] = status
+            update_run(child)
+            return
         _finish_workflow_run(child, status, summary, output_file, usage)
         return
     if child_id in (record.metadata.get("subagent_runs") or {}).values():
@@ -817,7 +825,7 @@ def _absorb_message(record: RunRecord, message: Any) -> None:
         return
     if isinstance(message, TaskUpdatedMessage):
         status = message.status or (message.patch or {}).get("status")
-        _finish_task_run(record, message.task_id, status, "")
+        _finish_task_run(record, message.task_id, status, "", from_update=True)
         return
     if isinstance(message, UserMessage):
         runs_map = record.metadata.get("subagent_runs") or {}

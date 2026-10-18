@@ -197,3 +197,33 @@ def test_workflow_tool_error_fails_the_workflow_row(monkeypatch):
     ])
     (wf,) = list_runs(parent_run_id=parent.id)
     assert wf.status == "failed" and "SyntaxError" in wf.error and wf.agent == "workflow:workflow"
+
+
+def test_workflow_waits_for_the_notification_after_a_completed_task_update(monkeypatch, tmp_path):
+    out = tmp_path / "t.output"
+    out.write_text(json.dumps({"agentCount": 1, "result": {"report": "# Done"}}))
+    boilerplate = "Transcript dir: " + str(tmp_path) + "\nRun ID: wf_q\nYou will be notified when it completes."
+    parent = _drive(monkeypatch, [
+        AssistantMessage(content=[ToolUseBlock(id="wf7", name="Workflow", input={"name": "fact-check"})], model="m"),
+        UserMessage(content=[{"type": "tool_result", "tool_use_id": "wf7", "content": boilerplate, "is_error": False}]),
+        _started("t-q", "Check", "wf7"),
+        TaskUpdatedMessage(subtype="task_updated", data={}, task_id="t-q", patch={"status": "completed"}),
+        TaskNotificationMessage(subtype="task_notification", data={}, uuid="u", session_id="s", task_id="t-q",
+                                status="completed", summary="", tool_use_id="wf7", output_file=str(out)),
+        _result(),
+    ])
+    (wf,) = list_runs(parent_run_id=parent.id)
+    assert wf.status == "completed" and wf.result == "# Done" and wf.metadata["workflow_summary"]["agentCount"] == 1
+
+
+def test_workflow_completed_update_without_notification_still_counts_as_success(monkeypatch, tmp_path):
+    boilerplate = "Transcript dir: " + str(tmp_path) + "\nRun ID: wf_r\nYou will be notified when it completes."
+    parent = _drive(monkeypatch, [
+        AssistantMessage(content=[ToolUseBlock(id="wf6", name="Workflow", input={"name": "fact-check"})], model="m"),
+        UserMessage(content=[{"type": "tool_result", "tool_use_id": "wf6", "content": boilerplate, "is_error": False}]),
+        _started("t-r", "Check", "wf6"),
+        TaskUpdatedMessage(subtype="task_updated", data={}, task_id="t-r", patch={"status": "completed"}),
+        _result(),
+    ])
+    (wf,) = list_runs(parent_run_id=parent.id)
+    assert wf.status == "completed"
