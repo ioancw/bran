@@ -115,6 +115,9 @@ _RENDER_JS = r"""
   maskCode(/^([`~]{3,}).*\n[\s\S]*?(?:^\1[`~]*[ \t]*$|(?![\s\S]))/gm);
   maskCode(/(`+)(?!`)[\s\S]*?\1/g);
 
+  // Symbols LaTeX users write that KaTeX lacks (wasysym/marvosym astronomy set).
+  // Mirrors KATEX_MACROS in frontend/src/lib/markdown.ts.
+  var MACROS = {"\\Moon":"\\text{☾}","\\leftmoon":"\\text{☾}","\\rightmoon":"\\text{☽}","\\Sun":"\\odot","\\Earth":"\\oplus","\\Mercury":"\\text{☿}","\\Venus":"\\text{♀}","\\Mars":"\\text{♂}","\\Jupiter":"\\text{♃}","\\Saturn":"\\text{♄}","\\astrosun":"\\odot","\\degree":"^{\\circ}","\\celsius":"^{\\circ}\\mathrm{C}"};
   var math = [];
   function extract(re, display) {
     text = text.replace(re, function (_m, c) { math.push({ c: c, d: display }); return '¤¤M_' + (math.length - 1) + '¤¤'; });
@@ -127,7 +130,7 @@ _RENDER_JS = r"""
   var html = md.render(text);
   html = html.replace(/¤¤M_(\d+)¤¤/g, function (_m, i) {
     var b = math[+i]; if (!b) return '';
-    try { return katex.renderToString(b.c, { displayMode: b.d, throwOnError: false }); }
+    try { return katex.renderToString(b.c, { displayMode: b.d, throwOnError: false, macros: MACROS }); }
     catch (e) { return md.utils.escapeHtml(b.c); }
   });
   document.getElementById('bran-doc').innerHTML = html;

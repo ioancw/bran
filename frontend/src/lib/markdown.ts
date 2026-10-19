@@ -12,6 +12,25 @@
 import 'katex/dist/katex.min.css' // rides in this lazy chunk, not the boot CSS
 import MarkdownIt from 'markdown-it'
 import katex from 'katex'
+
+// Symbols LaTeX users write that KaTeX has no command for: the wasysym /
+// marvosym astronomy set. Rendered as the Unicode glyph; without this, KaTeX
+// prints the bare command name in red. Mirrored in bran/doc_export.py.
+export const KATEX_MACROS: Record<string, string> = {
+  '\\Moon': '\\text{☾}',
+  '\\leftmoon': '\\text{☾}',
+  '\\rightmoon': '\\text{☽}',
+  '\\Sun': '\\odot',
+  '\\Earth': '\\oplus',
+  '\\Mercury': '\\text{☿}',
+  '\\Venus': '\\text{♀}',
+  '\\Mars': '\\text{♂}',
+  '\\Jupiter': '\\text{♃}',
+  '\\Saturn': '\\text{♄}',
+  '\\astrosun': '\\odot',
+  '\\degree': '^{\\circ}',
+  '\\celsius': '^{\\circ}\\mathrm{C}',
+}
 import DOMPurify from 'dompurify'
 import Prism from 'prismjs'
 // Language grammars (dependency order: each registers on import). javascript +
@@ -154,6 +173,7 @@ export function renderMarkdown(src: string): string {
         displayMode: block.displayMode,
         throwOnError: false,
         errorColor: 'var(--red)',
+        macros: KATEX_MACROS,
       })
     } catch {
       // KaTeX can still throw with throwOnError:false (internal errors); the
