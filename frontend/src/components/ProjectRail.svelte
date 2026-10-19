@@ -17,7 +17,7 @@
   import CronField from './CronField.svelte'
   import Prose from './Prose.svelte'
   import { describeCron } from '../lib/schedule'
-  import type { AgentInfo, ProjectDetail, RunRecord } from '../lib/types'
+  import type { AgentInfo, ProjectDetail, ProjectFile, RunRecord } from '../lib/types'
 
   // `home` = the project page (configure: editable Knowledge + Scheduled open,
   // no live Progress). `chat` = beside a conversation (work: Progress on top,
@@ -314,6 +314,116 @@
   }
 </script>
 
+{#snippet filesSection(files: ProjectFile[])}
+  <!-- Files: what the user gives the agent (uploads) and what the agent
+         gives back (documents it saves land in the same folder). Uploading
+         works beside a chat too, so material arrives where the conversation
+         is, not a page away. -->
+  <Section label="Files" open={mode === 'home' || files.length > 0}>
+    <p class="rail-help">
+      {#if mode === 'home'}
+        Uploaded files agents in this project can read on demand (PDFs, notes, data). Documents an agent saves
+        appear here too.
+      {:else}
+        Files the agent can read, and the documents it has saved. Drop more here as you go.
+      {/if}
+    </p>
+
+    {#if files.length}
+      <div class="space-y-2" style="margin-bottom: 10px;">
+        {#each files as f (f.name)}
+          <div class="file-row">
+            <a
+              class="file-name mono"
+              href={fileUrl(f.name)}
+              target="_blank"
+              rel="noopener"
+              title="Open {f.name} in a new tab"><Icon name="file" size={12} />{f.name}</a
+            >
+            <span class="file-size">{f.size_human}</span>
+            <a
+              class="btn-icon"
+              href={fileUrl(f.name) + '?download=1'}
+              download={f.name}
+              title="Download {f.name}"
+              aria-label="Download {f.name}"><Icon name="download" size={13} /></a
+            >
+            <button
+              class="btn-icon danger"
+              title="Remove file"
+              onclick={() => removeFile(f.name)}
+              aria-label="Remove {f.name}"><Icon name="x" size={13} /></button
+            >
+          </div>
+        {/each}
+      </div>
+    {:else}
+      <div class="rail-empty" style="margin-bottom: 10px;">No files yet.</div>
+    {/if}
+
+    <div
+      class="dropzone"
+      class:over={dragOver}
+      class:compact={mode === 'chat'}
+      role="button"
+      tabindex="0"
+      onclick={() => fileInput?.click()}
+      onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && fileInput?.click()}
+      ondragover={(e) => {
+        e.preventDefault()
+        dragOver = true
+      }}
+      ondragleave={() => (dragOver = false)}
+      ondrop={onDrop}
+    >
+      <Icon name="upload" size={14} />
+      {#if uploading}Uploading…{:else}<span class="text-dim">Drop files here, or</span>
+        <span class="text-bright">browse</span>{/if}
+    </div>
+    <input bind:this={fileInput} type="file" multiple style="display: none;" onchange={onPick} />
+    {#if fileError}<div class="rail-error">{fileError}</div>{/if}
+
+    {#if mode === 'home'}
+      <!-- Working folder: a real directory agents may read AND write — the
+             Cowork-style "do file work where I work". Distinct from the
+             managed uploads above (read-only material the user provides). -->
+      <div class="rail-divider"></div>
+      <div class="label-cap" style="margin-bottom: 6px;">Working folder · read + write</div>
+      <p class="rail-help">
+        Agents create deliverables here (reports, CSVs, edited copies). Absolute path as the server sees it,
+        e.g. <code>/mnt/c/Users/you/Documents/reports</code>.
+      </p>
+      <div style="display: flex; gap: 6px;">
+        <input
+          class="field mono"
+          bind:value={workDir}
+          placeholder="No working folder"
+          aria-label="Working folder path"
+          style="font-size: 11px;"
+          onkeydown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              save()
+            }
+          }}
+        />
+        <button class="btn-primary" disabled={saving} onclick={save}
+          ><Icon name="folder" size={13} />{saving ? 'Saving…' : 'Set folder'}</button
+        >
+      </div>
+      {#if saveError}<div class="rail-error">{saveError}</div>{/if}
+      {#if savedFlash}<div class="saved-flash" style="margin-top: 6px;">
+          <Icon name="check" size={13} />Saved
+        </div>{/if}
+    {:else if workDir.trim()}
+      <!-- Beside a chat: just show where the agent can produce files. -->
+      <div class="rail-divider"></div>
+      <div class="label-cap" style="margin-bottom: 4px;">Working folder · read + write</div>
+      <div class="mono text-dim" style="font-size: 11px; word-break: break-all;">{workDir}</div>
+    {/if}
+  </Section>
+{/snippet}
+
 {#if !data && railLoading}
   <Skeleton rows={4} />
 {:else if data}
@@ -348,9 +458,12 @@
       </Section>
     {/if}
 
+    {#if mode === 'chat'}{@render filesSection(data.files)}{/if}
+
     <!-- The brief that writes itself: what the project is about and where it
-         stands, from its own chats and runs. Every project chat starts from it. -->
-    <Section label="Summary" open={mode === 'home' || !!data.project.summary}>
+         stands, from its own chats and runs. Every project chat starts from it.
+         Collapsed beside a chat: it is reference, the work is in the middle. -->
+    <Section label="Summary" open={mode === 'home'}>
       {#snippet action()}
         {#if mode === 'home'}
           <button class="btn-ghost btn-sm" onclick={refreshSummary} disabled={summarising}>
@@ -546,97 +659,7 @@
       </Section>
     {/if}
 
-    <Section label="Files" open={mode === 'home'}>
-      <p class="rail-help">Uploaded files agents in this project can read on demand (PDFs, notes, data).</p>
-
-      {#if data.files.length}
-        <div class="space-y-2" style="margin-bottom: 10px;">
-          {#each data.files as f (f.name)}
-            <div class="file-row">
-              <a
-                class="file-name mono"
-                href={fileUrl(f.name)}
-                target="_blank"
-                rel="noopener"
-                title="Open {f.name} in a new tab"><Icon name="file" size={12} />{f.name}</a
-              >
-              <span class="file-size">{f.size_human}</span>
-              {#if mode === 'home'}
-                <button
-                  class="btn-icon danger"
-                  title="Remove file"
-                  onclick={() => removeFile(f.name)}
-                  aria-label="Remove {f.name}"><Icon name="x" size={13} /></button
-                >
-              {/if}
-            </div>
-          {/each}
-        </div>
-      {:else}
-        <div class="rail-empty" style="margin-bottom: 10px;">No files yet.</div>
-      {/if}
-
-      {#if mode === 'home'}
-        <!-- Working folder: a real directory agents may read AND write — the
-             Cowork-style "do file work where I work". Distinct from the
-             managed uploads above (read-only material the user provides). -->
-        <div class="rail-divider"></div>
-        <div class="label-cap" style="margin-bottom: 6px;">Working folder · read + write</div>
-        <p class="rail-help">
-          Agents create deliverables here (reports, CSVs, edited copies). Absolute path as the server sees it,
-          e.g. <code>/mnt/c/Users/you/Documents/reports</code>.
-        </p>
-        <div style="display: flex; gap: 6px;">
-          <input
-            class="field mono"
-            bind:value={workDir}
-            placeholder="No working folder"
-            aria-label="Working folder path"
-            style="font-size: 11px;"
-            onkeydown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                save()
-              }
-            }}
-          />
-          <button class="btn-primary" disabled={saving} onclick={save}
-            ><Icon name="folder" size={13} />{saving ? 'Saving…' : 'Set folder'}</button
-          >
-        </div>
-        {#if saveError}<div class="rail-error">{saveError}</div>{/if}
-        {#if savedFlash}<div class="saved-flash" style="margin-top: 6px;">
-            <Icon name="check" size={13} />Saved
-          </div>{/if}
-
-        <div class="rail-divider"></div>
-        <div
-          class="dropzone"
-          class:over={dragOver}
-          role="button"
-          tabindex="0"
-          onclick={() => fileInput?.click()}
-          onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && fileInput?.click()}
-          ondragover={(e) => {
-            e.preventDefault()
-            dragOver = true
-          }}
-          ondragleave={() => (dragOver = false)}
-          ondrop={onDrop}
-        >
-          <Icon name="upload" size={14} />
-          {#if uploading}Uploading…{:else}<span class="text-dim">Drop files here, or</span>
-            <span class="text-bright">browse</span>{/if}
-        </div>
-        <input bind:this={fileInput} type="file" multiple style="display: none;" onchange={onPick} />
-        {#if fileError}<div class="rail-error">{fileError}</div>{/if}
-      {:else if workDir.trim()}
-        <!-- Beside a chat: just show where the agent can produce files. -->
-        <div class="rail-divider"></div>
-        <div class="label-cap" style="margin-bottom: 4px;">Working folder · read + write</div>
-        <div class="mono text-dim" style="font-size: 11px; word-break: break-all;">{workDir}</div>
-      {/if}
-    </Section>
+    {#if mode === 'home'}{@render filesSection(data.files)}{/if}
 
     {#if mode === 'home'}
       <Section label="Settings" open={false}>
@@ -781,6 +804,12 @@
   .dropzone.over {
     border-color: var(--accent);
     background: var(--accent-glow);
+  }
+  .dropzone.compact {
+    padding: 8px 10px;
+  }
+  .file-row .btn-icon {
+    flex-shrink: 0;
   }
 
   /* Read-only instructions preview in the chat rail. */
