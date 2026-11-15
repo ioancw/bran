@@ -318,10 +318,15 @@ async def _fire(
     append_system = "\n\n".join(append_parts) if append_parts else None
 
     failed = False
+    # A verify-mode runner's report is not announced until the critic has seen
+    # it: otherwise the phone gets the unchecked report, then the corrected
+    # one. A failed run is announced at once either way (see runner._drive).
+    verifying = rec is not None and rec.verify
     try:
         record = await run_agent(
             agent, task, project_id=project_id, source="runner",
             schedule_id=schedule_id, append_system=append_system,
+            notify=not verifying,
         )
         failed = record.status != "completed"
         if catch_up_for:
@@ -329,10 +334,17 @@ async def _fire(
 
             record.metadata["catch_up_for"] = catch_up_for
             update_run(record)
-        if not failed and rec is not None and rec.verify:
+        if not failed and verifying:
             await _run_verification(
                 record, agent, task, project_id, schedule_id, append_system
             )
+            # Passed, or the critic itself failed (fails open): deliver this
+            # report. Rejected: the corrective re-run announced itself, and its
+            # report is the one to read.
+            if not (record.metadata.get("verification") or {}).get("retried_run_id"):
+                from bran.notify import notify_completion
+
+                await notify_completion(record)
     except asyncio.CancelledError:
         raise  # server shutting down — don't retry, don't touch the schedule
     except Exception:

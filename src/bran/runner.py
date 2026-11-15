@@ -112,11 +112,16 @@ async def _drive(
     task: str,
     options: ClaudeAgentOptions,
     on_message=None,
+    notify: bool = True,
 ) -> AsyncIterator[Any]:
     """Run one query loop against an already-`running` record, yielding each
     SDK message. Finalises timing/status, persists, and fires notifications
     regardless of how the run ends — so every surface (one-shot or streaming)
     gets identical lifecycle handling. Re-raises on error after recording it.
+
+    `notify=False` holds back the notification of a run that COMPLETED — the
+    caller will send it once it has decided the result is the one to deliver
+    (a verify-mode runner, after its critic). A failure always notifies.
     """
     # Publish this run as the ambient context so in-process tools (spawn_agent)
     # can inherit its project + parent. Reset in finally so it doesn't leak.
@@ -280,7 +285,8 @@ async def _drive(
         live_close(record.id)
         # Fire notifications regardless of how the run ended. notify_completion
         # never raises, so this can't break an otherwise-fine exception path.
-        await notify_completion(record)
+        if notify or record.status != "completed":
+            await notify_completion(record)
         # Headless fan-in: a finished spawn may complete its batch, and a
         # finished chat turn may find its spawns already done — either way the
         # server (not the browser) owns synthesis now. Never raises; lazy
@@ -305,8 +311,12 @@ async def run_agent(
     source: str = "manual",
     schedule_id: str | None = None,
     actor: str | None = None,
+    notify: bool = True,
 ) -> RunRecord:
     """Execute an agent run end-to-end, returning the persisted record.
+
+    `notify=False`: a completed run is not announced — the caller does that
+    itself (see `_drive`).
 
     `on_message` is an optional sync callback invoked for each SDK message —
     useful for live streaming to a REPL or websocket.
@@ -338,17 +348,17 @@ async def run_agent(
         async with run_slots():
             return await _execute(
                 agent_def, agent, task, record, resume_session, max_turns,
-                extra_options, append_system, on_message,
+                extra_options, append_system, on_message, notify,
             )
     return await _execute(
         agent_def, agent, task, record, resume_session, max_turns,
-        extra_options, append_system, on_message,
+        extra_options, append_system, on_message, notify,
     )
 
 
 async def _execute(
     agent_def, agent, task, record, resume_session, max_turns,
-    extra_options, append_system, on_message,
+    extra_options, append_system, on_message, notify=True,
 ) -> RunRecord:
     record = _begin_run(agent, task, record.parent_run_id, record)
     options = build_options_for(
@@ -364,7 +374,7 @@ async def _execute(
             setattr(options, k, v)
 
     # Drain the stream; _drive handles persistence + notification.
-    async for _ in _drive(record, task, options, on_message):
+    async for _ in _drive(record, task, options, on_message, notify):
         pass
     return record
 
