@@ -422,3 +422,135 @@ def test_find_subagent_run_still_matches_by_tool_use_id():
     assert find_subagent_run(child.metadata["tool_use_id"]).id == child.id
     assert list_runs(parent_run_id="nope") == []
     assert utcnow_iso()
+
+
+# --- verify-mode runners announce the report the critic accepted ----------------
+
+def _verify_fire(monkeypatch, verdicts):
+    """Fire a verify-mode runner with a stubbed agent and critic. Returns
+    (what the agent was asked for `notify` on each run, ids announced)."""
+    import bran.notify as notify_mod
+    import bran.scheduler as sched
+
+    rec = ScheduleRecord.new(name=_name("vf"), agent="research", task="t", cron="0 8 * * *", verify=True)
+    insert_schedule(rec)
+    notify_kw: list[bool] = []
+    announced: list[str] = []
+    made: list[RunRecord] = []
+
+    async def fake_run_agent(agent, task, **kw):
+        r = RunRecord.new(agent=agent, task=task, source="runner", schedule_id=kw.get("schedule_id"))
+        r.status, r.result = "completed", f"report {len(made) + 1}"
+        insert_run(r)
+        made.append(r)
+        notify_kw.append(kw.get("notify", True))
+        if kw.get("notify", True):
+            announced.append(r.id)  # what runner._drive would do
+        return r
+
+    queue = list(verdicts)
+
+    async def fake_verify(task, output):
+        return queue.pop(0)
+
+    async def fake_notify(record):
+        announced.append(record.id)
+
+    monkeypatch.setattr(sched, "run_agent", fake_run_agent)
+    monkeypatch.setattr(sched, "_verify_output", fake_verify)
+    monkeypatch.setattr(notify_mod, "notify_completion", fake_notify)
+    asyncio.run(sched._fire("research", "t", rec.name, None, rec.id, False, 0))
+    return notify_kw, announced, made
+
+
+def test_verified_report_is_announced_once_after_the_critic(monkeypatch):
+    notify_kw, announced, made = _verify_fire(monkeypatch, [{"pass": True, "issues": [], "feedback": ""}])
+    assert notify_kw == [False]  # held back while the critic reads it
+    assert announced == [made[0].id]
+
+
+def test_rejected_report_is_never_announced_only_its_correction(monkeypatch):
+    notify_kw, announced, made = _verify_fire(monkeypatch, [
+        {"pass": False, "issues": ["wrong date"], "feedback": "fix the date"},
+        {"pass": True, "issues": [], "feedback": ""},
+    ])
+    assert notify_kw == [False, True]
+    assert announced == [made[1].id]
+
+
+def test_a_broken_critic_still_delivers_the_report(monkeypatch):
+    _, announced, made = _verify_fire(monkeypatch, [None])
+    assert announced == [made[0].id]
+
+
+def test_a_held_back_run_that_fails_is_still_announced(monkeypatch):
+    import bran.notify as notify_mod
+    import bran.runner as runner_mod
+
+    async def empty_query(prompt, options):
+        return
+        yield  # an agent stream that ends without a result = a failed run
+
+    seen: list[str] = []
+    monkeypatch.setattr(runner_mod, "query", empty_query)
+    monkeypatch.setattr(notify_mod, "_notifiers", [lambda rec: seen.append(rec.status)])
+    record = RunRecord.new(agent="research", task="t")
+    record.status = "running"
+    insert_run(record)
+
+    async def go():
+        async for _ in runner_mod._drive(record, "t", options=None, notify=False):
+            pass
+
+    asyncio.run(go())
+    assert record.status == "failed" and seen == ["failed"]
+
+
+# --- fetch guard connects to the address it checked ------------------------------
+
+def test_pinned_request_keeps_host_and_tls_name():
+    from bran.tools.documents import _pinned_request
+
+    target, headers, ext = _pinned_request("https://feeds.example.com/rss.xml?x=1", "93.184.216.34")
+    assert target == "https://93.184.216.34/rss.xml?x=1"
+    assert headers == {"Host": "feeds.example.com"} and ext == {"sni_hostname": "feeds.example.com"}
+
+    target, headers, ext = _pinned_request("http://example.com:8080/a", "2606:2800:220:1::1")
+    assert target == "http://[2606:2800:220:1::1]:8080/a"
+    assert headers == {"Host": "example.com:8080"} and ext == {}
+
+    # Guard switched off: nothing is pinned.
+    assert _pinned_request("http://intranet/a", None) == ("http://intranet/a", {}, {})
+
+
+def test_fetch_connects_to_the_vetted_address_not_a_second_lookup(monkeypatch):
+    """DNS rebinding: the name answers 'public' once. The request must go to
+    that address — were the name resolved again it would reach 127.0.0.1."""
+    import httpx
+
+    import bran.tools.documents as docs
+
+    answers = [[(2, 1, 6, "", ("93.184.216.34", 0))], [(2, 1, 6, "", ("127.0.0.1", 0))]]
+
+    async def fake_getaddrinfo(host, port, *a, **k):
+        return answers.pop(0) if len(answers) > 1 else answers[0]
+
+    seen: list[tuple[str, str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((str(request.url), request.headers["host"], request.extensions.get("sni_hostname")))
+        return httpx.Response(200, text="<rss/>", headers={"content-type": "application/xml"})
+
+    real_client = httpx.AsyncClient
+
+    def client_with_fake_network(**kw):
+        return real_client(transport=httpx.MockTransport(handler), **kw)
+
+    async def go():
+        asyncio.get_running_loop().getaddrinfo = fake_getaddrinfo  # type: ignore[method-assign]
+        monkeypatch.setattr(httpx, "AsyncClient", client_with_fake_network)
+        return await docs._fetch_checked("https://rebind.example/feed", {})
+
+    body, resp = asyncio.run(go())
+    assert body == b"<rss/>" and resp.status_code == 200
+    assert seen == [("https://93.184.216.34/feed", "rebind.example", "rebind.example")]

@@ -33,26 +33,32 @@ _MAX_TEXT_CHARS = 600_000  # cap returned text so a huge page can't blow the buf
 _MAX_REDIRECTS = 5
 
 
-async def _reject_non_public(url: str) -> str | None:
-    """SSRF/egress guard: return an error string if the URL's host resolves to
-    any non-public address (loopback, RFC1918, link-local incl. 169.254.169.254
-    cloud metadata, CGN, reserved), else None.
+async def _vetted_address(url: str) -> str | None:
+    """SSRF/egress guard: resolve the URL's host and return ONE address to
+    connect to, having checked that every address it resolves to is public
+    (not loopback, RFC1918, link-local incl. 169.254.169.254 cloud metadata,
+    CGN, reserved). Raises ValueError with a user-facing message otherwise.
 
     These tools ingest UNTRUSTED web content into agents that also hold the
     Read tool — without this check, a prompt-injected agent could be steered
-    into fetching internal services or exfiltrating to a rebound hostname that
-    resolves locally. Set BRAN_FETCH_ALLOW_PRIVATE=1 to disable (e.g. to pull
-    a feed from a genuinely internal server you trust).
+    into fetching internal services. The caller connects to the returned
+    address rather than resolving the name again: a name that answers
+    "public" to the check and "127.0.0.1" a moment later (DNS rebinding)
+    would otherwise walk straight through.
+
+    Returns None — no pinning, no check — when BRAN_FETCH_ALLOW_PRIVATE=1
+    (e.g. to pull a feed from a genuinely internal server you trust).
     """
     if os.getenv("BRAN_FETCH_ALLOW_PRIVATE") == "1":
         return None
     host = urlsplit(url).hostname
     if not host:
-        return f"couldn't parse a hostname from {url!r}"
+        raise ValueError(f"couldn't parse a hostname from {url!r}")
     try:
         infos = await asyncio.get_running_loop().getaddrinfo(host, None)
     except OSError as e:
-        return f"couldn't resolve {host}: {e}"
+        raise ValueError(f"couldn't resolve {host}: {e}")
+    chosen: ipaddress.IPv4Address | ipaddress.IPv6Address | None = None
     for info in infos:
         addr = str(info[4][0]).partition("%")[0]  # strip IPv6 zone id
         try:
@@ -60,12 +66,44 @@ async def _reject_non_public(url: str) -> str | None:
         except ValueError:
             continue
         if not ip.is_global:
-            return (
+            raise ValueError(
                 f"{host} resolves to {ip}, a non-public address — fetching "
                 "loopback/private/link-local hosts is blocked "
                 "(BRAN_FETCH_ALLOW_PRIVATE=1 overrides)"
             )
+        # Prefer IPv4: it is the family most likely to be routable from here.
+        if chosen is None or (chosen.version == 6 and ip.version == 4):
+            chosen = ip
+    if chosen is None:
+        raise ValueError(f"{host} did not resolve to a usable address")
+    return str(chosen)
+
+
+async def _reject_non_public(url: str) -> str | None:
+    """The guard as a yes/no: an error string when the URL may not be
+    fetched, else None."""
+    try:
+        await _vetted_address(url)
+    except ValueError as e:
+        return str(e)
     return None
+
+
+def _pinned_request(url: str, address: str | None) -> tuple[str, dict[str, str], dict[str, str]]:
+    """(url to connect to, extra headers, request extensions) for fetching
+    `url` at the already-vetted `address`. The connection goes to the address;
+    the Host header and the TLS server name (SNI + certificate check) stay the
+    original hostname, so virtual hosts and certificates behave as usual."""
+    if address is None:
+        return url, {}, {}
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    literal = f"[{address}]" if ":" in address else address
+    netloc = literal + (f":{parts.port}" if parts.port else "")
+    host_header = host + (f":{parts.port}" if parts.port else "")
+    target = parts._replace(netloc=netloc).geturl()
+    extensions = {"sni_hostname": host} if parts.scheme == "https" else {}
+    return target, {"Host": host_header}, extensions
 
 
 async def _fetch_checked(url: str, headers: dict[str, str]):
@@ -83,15 +121,14 @@ async def _fetch_checked(url: str, headers: dict[str, str]):
         for _ in range(_MAX_REDIRECTS + 1):
             if not url.startswith(("http://", "https://")):
                 raise ValueError(f"redirected to a non-http(s) URL: {url!r}")
-            err = await _reject_non_public(url)
-            if err:
-                raise ValueError(err)
-            async with client.stream("GET", url) as resp:
+            # Check, then connect to the address that was checked (every hop).
+            target, pin_headers, extensions = _pinned_request(url, await _vetted_address(url))
+            async with client.stream(
+                "GET", target, headers=pin_headers, extensions=extensions
+            ) as resp:
                 if resp.is_redirect:
-                    nxt = resp.next_request
-                    url = str(nxt.url) if nxt is not None else urljoin(
-                        url, resp.headers.get("location", "")
-                    )
+                    # Relative to the real URL, not the pinned address.
+                    url = urljoin(url, resp.headers.get("location", ""))
                     continue
                 if resp.status_code >= 400:
                     raise ValueError(f"HTTP {resp.status_code} fetching {url}")
