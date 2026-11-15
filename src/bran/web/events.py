@@ -39,7 +39,7 @@ from typing import Any
 
 from bran.transcript import Entry
 
-# Per-run stored events (runs.metadata["events"]). Tool results are the bulk
+# Per-run stored events (the run_events table). Tool results are the bulk
 # of a transcript; cap each so a chatty run can't balloon the SQLite row, and
 # cap the whole list so the UI replay stays snappy.
 STORED_RESULT_CHARS = 8_000
@@ -71,15 +71,19 @@ def events_from_runs(runs: list[Any]) -> list[dict[str, Any]]:
     transcript file is gone (Claude Code prunes sessions after ~30 days).
 
     Each turn becomes the user's prompt followed by the turn's stored events
-    when the run kept them (runs.metadata["events"], recorded live), else the
+    when the run kept them (run_events, recorded live), else the
     final reply text — or the error for a failed turn. Lower fidelity than the
     transcript (no tool calls for pre-storage turns) but the conversation
     itself survives.
     """
+    from bran.persistence import get_run_events_many
+
+    kept = get_run_events_many([r.id for r in runs])
     out: list[dict[str, Any]] = []
     for r in sorted(runs, key=lambda x: x.started_at or ""):
         out.append(_with_ts({"type": "user", "text": r.task or ""}, r.started_at))
-        stored = (r.metadata or {}).get("events")
+        # (a record not yet persisted may still carry them in its metadata)
+        stored = kept.get(r.id) or (r.metadata or {}).get("events")
         if stored:
             out.extend(e for e in stored if e.get("type") not in ("session", "done"))
             continue

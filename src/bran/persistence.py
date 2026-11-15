@@ -1,8 +1,8 @@
-"""SQLite-backed store for agent runs and schedules.
+"""SQLite-backed store: runs, schedules (runners), chats, projects.
 
-Two tables:
-- runs: every invocation of an agent (status, result, session_id, cost, ...)
-- schedules: cron-style triggers managed by APScheduler
+`_TABLES` + `_INDEXES` are the CURRENT full shape — what a fresh database is
+created with. An existing database is brought up to it by the numbered
+`_MIGRATIONS`, gated on `PRAGMA user_version`, so each step runs exactly once.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from typing import Any
 
 from bran.config import SETTINGS
 
-SCHEMA = """
+_TABLES = """
 CREATE TABLE IF NOT EXISTS runs (
     id              TEXT PRIMARY KEY,
     agent           TEXT NOT NULL,
@@ -41,11 +41,14 @@ CREATE TABLE IF NOT EXISTS runs (
     actor           TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_runs_agent      ON runs(agent);
-CREATE INDEX IF NOT EXISTS idx_runs_status     ON runs(status);
-CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at);
--- NB: idx_runs_project is created in the migration, AFTER project_id is added,
--- so init_db() doesn't reference a column that legacy tables lack yet.
+-- A run's stored transcript (the unified events, trimmed + capped by the
+-- runner). Its own table, not a key inside runs.metadata: one run's events
+-- can reach 1.5MB, and every list query used to read, parse and ship them.
+-- Only the transcript / history / sources paths load these.
+CREATE TABLE IF NOT EXISTS run_events (
+    run_id  TEXT PRIMARY KEY,
+    events  TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS schedules (
     id          TEXT PRIMARY KEY,
@@ -76,17 +79,17 @@ CREATE TABLE IF NOT EXISTS artifacts (
 -- `id` mirrors the SDK session_id so we can resume via the SDK's `resume`
 -- option; `agent` locks each chat to one agent so we can route messages
 -- consistently regardless of which orchestrator was chatting last.
--- `project_id` groups chats into a Project (Claude-Cowork style); migration
--- below ensures every chat row has one (defaulting to the auto-Inbox).
+-- `project_id` groups chats into a Project (NULL = a loose chat);
+-- `archived_at` hides a chat from Recents without deleting it.
 CREATE TABLE IF NOT EXISTS chats (
     id          TEXT PRIMARY KEY,
     title       TEXT NOT NULL,
     agent       TEXT NOT NULL,
     created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL
+    updated_at  TEXT NOT NULL,
+    project_id  TEXT,
+    archived_at TEXT
 );
-
-CREATE INDEX IF NOT EXISTS idx_chats_updated ON chats(updated_at DESC);
 
 -- Projects: a named container for related chats. `instructions` is the
 -- always-on memory blob appended to every chat's system prompt in this
@@ -103,10 +106,11 @@ CREATE TABLE IF NOT EXISTS projects (
     -- AND write — the write-confinement hook admits it as an extra root.
     work_dir      TEXT NOT NULL DEFAULT '',
     created_at    TEXT NOT NULL,
-    updated_at    TEXT NOT NULL
+    updated_at    TEXT NOT NULL,
+    -- The auto-written brief (see bran.project_summary) and when it was written.
+    summary       TEXT NOT NULL DEFAULT '',
+    summary_at    TEXT
 );
-
-CREATE INDEX IF NOT EXISTS idx_projects_updated ON projects(updated_at DESC);
 
 -- Discrete project memory entries (Cowork-style): a list of pinned facts/rules,
 -- distinct from `projects.instructions` (the free-form brief). Each is one
@@ -117,8 +121,6 @@ CREATE TABLE IF NOT EXISTS project_memories (
     text        TEXT NOT NULL,
     created_at  TEXT NOT NULL
 );
-
-CREATE INDEX IF NOT EXISTS idx_project_memories ON project_memories(project_id);
 
 -- App-level key-value settings (single-user). Currently holds
 -- 'user_instructions' — the global "About me" blob appended to every agent
@@ -139,8 +141,29 @@ CREATE TABLE IF NOT EXISTS output_state (
 );
 """
 
-# Reentrant so the lazy bootstrap (_ensure_ready -> init_db -> _conn) can take
-# the lock again on the same thread without deadlocking.
+# Created after the tables AND after any migration has added the columns they
+# reference — an index on a column a legacy table lacks would fail.
+_INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_runs_agent      ON runs(agent);
+CREATE INDEX IF NOT EXISTS idx_runs_status     ON runs(status);
+CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at);
+CREATE INDEX IF NOT EXISTS idx_runs_project    ON runs(project_id);
+-- The chat rail polls runs by session every few seconds; child-run and
+-- runner-history lookups filter on the other two.
+CREATE INDEX IF NOT EXISTS idx_runs_session    ON runs(session_id);
+CREATE INDEX IF NOT EXISTS idx_runs_parent     ON runs(parent_run_id);
+CREATE INDEX IF NOT EXISTS idx_runs_schedule   ON runs(schedule_id, started_at);
+-- find_subagent_run: one lookup per delegation event during replay.
+CREATE INDEX IF NOT EXISTS idx_runs_tool_use
+    ON runs(json_extract(metadata, '$.tool_use_id')) WHERE source = 'subagent';
+CREATE INDEX IF NOT EXISTS idx_chats_updated   ON chats(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chats_project   ON chats(project_id);
+CREATE INDEX IF NOT EXISTS idx_projects_updated ON projects(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_project_memories ON project_memories(project_id);
+"""
+
+# Reentrant: store functions call each other while holding it (insert_run ->
+# save_run_events, delete_chat -> delete_runs).
 _lock = threading.RLock()
 
 
@@ -219,7 +242,7 @@ class RunRecord:
             self.duration_ms,
             self.started_at,
             self.ended_at,
-            json.dumps(self.metadata),
+            _metadata_json(self),
             self.project_id,
             self.source,
             self.schedule_id,
@@ -228,7 +251,6 @@ class RunRecord:
 
     @staticmethod
     def from_row(row: sqlite3.Row) -> RunRecord:
-        keys = row.keys()
         return RunRecord(
             id=row["id"],
             agent=row["agent"],
@@ -244,11 +266,10 @@ class RunRecord:
             started_at=row["started_at"],
             ended_at=row["ended_at"],
             metadata=json.loads(row["metadata"] or "{}"),
-            # None = standalone; absent only on legacy rows read mid-migration.
-            project_id=(row["project_id"] if "project_id" in keys else None),
-            source=(row["source"] if "source" in keys and row["source"] else "manual"),
-            schedule_id=(row["schedule_id"] if "schedule_id" in keys else None),
-            actor=(row["actor"] if "actor" in keys else None),
+            project_id=row["project_id"],  # None = standalone
+            source=row["source"] or "manual",
+            schedule_id=row["schedule_id"],
+            actor=row["actor"],
         )
 
 
@@ -301,29 +322,25 @@ def _ensure_ready() -> None:
     """Create dirs + schema + run migrations once, lazily on first DB access.
 
     Keeps `import bran` free of filesystem side effects (the schema used to be
-    built at import time). The flag is set before the nested init/_conn calls so
-    they don't recurse; on failure it's reset so a later call can retry.
+    built at import time). Double-checked under the lock so two threads racing
+    on first use can't both migrate.
     """
     global _initialized
     if _initialized:
         return
-    _initialized = True
-    try:
+    with _lock:
+        if _initialized:
+            return
         SETTINGS.ensure_dirs()
-        init_db()
-        _migrate_chats_add_project_id()
-        _migrate_runs_schedules_add_project_id()
-        _drop_inbox()
-        _migrate_artifacts_to_table()
-        _migrate_archive_and_summary()
-    except Exception:
-        _initialized = False
-        raise
+        conn = _connect()
+        try:
+            _bring_up_to_date(conn)
+        finally:
+            conn.close()
+        _initialized = True
 
 
-@contextmanager
-def _conn() -> Iterator[sqlite3.Connection]:
-    _ensure_ready()
+def _connect() -> sqlite3.Connection:
     SETTINGS.db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(SETTINGS.db_path, isolation_level=None)
     conn.row_factory = sqlite3.Row
@@ -332,19 +349,90 @@ def _conn() -> Iterator[sqlite3.Connection]:
     # immediately with "database is locked" — both matter once concurrent
     # background runs (scheduler + spawned + HTTP) hammer the same row.
     # journal_mode is persistent (set once on the file); the rest are
-    # per-connection, so we apply them on every connect.
+    # per-connection.
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA synchronous=NORMAL")
+    return conn
+
+
+# One long-lived connection per thread (the event loop's thread, plus each
+# threadpool worker that serves a read endpoint), instead of a connect + three
+# PRAGMAs on every call. Keyed by path so a changed SETTINGS.db_path is honoured.
+_local = threading.local()
+
+
+@contextmanager
+def _conn() -> Iterator[sqlite3.Connection]:
+    _ensure_ready()
+    path = str(SETTINGS.db_path)
+    conn = getattr(_local, "conn", None)
+    if conn is None or getattr(_local, "path", None) != path:
+        if conn is not None:
+            conn.close()
+        conn = _local.conn = _connect()
+        _local.path = path
+    yield conn
+
+
+@contextmanager
+def _tx(conn: sqlite3.Connection) -> Iterator[None]:
+    """All-or-nothing for a multi-statement write (connections autocommit)."""
+    conn.execute("BEGIN IMMEDIATE")
     try:
-        yield conn
-    finally:
-        conn.close()
+        yield
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    conn.execute("COMMIT")
 
 
-def init_db() -> None:
+def _metadata_json(record: RunRecord) -> str:
+    """The run's metadata for the row. A caller that still carries the stored
+    transcript under metadata["events"] has it moved to run_events."""
+    meta = record.metadata
+    if "events" in meta:
+        events = meta["events"]
+        meta = {k: v for k, v in meta.items() if k != "events"}
+        if events:
+            save_run_events(record.id, events)
+    return json.dumps(meta)
+
+
+def save_run_events(run_id: str, events: list[dict[str, Any]]) -> None:
+    """Store (replace) a run's transcript events."""
     with _lock, _conn() as conn:
-        conn.executescript(SCHEMA)
+        conn.execute(
+            "INSERT INTO run_events (run_id, events) VALUES (?, ?) "
+            "ON CONFLICT(run_id) DO UPDATE SET events = excluded.events",
+            (run_id, json.dumps(events, default=str)),
+        )
+
+
+def get_run_events(run_id: str) -> list[dict[str, Any]]:
+    """A run's stored transcript events ([] when it kept none)."""
+    return get_run_events_many([run_id]).get(run_id, [])
+
+
+def get_run_events_many(run_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+    """{run_id: events} for the runs that kept any — one query for a batch."""
+    ids = [r for r in run_ids if r]
+    if not ids:
+        return {}
+    marks = ",".join("?" for _ in ids)
+    with _lock, _conn() as conn:
+        rows = conn.execute(
+            f"SELECT run_id, events FROM run_events WHERE run_id IN ({marks})", ids
+        ).fetchall()
+    out: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        try:
+            events = json.loads(r["events"] or "[]")
+        except ValueError:
+            continue
+        if isinstance(events, list) and events:
+            out[r["run_id"]] = events
+    return out
 
 
 def insert_run(record: RunRecord) -> None:
@@ -377,7 +465,7 @@ def update_run(record: RunRecord) -> None:
                 record.num_turns,
                 record.duration_ms,
                 record.ended_at,
-                json.dumps(record.metadata),
+                _metadata_json(record),
                 record.id,
             ),
         )
@@ -538,14 +626,13 @@ def list_runs(
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
     sql += " ORDER BY started_at DESC LIMIT ?"
-    params.append(limit)
+    params.append(max(1, int(limit)))  # a negative LIMIT means "no limit" to SQLite
     with _lock, _conn() as conn:
         rows = conn.execute(sql, params).fetchall()
     return [RunRecord.from_row(r) for r in rows]
 
 
 def _row_to_schedule(r: sqlite3.Row) -> ScheduleRecord:
-    keys = r.keys()
     return ScheduleRecord(
         id=r["id"],
         name=r["name"],
@@ -554,11 +641,11 @@ def _row_to_schedule(r: sqlite3.Row) -> ScheduleRecord:
         cron=r["cron"],
         enabled=bool(r["enabled"]),
         created_at=r["created_at"],
-        project_id=(r["project_id"] if "project_id" in keys else None),
-        run_at=(r["run_at"] if "run_at" in keys else None),
-        verify=bool(r["verify"]) if "verify" in keys else False,
-        delta=bool(r["delta"]) if "delta" in keys else False,
-        alert=(r["alert"] or "") if "alert" in keys else "",
+        project_id=r["project_id"],
+        run_at=r["run_at"],
+        verify=bool(r["verify"]),
+        delta=bool(r["delta"]),
+        alert=r["alert"] or "",
     )
 
 
@@ -772,11 +859,10 @@ class ChatRecord:
 
 
 def _row_to_chat(r: sqlite3.Row) -> ChatRecord:
-    keys = r.keys()
     return ChatRecord(
         id=r["id"], title=r["title"], agent=r["agent"],
-        project_id=(r["project_id"] if "project_id" in keys else None),
-        archived_at=(r["archived_at"] if "archived_at" in keys else None),
+        project_id=r["project_id"],
+        archived_at=r["archived_at"],
         created_at=r["created_at"], updated_at=r["updated_at"],
     )
 
@@ -868,19 +954,37 @@ def delete_runs(run_ids: list[str]) -> int:
         ]
         everything = ids + children
         emarks = ",".join("?" for _ in everything)
-        conn.execute(f"DELETE FROM artifacts WHERE run_id IN ({emarks})", everything)
-        conn.execute(f"DELETE FROM output_state WHERE run_id IN ({emarks})", everything)
-        cur = conn.execute(f"DELETE FROM runs WHERE id IN ({marks})", ids)
-        if children:
-            cmarks = ",".join("?" for _ in children)
-            conn.execute(f"DELETE FROM runs WHERE id IN ({cmarks})", children)
+        with _tx(conn):
+            conn.execute(f"DELETE FROM artifacts WHERE run_id IN ({emarks})", everything)
+            conn.execute(f"DELETE FROM output_state WHERE run_id IN ({emarks})", everything)
+            conn.execute(f"DELETE FROM run_events WHERE run_id IN ({emarks})", everything)
+            cur = conn.execute(f"DELETE FROM runs WHERE id IN ({marks})", ids)
+            if children:
+                cmarks = ",".join("?" for _ in children)
+                conn.execute(f"DELETE FROM runs WHERE id IN ({cmarks})", children)
         return cur.rowcount
 
 
 def delete_chat(chat_id: str) -> bool:
+    """Delete a chat and the conversation that only it could reach: its own
+    turns (chat + synthesis runs, with their stored transcripts) and its
+    history marker. Background runs the chat spawned are outputs in their own
+    right and stay; a turn that is still running is left to finish."""
     with _lock, _conn() as conn:
         cur = conn.execute("DELETE FROM chats WHERE id = ?", (chat_id,))
-        return cur.rowcount > 0
+        if cur.rowcount == 0:
+            return False
+        turns = [
+            row["id"] for row in conn.execute(
+                "SELECT id FROM runs WHERE session_id = ? AND source IN ('chat', 'synthesis') "
+                "AND status NOT IN ('running', 'pending')",
+                (chat_id,),
+            ).fetchall()
+        ]
+        conn.execute("DELETE FROM app_settings WHERE key = ?", (f"chat_history_db:{chat_id}",))
+    for i in range(0, len(turns), 500):
+        delete_runs(turns[i:i + 500])
+    return True
 
 
 def rename_chat(chat_id: str, title: str) -> bool:
@@ -927,13 +1031,12 @@ class ProjectRecord:
 
 
 def _row_to_project(r: sqlite3.Row) -> ProjectRecord:
-    keys = r.keys()
     return ProjectRecord(
         id=r["id"], name=r["name"],
         description=r["description"] or "", instructions=r["instructions"] or "",
-        work_dir=(r["work_dir"] if "work_dir" in keys else None) or "",
-        summary=(r["summary"] if "summary" in keys else None) or "",
-        summary_at=(r["summary_at"] if "summary_at" in keys else None),
+        work_dir=r["work_dir"] or "",
+        summary=r["summary"] or "",
+        summary_at=r["summary_at"],
         created_at=r["created_at"], updated_at=r["updated_at"],
     )
 
@@ -983,12 +1086,16 @@ def list_projects() -> list[ProjectRecord]:
 
 
 def delete_project(project_id: str) -> bool:
-    """Remove a project + its memory entries. Its chats become loose (project_id
-    NULL) rather than being deleted, so no conversation history is lost."""
-    with _lock, _conn() as conn:
-        conn.execute(
-            "UPDATE chats SET project_id = NULL WHERE project_id = ?", (project_id,)
-        )
+    """Remove a project + its memory entries, in one transaction. Nothing else
+    is deleted: its chats become loose, and its runners and runs are detached
+    (project_id NULL) so nothing keeps pointing at a project that is gone.
+    Runners that only make sense WITH the project (its daily summary) are the
+    caller's to remove first — see bran.schedule_service.delete_project."""
+    with _lock, _conn() as conn, _tx(conn):
+        for table in ("chats", "schedules", "runs"):
+            conn.execute(
+                f"UPDATE {table} SET project_id = NULL WHERE project_id = ?", (project_id,)
+            )
         conn.execute("DELETE FROM project_memories WHERE project_id = ?", (project_id,))
         cur = conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
         return cur.rowcount > 0
@@ -1067,7 +1174,41 @@ def set_setting(key: str, value: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Migrations — run after init_db() creates the bare tables.
+# Retention — what would otherwise grow without bound.
+# ---------------------------------------------------------------------------
+
+def prune_run_events(older_than_days: int) -> int:
+    """Drop the stored transcripts of runs that ended more than N days ago.
+    The run row, its result and its artifacts stay; a pruned conversation
+    replays as prompt + reply. Returns how many transcripts were dropped."""
+    if older_than_days <= 0:
+        return 0
+    from datetime import timedelta
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()
+    with _lock, _conn() as conn:
+        cur = conn.execute(
+            "DELETE FROM run_events WHERE run_id IN ("
+            "  SELECT id FROM runs WHERE COALESCE(ended_at, started_at) < ?"
+            "   AND status NOT IN ('running', 'pending'))"
+            " OR run_id NOT IN (SELECT id FROM runs)",
+            (cutoff,),
+        )
+        return cur.rowcount
+
+
+def vacuum() -> None:
+    """Rebuild the file so freed pages go back to the filesystem. Needs free
+    disk about the size of the database and blocks writers while it runs —
+    a CLI job (`bran prune --vacuum`), not something the server does."""
+    with _lock, _conn() as conn:
+        conn.execute("VACUUM")
+
+
+# ---------------------------------------------------------------------------
+# Schema versioning. A fresh file gets the current shape and the latest
+# version in one go; an existing file runs only the migrations it has not seen
+# (PRAGMA user_version counts them), each exactly once.
 # ---------------------------------------------------------------------------
 
 def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:
@@ -1076,70 +1217,45 @@ def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, de
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
-def _migrate_chats_add_project_id() -> None:
-    """Add project_id column to chats table if it doesn't already exist."""
-    with _lock, _conn() as conn:
-        _add_column_if_missing(conn, "chats", "project_id", "TEXT")
-
-
-def _migrate_runs_schedules_add_project_id() -> None:
-    """Add the (optional) project_id column to runs + schedules.
-
-    Attachment is optional — `project_id IS NULL` means loose/standalone.
-    """
-    with _lock, _conn() as conn:
-        _add_column_if_missing(conn, "runs", "project_id", "TEXT")
-        _add_column_if_missing(conn, "schedules", "project_id", "TEXT")
-        # `source` classifies how a run was triggered (chat/runner/spawn/manual).
-        # Backfill legacy rows: a run whose session_id is a chat is a chat turn;
-        # everything else we can only call "manual" in hindsight.
-        _add_column_if_missing(conn, "runs", "source", "TEXT")
-        conn.execute(
-            "UPDATE runs SET source = 'chat' "
-            "WHERE source IS NULL AND session_id IN (SELECT id FROM chats)"
-        )
-        conn.execute("UPDATE runs SET source = 'manual' WHERE source IS NULL")
-        # schedule_id links a run to the runner that produced it (exact history);
-        # run_at marks a one-shot ("once") schedule. Both nullable, no backfill.
-        _add_column_if_missing(conn, "runs", "schedule_id", "TEXT")
-        _add_column_if_missing(conn, "schedules", "run_at", "TEXT")
-        # work_dir: optional read+write working folder for a project's agents.
-        _add_column_if_missing(conn, "projects", "work_dir", "TEXT")
-        # actor: which named API token triggered the run (None for local surfaces).
-        _add_column_if_missing(conn, "runs", "actor", "TEXT")
-        # verify/delta: per-runner output quality controls (see ScheduleRecord).
-        _add_column_if_missing(conn, "schedules", "verify", "INTEGER NOT NULL DEFAULT 0")
-        _add_column_if_missing(conn, "schedules", "delta", "INTEGER NOT NULL DEFAULT 0")
-        # alert: natural-language significance bar for sensing runners.
-        _add_column_if_missing(conn, "schedules", "alert", "TEXT NOT NULL DEFAULT ''")
-        # Safe to index now that the column exists on both fresh and legacy DBs.
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_project ON runs(project_id)")
-
-
-def _migrate_archive_and_summary() -> None:
-    """Archived chats and the self-writing project summary."""
-    with _lock, _conn() as conn:
-        _add_column_if_missing(conn, "chats", "archived_at", "TEXT")
-        _add_column_if_missing(conn, "projects", "summary", "TEXT NOT NULL DEFAULT ''")
-        _add_column_if_missing(conn, "projects", "summary_at", "TEXT")
-
-
-def _migrate_artifacts_to_table() -> None:
-    """One-time backfill: copy legacy runs.metadata['artifacts'] lists into the
-    artifacts table. Old metadata is left in place (harmless); all readers and
-    writers use the table from now on. Guarded by an app_settings flag so the
-    scan doesn't re-run on every startup."""
-    with _lock, _conn() as conn:
-        done = conn.execute(
-            "SELECT value FROM app_settings WHERE key = 'artifacts_migrated'"
-        ).fetchone()
-        if done:
-            return
-        rows = conn.execute(
-            "SELECT id, metadata FROM runs WHERE metadata LIKE '%\"artifacts\"%'"
-        ).fetchall()
+def _m1_legacy_catch_up(conn: sqlite3.Connection) -> None:
+    """Everything the old run-on-every-start migrations did, once: columns
+    added over time, their backfills, the Inbox pseudo-project's removal and
+    the artifacts backfill. Every statement is idempotent, so a database of
+    any age lands on the same shape."""
+    for table, column, decl in (
+        ("chats", "project_id", "TEXT"),
+        ("chats", "archived_at", "TEXT"),
+        ("runs", "project_id", "TEXT"),
+        ("runs", "source", "TEXT"),
+        ("runs", "schedule_id", "TEXT"),
+        ("runs", "actor", "TEXT"),
+        ("schedules", "project_id", "TEXT"),
+        ("schedules", "run_at", "TEXT"),
+        ("schedules", "verify", "INTEGER NOT NULL DEFAULT 0"),
+        ("schedules", "delta", "INTEGER NOT NULL DEFAULT 0"),
+        ("schedules", "alert", "TEXT NOT NULL DEFAULT ''"),
+        ("projects", "work_dir", "TEXT NOT NULL DEFAULT ''"),
+        ("projects", "summary", "TEXT NOT NULL DEFAULT ''"),
+        ("projects", "summary_at", "TEXT"),
+    ):
+        _add_column_if_missing(conn, table, column, decl)
+    # `source`: a run whose session is a chat is a chat turn; everything else
+    # can only be called "manual" in hindsight.
+    conn.execute(
+        "UPDATE runs SET source = 'chat' "
+        "WHERE source IS NULL AND session_id IN (SELECT id FROM chats)"
+    )
+    conn.execute("UPDATE runs SET source = 'manual' WHERE source IS NULL")
+    # The Inbox pseudo-project is gone: NULL project_id simply means loose.
+    for table in ("chats", "runs", "schedules"):
+        conn.execute(f"UPDATE {table} SET project_id = NULL WHERE project_id = 'inbox'")
+    conn.execute("DELETE FROM projects WHERE id = 'inbox'")
+    # Artifacts used to be a list inside runs.metadata.
+    if not conn.execute("SELECT 1 FROM app_settings WHERE key = 'artifacts_migrated'").fetchone():
         now = utcnow_iso()
-        for r in rows:
+        for r in conn.execute(
+            "SELECT id, metadata FROM runs WHERE metadata LIKE '%\"artifacts\"%'"
+        ).fetchall():
             try:
                 paths = json.loads(r["metadata"] or "{}").get("artifacts") or []
             except (ValueError, TypeError):
@@ -1155,16 +1271,50 @@ def _migrate_artifacts_to_table() -> None:
         )
 
 
-def _drop_inbox() -> None:
-    """Inbox was a fudge — a catch-all 'project' for unfiled chats. We dropped
-    it: a chat/run/schedule with project_id NULL is simply *loose* (not in any
-    project). Convert any legacy 'inbox' rows back to NULL and remove the
-    well-known Inbox project. Idempotent — a no-op once nothing references it."""
-    with _lock, _conn() as conn:
-        for table in ("chats", "runs", "schedules"):
-            conn.execute(f"UPDATE {table} SET project_id = NULL WHERE project_id = 'inbox'")
-        conn.execute("DELETE FROM projects WHERE id = 'inbox'")
+def _m2_events_to_table(conn: sqlite3.Connection) -> None:
+    """Move each run's stored transcript out of runs.metadata into run_events
+    (see the table's comment). The file does not shrink until a VACUUM
+    (`bran prune --vacuum`), but the freed pages are reused."""
+    has_events = (
+        "metadata LIKE '%\"events\"%' AND "
+        "CASE WHEN json_valid(metadata) THEN json_type(metadata, '$.events') END"
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO run_events (run_id, events) "
+        f"SELECT id, json_extract(metadata, '$.events') FROM runs WHERE {has_events} = 'array'"
+    )
+    conn.execute(
+        f"UPDATE runs SET metadata = json_remove(metadata, '$.events') WHERE {has_events} IS NOT NULL"
+    )
 
 
-# Schema + migrations run lazily on first DB access via _ensure_ready(), so
-# importing this module has no filesystem side effects.
+# Append only. A migration never changes once released: a database that has
+# already run it will not run it again.
+_MIGRATIONS = (_m1_legacy_catch_up, _m2_events_to_table)
+
+
+def _bring_up_to_date(conn: sqlite3.Connection) -> None:
+    latest = len(_MIGRATIONS)
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    fresh = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'runs'"
+    ).fetchone() is None
+    if version >= latest and not fresh:
+        return
+    # Tables first (IF NOT EXISTS: a legacy file keeps its own, older-shaped
+    # ones and merely gains the tables it lacks), then the steps that reshape
+    # legacy tables, then the indexes — which need the reshaped columns.
+    conn.executescript(_TABLES)
+    if not fresh:
+        for number, migrate in enumerate(_MIGRATIONS[version:], start=version + 1):
+            with _tx(conn):
+                migrate(conn)
+                conn.execute(f"PRAGMA user_version = {number}")
+    conn.executescript(_INDEXES)
+    conn.execute(f"PRAGMA user_version = {latest}")
+
+
+def init_db() -> None:
+    """Make sure the database exists and is current (also done lazily on
+    first access)."""
+    _ensure_ready()

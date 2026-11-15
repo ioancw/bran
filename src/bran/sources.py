@@ -93,9 +93,9 @@ def extract_sources(result: str | None, events: list[dict[str, Any]] | None) -> 
 def sources_for_run(run: Any) -> list[dict[str, Any]]:
     """Sources of a run including the subagents it delegated to (their fetches
     live on the child runs)."""
-    from bran.persistence import list_runs
+    from bran.persistence import get_run_events_many, list_runs
 
-    events = list((run.metadata or {}).get("events") or [])
-    for child in list_runs(parent_run_id=run.id, limit=50):
-        events += (child.metadata or {}).get("events") or []
+    ids = [run.id] + [c.id for c in list_runs(parent_run_id=run.id, limit=50)]
+    kept = get_run_events_many(ids)
+    events = [ev for run_id in ids for ev in kept.get(run_id, [])]
     return extract_sources(run.result, events)

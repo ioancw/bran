@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from bran.api import build_app
-from bran.persistence import RunRecord, insert_run, utcnow_iso
+from bran.persistence import RunRecord, get_run_events, insert_run, utcnow_iso
 from bran.web.events import STORED_RESULT_CHARS, compact_for_storage, events_from_runs
 
 
@@ -124,7 +124,7 @@ def test_drive_stores_events_on_the_run(monkeypatch):
             pass
 
     asyncio.run(go())
-    kept = record.metadata["events"]
+    kept = get_run_events(record.id)
     assert [e["type"] for e in kept] == ["text", "result"]
     assert kept[0]["text"] == "hello there"
     assert "ts" in kept[0]

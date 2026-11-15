@@ -139,6 +139,27 @@ def save_attachment(filename: str, data: bytes) -> dict[str, Any]:
     return {"name": safe, "path": str(dest), "size_human": _fmt_size(len(data))}
 
 
+def prune_uploads(older_than_days: int) -> int:
+    """Delete chat attachments not touched for N days (0 = keep forever).
+    Attachments are one-off inputs: nothing lists them, so without this they
+    accumulate for good. Returns how many files were removed."""
+    import time
+
+    d = SETTINGS.bran_home / "uploads"
+    if older_than_days <= 0 or not d.is_dir():
+        return 0
+    cutoff = time.time() - older_than_days * 86400
+    removed = 0
+    for p in d.iterdir():
+        try:
+            if p.is_file() and p.stat().st_mtime < cutoff:
+                p.unlink()
+                removed += 1
+        except OSError:
+            continue
+    return removed
+
+
 def workdir_prompt(work_dir: str) -> str | None:
     """The "## Working folder" system-prompt section for a project, or None.
 

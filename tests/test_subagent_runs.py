@@ -10,7 +10,7 @@ from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock, ToolUse
 from fastapi.testclient import TestClient
 
 from bran.api import build_app
-from bran.persistence import RunRecord, get_run, insert_run, list_runs
+from bran.persistence import RunRecord, get_run, get_run_events, insert_run, list_runs
 
 
 def _result(**kw) -> ResultMessage:
@@ -67,8 +67,8 @@ def test_delegation_becomes_a_child_run(monkeypatch):
     assert c.metadata["depth"] == 1 and c.metadata["tool_use_id"] == "t1"
     assert c.duration_ms is not None and c.ended_at
     # The subagent's inner prose lives on the child, not the parent.
-    assert [e["text"] for e in c.metadata["events"] if e["type"] == "text"] == ["inner: searching…"]
-    parent_texts = [e["text"] for e in parent.metadata["events"] if e["type"] == "text"]
+    assert [e["text"] for e in get_run_events(c.id) if e["type"] == "text"] == ["inner: searching…"]
+    parent_texts = [e["text"] for e in get_run_events(parent.id) if e["type"] == "text"]
     assert parent_texts == ["The rate is 4%."]
     assert parent.metadata["subagents_invoked"] == ["research"]
     assert parent.metadata["subagent_runs"] == {"t1": c.id}

@@ -37,7 +37,15 @@ from bran.config import SETTINGS
 from bran.live import close as live_close
 from bran.live import publish as live_publish
 from bran.notify import notify_completion
-from bran.persistence import RunRecord, get_run, insert_run, list_runs, update_run, utcnow_iso
+from bran.persistence import (
+    RunRecord,
+    get_run,
+    insert_run,
+    list_runs,
+    save_run_events,
+    update_run,
+    utcnow_iso,
+)
 
 # Events produced INSIDE an inline subagent (messages carrying
 # parent_tool_use_id), buffered per child run until its tool result lands.
@@ -122,7 +130,7 @@ async def _drive(
 
     # Durable copy of the transcript. The SDK's JSONL file is Claude Code's,
     # and it prunes old sessions — chat history and run transcripts used to
-    # vanish with it. Every event is kept on the run row (trimmed + capped) so
+    # vanish with it. Every event is kept (trimmed + capped) in run_events so
     # /history and /transcript can replay without the file.
     kept: list[dict[str, Any]] = []
     kept_chars = 0
@@ -149,7 +157,7 @@ async def _drive(
         record.duration_ms = int((time.perf_counter() - started) * 1000)
         record.ended_at = utcnow_iso()
         if kept:
-            record.metadata["events"] = kept
+            save_run_events(record.id, kept)
             if truncated:
                 record.metadata["events_truncated"] = True
         update_run(record)
@@ -782,7 +790,7 @@ def _finish_subagent_run(child_id: str, text: str, is_error: bool, *, error: str
         child.metadata["agent_id"] = m.group(1)  # resumable via the parent session
     events = _child_events.pop(child_id, None)
     if events:
-        child.metadata["events"] = events
+        save_run_events(child_id, events)
     update_run(child)
     live_close(child_id)
 
