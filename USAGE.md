@@ -129,7 +129,7 @@ Two built-in notifiers, both opt-in via env vars (in `.env` or environment):
 
 ```bash
 BRAN_NOTIFY_BELL=1                                   # beep + one-line summary to stderr
-BRAN_NOTIFY_WEBHOOK_URL=https://ntfy.sh/your-topic   # POST run JSON to a webhook
+BRAN_NOTIFY_WEBHOOK_URL=https://ntfy.sh/your-topic   # push each finished background run (ntfy: plain text; others: JSON with the run's id, agent, status, result, cost — never its transcript)
 ```
 
 The webhook target works with [ntfy.sh](https://ntfy.sh) (push to phone), Slack incoming webhooks, Discord webhooks, or any URL that accepts JSON.
@@ -151,16 +151,21 @@ Hooks fire in a `finally:` block in the runner, so a notifier crash can't break 
 
 `bran serve` exposes two surfaces on the same port:
 
-**Web UI** (no auth in v1 — the `get_current_user()` stub is the seam for OAuth later):
+**Web UI** (no login — it is meant for localhost; requests from other sites and unknown Host headers are refused):
 
 | Path | Purpose |
 | --- | --- |
-| `/` | Dashboard — fire a new run, see recent runs |
-| `/runs`, `/runs/{id}` | Browse runs (filterable) and inspect one in detail |
-| `/agents` | Agent roster |
-| `/schedules` | Add/remove cron schedules |
+| `/app/` | Today — what needs attention, today's deliveries, upcoming runner fires |
+| `/app/chat`, `/app/chat/{id}` | Chat with the orchestrator (or an `@agent`) |
+| `/app/outputs` | Reading inbox for finished runner and background results |
+| `/app/runners`, `/app/runners/{name}` | Scheduled runners: create, edit, pause, history |
+| `/app/runs`, `/app/runs/{id}` | Activity log and one run in detail (live while it executes) |
+| `/app/projects`, `/app/projects/{id}` | Projects: instructions, memory, files, chats |
+| `/app/agents`, `/app/settings` | Agent library; appearance, "About me", limits |
 
-The UI is HTMX + Tailwind, served from the same FastAPI process. Run rows live-refresh while a run is in flight (3s polling). Just point a browser at `http://127.0.0.1:8765`.
+The UI is a Svelte single-page app (source in `frontend/`, built into `src/bran/web/spa/`) served by the same FastAPI process and talking to the `/spa/*` JSON endpoints. Point a browser at `http://127.0.0.1:8765/app/`.
+
+Files in a project's folder open in the browser from the app's own address, so they are served sandboxed (`Content-Security-Policy: sandbox`): a page an agent wrote can render and print, but cannot act on bran as you.
 
 **JSON API** (bearer auth required, prefixed `/api`):
 
@@ -201,6 +206,10 @@ bran serve   # in tmux or screen so it survives terminal close
 ```
 
 APScheduler inside the same `bran serve` process. Only fires while `bran serve` is up; on a laptop that means while the host is on and your terminal session is alive. Schedules persist in SQLite so they survive restarts.
+
+**Missed fires:** if the server was down when a recurring runner was due, it runs once when the server comes back, provided the missed slot is at most `BRAN_CATCHUP_HOURS` old (default 12; 0 turns this off). Today's status strip says when that happened. Older misses are skipped and logged.
+
+**Retention:** every night at 03:30 the server drops the step-by-step transcripts of runs older than `BRAN_EVENTS_RETENTION_DAYS` (default 180) and chat attachments older than `BRAN_UPLOADS_RETENTION_DAYS` (default 30); 0 keeps them forever. Runs, their results and the files they wrote are never removed. `bran prune` does the same on demand, and `bran prune --vacuum` also shrinks the database file.
 
 **Reliability:** a failed scheduled run is retried automatically with backoff (1m → 5m → 15m, up to `BRAN_RUNNER_RETRIES` times, default 2) — a flaky feed doesn't cost you the day's briefing. Every run is also bounded by `BRAN_RUN_TIMEOUT` (seconds, default 3600, 0 = off) so a hung SDK subprocess can't wedge the scheduler.
 
