@@ -233,6 +233,44 @@ def backup(
             console.print(f"  pruned {stale.name}")
 
 
+@app.command()
+def prune(
+    events_days: int | None = typer.Option(
+        None, "--events-days",
+        help="Drop stored run transcripts older than this many days "
+             "(default: BRAN_EVENTS_RETENTION_DAYS; 0 = keep).",
+    ),
+    uploads_days: int | None = typer.Option(
+        None, "--uploads-days",
+        help="Delete chat attachments untouched for this many days "
+             "(default: BRAN_UPLOADS_RETENTION_DAYS; 0 = keep).",
+    ),
+    vacuum: bool = typer.Option(
+        False, "--vacuum",
+        help="Also rebuild the database file so freed space goes back to the disk. "
+             "Needs free disk about the size of the database; best run with the server stopped.",
+    ),
+) -> None:
+    """Apply the retention rules now (the server does this nightly at 03:30).
+
+    Runs, their results and their artifacts are never removed — only the
+    step-by-step transcripts of old runs, and old chat attachments.
+    """
+    from bran.persistence import prune_run_events
+    from bran.persistence import vacuum as vacuum_db
+    from bran.project_files import prune_uploads
+
+    e_days = SETTINGS.events_retention_days if events_days is None else events_days
+    u_days = SETTINGS.uploads_retention_days if uploads_days is None else uploads_days
+    console.print(f"Dropped {prune_run_events(e_days)} stored transcript(s) older than {e_days} days.")
+    console.print(f"Deleted {prune_uploads(u_days)} attachment(s) older than {u_days} days.")
+    if vacuum:
+        before = SETTINGS.db_path.stat().st_size
+        vacuum_db()
+        after = SETTINGS.db_path.stat().st_size
+        console.print(f"[green]Vacuumed[/] — {before:,} → {after:,} bytes")
+
+
 # ---------------------------------------------------------------------------
 # bran runs
 # ---------------------------------------------------------------------------

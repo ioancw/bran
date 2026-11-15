@@ -67,6 +67,18 @@ class Settings:
     # through the CLI environment. BRAN_SUBAGENT_DEPTH / BRAN_SUBAGENT_CONCURRENCY.
     subagent_depth: int
     subagent_concurrency: int
+    # --- Catch-up and retention --------------------------------------------
+    # A recurring runner whose fire was missed while the server was down is
+    # run once at startup if the missed slot is at most this many hours old.
+    # 0 disables. BRAN_CATCHUP_HOURS.
+    catchup_hours: int = 12
+    # Stored run transcripts older than this are dropped by the nightly prune
+    # (the run and its result stay). 0 keeps them forever.
+    # BRAN_EVENTS_RETENTION_DAYS.
+    events_retention_days: int = 180
+    # Chat attachments untouched for this long are deleted by the nightly
+    # prune. 0 keeps them forever. BRAN_UPLOADS_RETENTION_DAYS.
+    uploads_retention_days: int = 30
 
     @property
     def claude_dir(self) -> Path:
@@ -150,6 +162,9 @@ def load_settings() -> Settings:
         max_spawn_depth=max(1, int(os.getenv("BRAN_MAX_SPAWN_DEPTH", "2"))),
         subagent_depth=max(1, int(os.getenv("BRAN_SUBAGENT_DEPTH", "1"))),
         subagent_concurrency=max(1, int(os.getenv("BRAN_SUBAGENT_CONCURRENCY", "5"))),
+        catchup_hours=max(0, int(os.getenv("BRAN_CATCHUP_HOURS", "12"))),
+        events_retention_days=max(0, int(os.getenv("BRAN_EVENTS_RETENTION_DAYS", "180"))),
+        uploads_retention_days=max(0, int(os.getenv("BRAN_UPLOADS_RETENTION_DAYS", "30"))),
     )
 
 

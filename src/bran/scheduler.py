@@ -291,7 +291,10 @@ async def _run_verification(
 async def _fire(
     agent: str, task: str, schedule_name: str, project_id: str | None,
     schedule_id: str | None = None, once: bool = False, attempt: int = 0,
+    catch_up_for: str | None = None,
 ) -> None:
+    """Run one fire of a runner. `catch_up_for` is the slot (ISO time) this
+    fire makes up for when it was missed while the server was down."""
     from bran.persistence import get_schedule
 
     # Retries fire minutes after the failure — re-check the runner still exists
@@ -321,6 +324,11 @@ async def _fire(
             schedule_id=schedule_id, append_system=append_system,
         )
         failed = record.status != "completed"
+        if catch_up_for:
+            from bran.persistence import update_run
+
+            record.metadata["catch_up_for"] = catch_up_for
+            update_run(record)
         if not failed and rec is not None and rec.verify:
             await _run_verification(
                 record, agent, task, project_id, schedule_id, append_system
@@ -386,15 +394,188 @@ def _schedule_retry(
     return True
 
 
+# ---------------------------------------------------------------------------
+# Catch-up. Jobs live in memory, so a restart recomputes every next fire from
+# "now" — a slot that fell while the server was down is simply gone unless we
+# look for it. A heartbeat records when the scheduler was last alive; at
+# startup each recurring runner that had a slot between then and now (within
+# BRAN_CATCHUP_HOURS) and has not run since is fired once.
+# ---------------------------------------------------------------------------
+
+_ALIVE_KEY = "scheduler_alive_at"
+_HEARTBEAT_S = 60
+# What the last startup did about missed slots (shown by /spa/health).
+_startup_report: dict[str, list[dict[str, str]]] = {"caught_up": [], "skipped": []}
+
+
+def last_due(cron: str, since, now):
+    """The most recent moment in (since, now] at which `cron` was due, or None.
+    `since`/`now` are timezone-aware datetimes."""
+    trigger = _trigger_from_cron(cron)
+    last = None
+    due = trigger.get_next_fire_time(None, since)
+    for _ in range(20_000):  # a per-minute cron over the longest window is ~1.4k
+        if due is None or due > now:
+            break
+        if due > since:
+            last = due
+        due = trigger.get_next_fire_time(due, now)
+    return last
+
+
+def plan_catch_up(now=None) -> dict[str, list[dict[str, str]]]:
+    """Which recurring runners missed a slot while the server was down.
+    {"caught_up": [...]} are due a run now; {"skipped": [...]} missed one too
+    long ago to be worth running. Each entry: {name, due}. Pure planning —
+    nothing is fired here."""
+    from datetime import datetime, timedelta, timezone
+
+    from bran.persistence import get_setting, list_runs
+
+    report: dict[str, list[dict[str, str]]] = {"caught_up": [], "skipped": []}
+    hours = SETTINGS.catchup_hours
+    alive_raw = get_setting(_ALIVE_KEY)
+    if hours <= 0 or not alive_raw:
+        return report  # off, or no record of when the scheduler last ran
+    now = now or datetime.now(timezone.utc)
+    try:
+        alive = datetime.fromisoformat(alive_raw)
+    except ValueError:
+        return report
+    window_start = now - timedelta(hours=hours)
+    for rec in list_schedules():
+        if not rec.enabled or rec.run_at:
+            continue  # one-shots are covered by their unlimited misfire grace
+        try:
+            created = datetime.fromisoformat(rec.created_at)
+            since = max(alive, created)
+            if since >= now:
+                continue
+            due = last_due(rec.cron, max(since, window_start), now)
+            if due is None:
+                if since < window_start and last_due_exists(rec.cron, since, window_start):
+                    report["skipped"].append({"name": rec.name, "due": ""})
+                continue
+            prior = list_runs(schedule_id=rec.id, limit=1)
+            if prior and datetime.fromisoformat(prior[0].started_at) >= due:
+                continue  # it ran after all (a retry, or "run now")
+        except (ValueError, TypeError):
+            log.exception("catch-up: could not evaluate runner %s", rec.name)
+            continue
+        report["caught_up"].append({"name": rec.name, "due": due.astimezone(timezone.utc).isoformat()})
+    return report
+
+
+def last_due_exists(cron: str, since, until) -> bool:
+    """True when `cron` had at least one slot in (since, until]."""
+    from datetime import timedelta
+
+    due = _trigger_from_cron(cron).get_next_fire_time(None, since + timedelta(microseconds=1))
+    return due is not None and due <= until
+
+
+def _queue_catch_up(scheduler: AsyncIOScheduler) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from apscheduler.triggers.date import DateTrigger
+
+    from bran.persistence import get_schedule
+
+    global _startup_report
+    try:
+        _startup_report = plan_catch_up()
+    except Exception:
+        log.exception("catch-up planning failed")
+        return
+    for entry in _startup_report["skipped"]:
+        log.warning(
+            "runner %s missed a fire more than %dh ago while the server was down — not catching up",
+            entry["name"], SETTINGS.catchup_hours,
+        )
+    for i, entry in enumerate(_startup_report["caught_up"]):
+        rec = get_schedule(entry["name"])
+        if rec is None:
+            continue
+        log.warning("runner %s missed its %s fire while the server was down — running it now",
+                    rec.name, entry["due"])
+        scheduler.add_job(
+            _fire,
+            # Staggered a little so a long outage doesn't start everything in
+            # the same instant (the run-slot gate bounds concurrency anyway).
+            trigger=DateTrigger(run_date=datetime.now(timezone.utc) + timedelta(seconds=5 + 10 * i)),
+            args=(rec.agent, rec.task, rec.name, rec.project_id, rec.id, False, 0, entry["due"]),
+            id=f"bran-catchup:{rec.name}",
+            name=f"{rec.name} (catch-up)",
+            replace_existing=True,
+            misfire_grace_time=None,
+        )
+
+
+def _heartbeat() -> None:
+    from bran.persistence import set_setting, utcnow_iso
+
+    try:
+        set_setting(_ALIVE_KEY, utcnow_iso())
+    except Exception:
+        log.exception("scheduler heartbeat failed")
+
+
+async def _nightly_prune() -> None:
+    """Retention: drop old stored transcripts and stale chat attachments."""
+
+    def work() -> tuple[int, int]:
+        from bran.persistence import prune_run_events
+        from bran.project_files import prune_uploads
+
+        return (
+            prune_run_events(SETTINGS.events_retention_days),
+            prune_uploads(SETTINGS.uploads_retention_days),
+        )
+
+    try:
+        events, uploads = await asyncio.to_thread(work)
+        if events or uploads:
+            log.info("nightly prune: dropped %d stored transcript(s), %d attachment(s)", events, uploads)
+    except Exception:
+        log.exception("nightly prune failed")
+
+
+def scheduler_status() -> dict[str, object]:
+    """For /spa/health: is the scheduler running, when was it last alive, and
+    what the last startup did about fires missed during downtime."""
+    from bran.persistence import get_setting
+
+    return {
+        "running": _scheduler is not None,
+        "alive_at": get_setting(_ALIVE_KEY) or None,
+        "catchup_hours": SETTINGS.catchup_hours,
+        "caught_up": list(_startup_report["caught_up"]),
+        "skipped": list(_startup_report["skipped"]),
+    }
+
+
 def start_scheduler() -> None:
-    """Spin up APScheduler and register all persisted schedules."""
+    """Spin up APScheduler, register all persisted schedules, and make up
+    for recurring fires missed while the server was down."""
     global _scheduler
     if _scheduler is not None:
         return
+    from apscheduler.triggers.interval import IntervalTrigger
+
     _scheduler = AsyncIOScheduler()
     for rec in list_schedules():
         if rec.enabled:
             _add_job(_scheduler, rec)
+    _queue_catch_up(_scheduler)  # reads the previous process's heartbeat…
+    _heartbeat()                 # …before this one overwrites it
+    _scheduler.add_job(
+        _heartbeat, trigger=IntervalTrigger(seconds=_HEARTBEAT_S),
+        id="bran-internal:heartbeat", replace_existing=True, coalesce=True, max_instances=1,
+    )
+    _scheduler.add_job(
+        _nightly_prune, trigger=CronTrigger(hour=3, minute=30),
+        id="bran-internal:prune", replace_existing=True, coalesce=True, max_instances=1,
+    )
     _scheduler.start()
     log.info("scheduler started with %d jobs", len(_scheduler.get_jobs()))
 
@@ -403,6 +584,7 @@ def stop_scheduler() -> None:
     global _scheduler
     if _scheduler is None:
         return
+    _heartbeat()  # a clean stop is "alive until now"
     _scheduler.shutdown(wait=False)
     _scheduler = None
 
@@ -444,9 +626,10 @@ def _add_job(scheduler: AsyncIOScheduler, rec: ScheduleRecord) -> None:
     # Misfire policy: a one-shot must fire even if its moment passed while the
     # server was down (grace=None = unlimited) — _fire disables it afterwards,
     # so a still-enabled past-due one-shot re-registering on every restart and
-    # never firing (a "zombie") can't happen. Cron jobs get an hour: a fire
-    # missed during a restart window still runs (coalesced to one), while a
-    # server down longer than that skips to the next regular slot.
+    # never firing (a "zombie") can't happen. Cron jobs get an hour, which only
+    # covers a fire delayed while the process is UP (a busy loop): jobs live in
+    # memory, so a slot missed while the server was down is not a misfire to
+    # APScheduler at all — _queue_catch_up handles those at startup.
     scheduler.add_job(
         _fire,
         trigger=trigger,

@@ -73,6 +73,17 @@ def _recent_auth_failure() -> dict[str, Any] | None:
     return None
 
 
+def _scheduler_status() -> dict[str, Any]:
+    """Whether runners can fire, and what the last startup did about fires
+    missed while the server was down (see scheduler.plan_catch_up)."""
+    try:
+        from bran.scheduler import scheduler_status
+
+        return dict(scheduler_status())
+    except Exception:  # noqa: BLE001 — health must never fail on a side panel
+        return {"running": False, "alive_at": None, "catchup_hours": 0, "caught_up": [], "skipped": []}
+
+
 def health_snapshot() -> dict[str, Any]:
     from bran.background import slots_in_use
     from bran.persistence import spend_summary
@@ -96,6 +107,7 @@ def health_snapshot() -> dict[str, Any]:
             "default_model": SETTINGS.default_model,
         },
         "slots": {"in_use": slots_in_use(), "max": SETTINGS.max_concurrent_runs},
+        "scheduler": _scheduler_status(),
         "spend": spend,
         "paths": {
             "bran_home": str(SETTINGS.bran_home),
