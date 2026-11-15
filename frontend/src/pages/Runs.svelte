@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onReturn } from '../lib/refresh'
   import { api } from '../lib/api'
   import { href, link } from '../lib/router.svelte'
   import { fmtCost, fmtDuration, localDateTime, shortId } from '../lib/time'
@@ -72,17 +73,7 @@
     void load()
   })
   // Stay fresh: pick up runs that started/finished while the tab was unfocused.
-  $effect(() => {
-    const refresh = () => {
-      if (document.visibilityState === 'visible') void load()
-    }
-    window.addEventListener('focus', refresh)
-    document.addEventListener('visibilitychange', refresh)
-    return () => {
-      window.removeEventListener('focus', refresh)
-      document.removeEventListener('visibilitychange', refresh)
-    }
-  })
+  $effect(() => onReturn(() => void load()))
 
   async function removeRun(r: RunRecord) {
     const what = r.status === 'completed' ? 'this completed run and its output' : 'this run'
@@ -210,51 +201,6 @@
     margin-bottom: 14px;
     flex-wrap: wrap;
     align-items: center;
-  }
-  .seg {
-    display: inline-flex;
-    gap: 4px;
-    flex-wrap: wrap;
-  }
-  .seg-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    height: 26px;
-    padding: 0 9px;
-    background: var(--surface);
-    border: 1px solid var(--border2);
-    border-radius: var(--radius);
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--fg-dim);
-    cursor: pointer;
-    transition:
-      background var(--dur-1) var(--transition),
-      color var(--dur-1) var(--transition),
-      border-color var(--dur-1) var(--transition);
-  }
-  .seg-btn:hover {
-    background: var(--surface2);
-    color: var(--fg-bright);
-  }
-  .seg-btn.on {
-    background: var(--accent-glow);
-    border-color: transparent;
-    color: var(--accent-soft);
-  }
-  .seg-btn.warn.on {
-    background: var(--red-soft);
-    color: var(--red);
-  }
-  .seg-n {
-    font-size: 11px;
-    color: var(--muted);
-    font-variant-numeric: tabular-nums;
-  }
-  .seg-btn.on .seg-n {
-    color: inherit;
-    opacity: 0.75;
   }
   .id-cell {
     display: inline-flex;

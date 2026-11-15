@@ -3,7 +3,7 @@
   // live conversation list (Recents) scoped to the current project. Collapses
   // to a 56px icon rail on desktop (Ctrl/Cmd+B); becomes an off-canvas drawer
   // on phones.
-  import { untrack } from 'svelte'
+  import { tick, untrack } from 'svelte'
   import { router, href, link, navigate } from '../lib/router.svelte'
   import { workspace, loadChats, loadProjects, projectName } from '../lib/workspace.svelte'
   import { relativeTime } from '../lib/time'
@@ -119,15 +119,43 @@
   let renameInput = $state<HTMLInputElement | null>(null)
   let renameSaving = false
 
+  // The "…" button that opened the menu — focus goes back to it on close.
+  let menuTrigger: HTMLElement | null = null
   function openMenu(id: string, e: Event) {
     e.preventDefault()
     e.stopPropagation()
     moveOpen = false
+    menuTrigger = e.currentTarget as HTMLElement
     menuFor = menuFor === id ? null : id
   }
-  function closeMenu() {
+  // `refocus`: put the keyboard back on the trigger (Escape). Actions that
+  // move the user elsewhere (rename's input, a confirm dialog) leave it off.
+  function closeMenu(refocus = false) {
     menuFor = null
     moveOpen = false
+    if (refocus) menuTrigger?.focus()
+  }
+  // Menu keyboard model, as in the chat's scope menu: opening focuses the
+  // first item; arrows move (wrapping), Home/End jump, Enter/Space activate.
+  function menuButtons(): HTMLButtonElement[] {
+    return Array.from(document.querySelectorAll<HTMLButtonElement>('.recent-menu button'))
+  }
+  $effect(() => {
+    if (menuFor === null) return
+    void tick().then(() => menuButtons()[0]?.focus())
+  })
+  function onMenuKeydown(e: KeyboardEvent) {
+    const opts = menuButtons()
+    if (!opts.length) return
+    const cur = opts.indexOf(document.activeElement as HTMLButtonElement)
+    let next = -1
+    if (e.key === 'ArrowDown') next = (cur + 1) % opts.length
+    else if (e.key === 'ArrowUp') next = (cur - 1 + opts.length) % opts.length
+    else if (e.key === 'Home') next = 0
+    else if (e.key === 'End') next = opts.length - 1
+    else return
+    e.preventDefault()
+    opts[next].focus()
   }
   function onWindowClick(e: MouseEvent) {
     if (menuFor === null) return
@@ -138,7 +166,7 @@
   function onWindowKeydown(e: KeyboardEvent) {
     if (e.key === 'Escape' && menuFor !== null) {
       e.preventDefault()
-      closeMenu()
+      closeMenu(true)
     }
   }
 
@@ -323,7 +351,13 @@
             <Icon name="more" size={14} />
           </button>
           {#if menuFor === c.id}
-            <div class="recent-menu card elev-md" role="menu" aria-label="Chat options">
+            <div
+              class="recent-menu card elev-md"
+              role="menu"
+              tabindex="-1"
+              aria-label="Chat options"
+              onkeydown={onMenuKeydown}
+            >
               <button class="menu-item" role="menuitem" onclick={() => startRename(c)}>
                 <Icon name="pencil" size={13} />Rename
               </button>

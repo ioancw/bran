@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onReturn } from './lib/refresh'
   import { router } from './lib/router.svelte'
   import { installCodeCopyHandler } from './lib/copy-code'
   import { api } from './lib/api'
@@ -56,17 +57,7 @@
     void loadCounts()
   })
   // Keep the badge honest when a runner fires while the tab is backgrounded.
-  $effect(() => {
-    const refresh = () => {
-      if (document.visibilityState === 'visible') void loadCounts()
-    }
-    window.addEventListener('focus', refresh)
-    document.addEventListener('visibilitychange', refresh)
-    return () => {
-      window.removeEventListener('focus', refresh)
-      document.removeEventListener('visibilitychange', refresh)
-    }
-  })
+  $effect(() => onReturn(() => void loadCounts()))
 
   // The Outputs badge is an inbox count — *new deliveries since you last read
   // them* — not a total-ever. Hidden when there's nothing new; visiting
@@ -145,15 +136,10 @@
     const timer = setInterval(() => {
       if (document.visibilityState === 'visible') void loadHealth()
     }, 60_000)
-    const refresh = () => {
-      if (document.visibilityState === 'visible') void loadHealth()
-    }
-    window.addEventListener('focus', refresh)
-    document.addEventListener('visibilitychange', refresh)
+    const stop = onReturn(() => void loadHealth())
     return () => {
       clearInterval(timer)
-      window.removeEventListener('focus', refresh)
-      document.removeEventListener('visibilitychange', refresh)
+      stop()
     }
   })
 </script>

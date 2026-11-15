@@ -560,6 +560,10 @@ kbd {
   font-weight: 500;
   color: var(--fg-dim);
   cursor: pointer;
+  transition:
+    background var(--dur-1) var(--transition),
+    color var(--dur-1) var(--transition),
+    border-color var(--dur-1) var(--transition);
 }
 .seg-btn:hover {
   background: var(--surface2);
@@ -569,6 +573,11 @@ kbd {
   background: var(--accent-glow);
   border-color: transparent;
   color: var(--accent-soft);
+}
+/* A filter that selects problems (e.g. "Failed"). */
+.seg-btn.warn.on {
+  background: var(--red-soft);
+  color: var(--red);
 }
 .seg-n {
   font-size: 11px;

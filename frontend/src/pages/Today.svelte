@@ -4,6 +4,7 @@
   // today's deliveries (with unread markers), upcoming runner fires with live
   // countdowns, and a one-line activity tally. Composes the existing
   // /spa/runs + /spa/schedules data; no dedicated backend endpoint.
+  import { onReturn } from '../lib/refresh'
   import { api } from '../lib/api'
   import { href, link } from '../lib/router.svelte'
   import { relativeTime, localDateTime, localClock, countdown, fmtCost } from '../lib/time'
@@ -127,17 +128,7 @@
   $effect(() => {
     void load()
   })
-  $effect(() => {
-    const refresh = () => {
-      if (document.visibilityState === 'visible') void load()
-    }
-    window.addEventListener('focus', refresh)
-    document.addEventListener('visibilitychange', refresh)
-    return () => {
-      window.removeEventListener('focus', refresh)
-      document.removeEventListener('visibilitychange', refresh)
-    }
-  })
+  $effect(() => onReturn(() => void load()))
 
   let clearing = $state(false)
   async function clearFailures() {

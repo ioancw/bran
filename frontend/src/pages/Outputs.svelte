@@ -4,6 +4,7 @@
   // by day and rendered inline. This is the "delivery" half of the agent-runner:
   // Runs is the activity *log* (a debug table); Outputs is where you read the
   // briefing without digging into a transcript.
+  import { onReturn } from '../lib/refresh'
   import { api } from '../lib/api'
   import { href, link, navigate } from '../lib/router.svelte'
   import { relativeTime, localDateTime } from '../lib/time'
@@ -263,17 +264,7 @@
     return () => clearTimeout(t)
   })
   // Stay fresh: a runner may fire while the tab sits in the background.
-  $effect(() => {
-    const refresh = () => {
-      if (document.visibilityState === 'visible') void load()
-    }
-    window.addEventListener('focus', refresh)
-    document.addEventListener('visibilitychange', refresh)
-    return () => {
-      window.removeEventListener('focus', refresh)
-      document.removeEventListener('visibilitychange', refresh)
-    }
-  })
+  $effect(() => onReturn(() => void load()))
 </script>
 
 <svelte:window onkeydown={onKeydown} />
@@ -579,46 +570,8 @@
   .search-wrap input.out-search.field {
     padding-left: 32px;
   }
+  /* The segmented control itself is global (.seg in global.css). */
   .seg {
-    display: inline-flex;
-    gap: 4px;
-    flex-wrap: wrap;
     margin-left: auto;
-  }
-  .seg-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    height: 26px;
-    padding: 0 9px;
-    background: var(--surface);
-    border: 1px solid var(--border2);
-    border-radius: var(--radius);
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--fg-dim);
-    cursor: pointer;
-    transition:
-      background var(--dur-1) var(--transition),
-      color var(--dur-1) var(--transition),
-      border-color var(--dur-1) var(--transition);
-  }
-  .seg-btn:hover {
-    background: var(--surface2);
-    color: var(--fg-bright);
-  }
-  .seg-btn.on {
-    background: var(--accent-glow);
-    border-color: transparent;
-    color: var(--accent-soft);
-  }
-  .seg-n {
-    font-size: 11px;
-    color: var(--muted);
-    font-variant-numeric: tabular-nums;
-  }
-  .seg-btn.on .seg-n {
-    color: inherit;
-    opacity: 0.75;
   }
 </style>
