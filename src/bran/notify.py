@@ -24,7 +24,7 @@ import logging
 import os
 import sys
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict
+from typing import Any
 
 from bran.persistence import RunRecord
 
@@ -111,8 +111,8 @@ async def webhook_notifier(record: RunRecord) -> None:
     """Push the run to BRAN_NOTIFY_WEBHOOK_URL.
 
     ntfy targets get a plain-text body (the result snippet — what you want on
-    a lock screen); everything else (Slack/Discord/custom) gets the run record
-    as JSON with `summary` and `alert` fields added.
+    a lock screen); everything else (Slack/Discord/custom) gets the run's public
+    fields as JSON (see `webhook_payload`) with `summary` and `alert` added.
     """
     url = os.getenv("BRAN_NOTIFY_WEBHOOK_URL")
     if not url:
@@ -154,14 +154,50 @@ async def webhook_notifier(record: RunRecord) -> None:
                 if record.status != "completed":
                     body = (record.error or "").strip()[:600]
                 body = body or f"{record.agent} {record.status}"
-                await client.post(url, content=body.encode("utf-8"), headers=headers)
+                resp = await client.post(url, content=body.encode("utf-8"), headers=headers)
             else:
-                payload = asdict(record)
-                payload["summary"] = _result_snippet(record)
-                payload["alert"] = alert
-                await client.post(url, json=payload, headers=headers)
+                resp = await client.post(
+                    url, json=webhook_payload(record, alert), headers=headers
+                )
+        code = getattr(resp, "status_code", None)
+        if isinstance(code, int) and code >= 400:
+            log.warning(
+                "webhook notifier: %s answered HTTP %s for run %s — the notification was not delivered",
+                _safe_target(url), code, record.id,
+            )
     except Exception:
         log.exception("webhook notifier failed")
+
+
+# What a JSON webhook receives. An explicit list, never asdict(record): the
+# record's metadata holds internal bookkeeping (and used to hold the whole
+# stored transcript — tool results, file contents, fetched pages), none of
+# which belongs in a third party's channel.
+_WEBHOOK_FIELDS = (
+    "id", "agent", "task", "status", "source", "project_id", "schedule_id",
+    "session_id", "parent_run_id", "started_at", "ended_at", "duration_ms",
+    "total_cost_usd", "num_turns", "result", "error",
+)
+_WEBHOOK_TEXT_CAP = 32_000
+
+
+def webhook_payload(record: RunRecord, alert: bool) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for name in _WEBHOOK_FIELDS:
+        value = getattr(record, name)
+        if isinstance(value, str) and len(value) > _WEBHOOK_TEXT_CAP:
+            value = value[:_WEBHOOK_TEXT_CAP] + "\n[… truncated …]"
+        payload[name] = value
+    payload["summary"] = _result_snippet(record)
+    payload["alert"] = alert
+    return payload
+
+
+def _safe_target(url: str) -> str:
+    """The webhook's host for log lines — the path is often the secret."""
+    from urllib.parse import urlsplit
+
+    return urlsplit(url).hostname or "webhook"
 
 
 def bell_notifier(record: RunRecord) -> None:
