@@ -241,6 +241,16 @@
           <Icon name="stop" size={13} />{cancelling ? 'Cancelling…' : 'Cancel'}
         </button>
       {:else}
+        {#if resultFirst}
+          <a
+            href={href('/read/' + runId)}
+            use:link
+            class="btn-outline"
+            title="Just the report, as a page to read"
+          >
+            <Icon name="book-open" size={13} />Reading view
+          </a>
+        {/if}
         <button class="btn-outline" disabled={rerunning} onclick={rerun}>
           <Icon name="refresh" size={13} />{rerunning ? 'Starting…' : 'Re-run'}
         </button>
@@ -257,8 +267,8 @@
     <Skeleton rows={6} />
   {/if}
   {#if run}
-    <div class="grid grid-cols-4 gap-6">
-      <aside class="col-span-1 space-y-3">
+    <div class="grid grid-cols-4 gap-6 run-grid">
+      <aside class="col-span-1 space-y-3 run-side">
         <div class="card">
           <h2 class="card-title">Task</h2>
           <div class="task-text">{run.task}</div>
@@ -460,6 +470,12 @@
 </Page>
 
 <style>
+  /* One column (tablet, phone): the report first, the run's details after. */
+  @media (max-width: 1024px) {
+    .run-side {
+      order: 2;
+    }
+  }
   .title-count {
     font-weight: 400;
     color: var(--muted);

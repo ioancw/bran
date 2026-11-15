@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applyEvent, freshState, groupRows, groupLabel, type ChatItem, type ToolItem } from './events'
+import { applyEvent, freshState, groupRows, type ChatItem, type ToolItem } from './events'
 import { shellLooksFailed, dayKey } from './format'
 
 function tool(name: string, id: string, isError = false): ToolItem {
@@ -17,7 +17,7 @@ function tool(name: string, id: string, isError = false): ToolItem {
 }
 
 describe('groupRows', () => {
-  it('folds a burst of 3+ consecutive tool calls of mixed names into one group', () => {
+  it('folds a burst of consecutive tool calls of mixed names into one group', () => {
     const items: ChatItem[] = [
       { kind: 'user', text: 'go' },
       tool('Read', 'a'),
@@ -32,10 +32,27 @@ describe('groupRows', () => {
     expect(g.idx).toBe(1)
   })
 
-  it('leaves runs shorter than 3 as individual rows', () => {
-    const rows = groupRows([tool('Read', 'a'), tool('Grep', 'b')])
-    expect(rows.every((r) => !r.group)).toBe(true)
-    expect(rows.map((r) => r.idx)).toEqual([0, 1])
+  it('folds even a single call, and the thinking around it, into one activity row', () => {
+    const rows = groupRows([
+      { kind: 'user', text: 'go' },
+      { kind: 'thinking', text: 'hmm' },
+      tool('Read', 'a'),
+      { kind: 'thinking', text: 'right' },
+      { kind: 'assistant', text: 'done' },
+    ])
+    expect(rows.map((r) => (r.group ? 'group' : r.item.kind))).toEqual(['user', 'group', 'assistant'])
+    const g = rows[1]
+    expect(g.group && g.steps.map((s) => s.kind)).toEqual(['thinking', 'tool', 'thinking'])
+    expect(g.group && g.tools.map((t) => t.toolId)).toEqual(['a'])
+    expect(g.idx).toBe(1)
+  })
+
+  it('a lone thought is an activity row too', () => {
+    const rows = groupRows([
+      { kind: 'thinking', text: 'hmm' },
+      { kind: 'assistant', text: 'ok' },
+    ])
+    expect(rows.map((r) => r.group)).toEqual([true, false])
   })
 
   it('never groups spawn or plan cards, and they break a run', () => {
@@ -50,33 +67,16 @@ describe('groupRows', () => {
     ]
     const rows = groupRows(items)
     expect(rows.map((r) => (r.group ? 'group' : (r.item as ToolItem).name))).toEqual([
-      'Read',
-      'Read',
+      'group',
       'mcp__bran__spawn_agent',
       'group',
       'mcp__bran__propose_plan',
     ])
   })
-})
 
-describe('groupLabel', () => {
-  it('counts names, most frequent first', () => {
-    const label = groupLabel([
-      tool('Grep', 'a'),
-      tool('Read', 'b'),
-      tool('Read', 'c'),
-      tool('Read', 'd'),
-      tool('WebSearch', 'e'),
-    ])
-    expect(label).toBe('5 tool calls · Read ×3, Grep, WebSearch')
-  })
-  it('strips MCP prefixes in the label', () => {
-    const label = groupLabel([
-      tool('mcp__bran_docs__fetch_url', 'a'),
-      tool('mcp__bran_docs__fetch_url', 'b'),
-      tool('mcp__bran_docs__fetch_url', 'c'),
-    ])
-    expect(label).toBe('3 tool calls · fetch_url ×3')
+  it('a saved document is its own card, never folded', () => {
+    const rows = groupRows([tool('Read', 'a'), tool('mcp__bran_docs__save_document', 'd'), tool('Read', 'b')])
+    expect(rows.map((r) => r.group)).toEqual([true, false, true])
   })
 })
 

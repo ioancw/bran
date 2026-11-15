@@ -175,7 +175,7 @@ describe('delegations', () => {
       durationMs: null,
     })
     const rows = groupRows([mk('Read', 'a'), mk('Agent', 'b'), mk('Grep', 'c'), mk('Read', 'd')])
-    expect(rows.map((r) => r.group)).toEqual([false, false, false, false])
+    expect(rows.map((r) => r.group)).toEqual([true, false, true])
     expect(isDelegation('Task')).toBe(true)
   })
 })

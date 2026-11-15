@@ -3,7 +3,7 @@
   // title (or path) under it. Cited sources carry the text's own link; fetched
   // ones are pages the agent read but didn't cite.
   import type { SourceRef } from '../lib/types'
-  import Icon from './Icon.svelte'
+  import SourceIcon from './SourceIcon.svelte'
 
   let { sources, compact = false }: { sources: SourceRef[]; compact?: boolean } = $props()
 
@@ -31,12 +31,12 @@
         <span class="src-n num">{i + 1}</span>
         {#if s.url}
           <a class="src-body" href={s.url} target="_blank" rel="noopener noreferrer" title={s.url}>
-            <span class="src-domain"><Icon name="link" size={11} />{s.domain}</span>
+            <span class="src-domain"><SourceIcon domain={s.domain} size={13} />{s.domain}</span>
             {#if label(s)}<span class="src-title">{label(s)}</span>{/if}
           </a>
         {:else}
           <span class="src-body" title="Cited by domain only; no link was given">
-            <span class="src-domain"><Icon name="link" size={11} />{s.domain}</span>
+            <span class="src-domain"><SourceIcon domain={s.domain} size={13} />{s.domain}</span>
           </span>
         {/if}
         {#if s.via === 'fetched'}<span class="src-via" title="Read by the agent but not cited">read</span

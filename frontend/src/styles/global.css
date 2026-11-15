@@ -65,6 +65,13 @@ svg {
   vertical-align: middle;
 }
 
+/* Moving between pages: a short cross-fade (lib/router navigate()). */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 0.16s;
+  animation-timing-function: var(--transition);
+}
+
 /* Reduced motion: one global kill-switch. The !important beats inline styles,
    so it also neutralises Svelte's JS-driven transitions. */
 @media (prefers-reduced-motion: reduce) {
@@ -987,10 +994,56 @@ table.bran-table .mono {
   text-decoration: none;
   white-space: nowrap;
 }
-a.cite:hover {
+a.cite:hover,
+.prose-md .cite:focus-visible {
   color: var(--accent-soft);
   border-color: var(--accent-soft);
   text-decoration: none;
+  outline: none;
+}
+/* The source's number in the Sources row above the answer. */
+.prose-md .cite .cite-n {
+  display: inline-block;
+  min-width: 1.1em;
+  margin-right: 5px;
+  padding-right: 5px;
+  border-right: 1px solid var(--border2);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+a.cite:hover .cite-n {
+  color: inherit;
+}
+
+/* Sortable tables: click a heading (lib/sort-tables.ts). */
+.prose-md .md-table-wrap thead th {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.prose-md .md-table-wrap thead th:hover {
+  color: var(--fg-bright);
+}
+.prose-md .md-table-wrap thead th::after {
+  content: '↕';
+  margin-left: 6px;
+  font-size: 0.85em;
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--transition);
+}
+.prose-md .md-table-wrap thead th:hover::after {
+  opacity: 0.45;
+}
+.prose-md .md-table-wrap thead th[aria-sort='ascending']::after {
+  content: '↑';
+  opacity: 1;
+  color: var(--accent-soft);
+}
+.prose-md .md-table-wrap thead th[aria-sort='descending']::after {
+  content: '↓';
+  opacity: 1;
+  color: var(--accent-soft);
 }
 
 /* KaTeX follows the theme. */

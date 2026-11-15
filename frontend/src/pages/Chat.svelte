@@ -22,12 +22,25 @@
   import ErrorBanner from '../components/ErrorBanner.svelte'
   import Icon from '../components/Icon.svelte'
   import ChatLog from '../chat/ChatLog.svelte'
-  import { applyEvent, freshState, toolDisplayName, type ChatItem, type ReducerState } from '../chat/events'
+  import DocPanel from '../components/DocPanel.svelte'
+  import { savedDocName } from '../chat/DocCard.svelte'
+  import { toast } from '../lib/toast.svelte'
+  import {
+    applyEvent,
+    freshState,
+    isWork,
+    toolDisplayName,
+    DOC_TOOL,
+    type ChatItem,
+    type ReducerState,
+  } from '../chat/events'
   import {
     beginTurn,
     endTurnStopped,
     failTurn,
     itemsFromHistory,
+    lastAnswer,
+    lastPrompt,
     readDraft,
     spawnRunIds,
     takeRetry,
@@ -84,6 +97,62 @@
     }
   }
 
+  // Suggested next questions under the newest answer (one small model call
+  // after each completed turn; [] when the server has them switched off).
+  let followups = $state<string[]>([])
+  let followSeq = 0
+  // Thumbs up/down given in this chat: answer key -> 1 / -1.
+  let feedback = $state<Record<string, number>>({})
+  async function loadFeedback(sid: string) {
+    try {
+      const next = await api.chatFeedback(sid)
+      if (loadedId === sid) feedback = next
+    } catch {
+      /* ratings are a nicety */
+    }
+  }
+  async function rateAnswer(key: string, rating: number, prompt: string, answer: string) {
+    const chat = activeChat
+    if (!chat) return
+    const before = feedback
+    const next = { ...feedback }
+    if (rating) next[key] = rating
+    else delete next[key]
+    feedback = next
+    try {
+      await api.rateAnswer(chat.id, { key, rating, prompt, answer, agent: chat.agent })
+    } catch (e) {
+      feedback = before
+      toast(errorText(e), 'err')
+    }
+  }
+
+  // A document open beside the conversation (a report the agent saved, or a
+  // project file). The chat stays live next to it.
+  let doc = $state<{ name: string; title: string; url: string } | null>(null)
+  function docUrl(name: string): string {
+    const pid = activeChat ? activeChat.project_id : router.route.query.get('project')
+    return pid
+      ? `/spa/projects/${encodeURIComponent(pid)}/files/${encodeURIComponent(name)}`
+      : `/spa/documents/${encodeURIComponent(name)}`
+  }
+  function openDoc(name: string, title = '') {
+    doc = { name, title, url: docUrl(name) }
+  }
+  // How many times this conversation has saved the open document: when the
+  // agent saves it again the panel reloads.
+  const docRev = $derived.by(() => {
+    const d = doc
+    if (!d) return 0
+    return items.filter((it) => it.kind === 'tool' && it.name === DOC_TOOL && savedDocName(it) === d.name)
+      .length
+  })
+  function askAboutDoc() {
+    if (!doc) return
+    if (!input.trim()) input = `In ${doc.name}: `
+    focusComposer()
+  }
+
   let rstate: ReducerState = freshState()
   // The conversation the view currently holds: a session id, null for a new
   // chat, and `undefined` until the route effect has synced for the first
@@ -136,11 +205,11 @@
   // while something visible is already moving — streaming text, or a tool row
   // with its own pulsing status dot.
   const lastItem = $derived(items.length ? items[items.length - 1] : null)
+  // An activity row (thinking / tool calls) is its own live indicator, so the
+  // dots only fill the gaps it cannot: before the first event, and after a
+  // card (a spawn, a delegation, a saved document).
   const showPending = $derived(
-    streaming &&
-      streamingIndex < 0 &&
-      !(lastItem?.kind === 'tool' && lastItem.status === 'running') &&
-      lastItem?.kind !== 'footer',
+    streaming && streamingIndex < 0 && lastItem?.kind !== 'footer' && !(lastItem && isWork(lastItem)),
   )
 
   // Breadcrumb scope switcher.
@@ -294,6 +363,10 @@
     loadedId = sid
     loadError = null
     sources = []
+    followups = []
+    followSeq++
+    feedback = {}
+    doc = null
     clearFanoutWatchers()
     watchedSpawnIds = new Set()
     items = []
@@ -319,6 +392,7 @@
       if (loadedId !== sid) return // navigated on while awaiting — drop stale result
       activeChat = c
       setScope(c.project_id) // a chat is scoped to its project (null = loose)
+      void loadFeedback(sid)
     } catch (e) {
       if (loadedId !== sid) return
       activeChat = null
@@ -459,6 +533,33 @@
     void send(text)
   }
 
+  // Ask the last question again, as a new turn (the earlier answer stays).
+  function askAgain() {
+    if (streaming) return
+    const text = lastPrompt(items)
+    if (text) void send(text)
+  }
+  // Hand a prompt to the runner form's "describe it in a sentence" box.
+  function makeRunner(prompt: string) {
+    navigate('/runners?draft=' + encodeURIComponent(prompt.slice(0, 800)))
+  }
+  async function loadFollowups() {
+    const chat = activeChat
+    const question = lastPrompt(items)
+    const answer = lastAnswer(items)
+    if (!chat || !question || !answer) return
+    const seq = ++followSeq
+    try {
+      const next = await api.followups(question, answer)
+      // Not for a conversation, or a turn, that has since moved on.
+      if (seq !== followSeq || loadedId !== chat.id || streaming) return
+      followups = next
+      scrollSoon()
+    } catch {
+      /* suggestions are a nicety */
+    }
+  }
+
   // `override` sends that exact text (a retry, the ?prompt= launcher) and
   // leaves the composer's own draft alone.
   async function send(override?: string) {
@@ -479,6 +580,9 @@
     }
     if (fromComposer) input = ''
     handedBack = null
+    followups = []
+    followSeq++
+    let completed = false
     beginTurn(items, rstate, text)
     streaming = true
     setLive(true, 'thinking…')
@@ -508,7 +612,14 @@
         if (ev.type === 'tool_use') setLive(true, `using ${toolDisplayName(ev.name)}`)
         else if (ev.type === 'thinking') setLive(true, 'thinking…')
         else if (ev.type === 'text') setLive(true, 'responding…')
-        const r = applyEvent(items, rstate, ev)
+        if (ev.type === 'error') completed = false
+        // The turn's closing line says how long it took: stamp the moment.
+        const r = applyEvent(
+          items,
+          rstate,
+          ev.type === 'result' ? { ...ev, ts: new Date().toISOString() } : ev,
+        )
+        if (ev.type === 'result') completed = true
         if (r.session && !activeChat) {
           const id = r.session
           const proj = router.route.query.get('project')
@@ -561,6 +672,7 @@
         void loadChats() // refresh the sidebar Recents
         bumpActivity() // refresh the rail's Progress (new run recorded)
         if (activeChat) void loadSources(activeChat.id)
+        if (completed && epoch === viewEpoch) void loadFollowups()
         // Auto fan-in: if this turn fanned out >=2 new background runs, the
         // server will synthesise when they finish — watch for that synthesis
         // run and refresh the conversation when it lands.
@@ -657,7 +769,10 @@
 
   <div style="display: flex; gap: 16px; flex: 1; min-height: 0;">
     <!-- Center: conversation + composer -->
-    <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative;">
+    <div
+      class="chat-main"
+      style="flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative;"
+    >
       <div
         bind:this={messagesEl}
         class="space-y-3 chat-scroll"
@@ -731,7 +846,31 @@
             {/if}
           </div>
         {:else}
-          <ChatLog {items} {streamingIndex} {sources} onaction={onComposerAction} onretry={retryFailed} />
+          <ChatLog
+            {items}
+            {streamingIndex}
+            {sources}
+            {feedback}
+            busy={streaming}
+            strips={true}
+            onaction={onComposerAction}
+            onretry={retryFailed}
+            onfeedback={activeChat ? rateAnswer : undefined}
+            onregenerate={askAgain}
+            onrunner={makeRunner}
+            onopendoc={openDoc}
+          />
+          {#if followups.length && !streaming}
+            <div class="followups">
+              <div class="label-cap followups-label">Related</div>
+              {#each followups as f (f)}
+                <button class="followup" onclick={() => send(f)}>
+                  <span>{f}</span>
+                  <Icon name="arrow-right" size={14} />
+                </button>
+              {/each}
+            </div>
+          {/if}
           {#if showPending}
             <div class="pending-turn" aria-label="working on a reply">
               <span class="pending-dot"></span><span class="pending-dot"></span><span class="pending-dot"
@@ -800,8 +939,20 @@
       </div>
     </div>
 
-    <!-- Right rail: project context (Cowork-style), only when in a project. -->
-    {#if scopeId || sources.length}
+    {#if doc}
+      <!-- A document open beside the conversation takes the rail's place. -->
+      <div class="doc-col">
+        <DocPanel
+          name={doc.name}
+          title={doc.title}
+          url={doc.url}
+          rev={docRev}
+          onclose={() => (doc = null)}
+          onask={askAboutDoc}
+        />
+      </div>
+    {:else if scopeId || sources.length}
+      <!-- Right rail: project context (Cowork-style), only when in a project. -->
       <aside class="chat-rail">
         {#if scopeId}
           <div style="margin-bottom: 10px; display: flex; align-items: baseline; gap: 8px;">
@@ -810,7 +961,12 @@
             >
             <span class="label-cap">Project</span>
           </div>
-          <ProjectRail projectId={scopeId} mode="chat" sessionId={activeChat?.id ?? null} />
+          <ProjectRail
+            projectId={scopeId}
+            mode="chat"
+            sessionId={activeChat?.id ?? null}
+            onopenfile={(name) => openDoc(name)}
+          />
         {/if}
         {#if sources.length}
           <div class="rail-sources">
@@ -825,6 +981,83 @@
 </Page>
 
 <style>
+  /* Suggested next questions, under the newest answer. */
+  .followups {
+    display: flex;
+    flex-direction: column;
+    padding: 6px 2px 4px;
+    animation: followups-in var(--dur-3) var(--transition) both;
+  }
+  .followups-label {
+    margin-bottom: 4px;
+  }
+  .followup {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 9px 4px;
+    background: transparent;
+    border: 0;
+    border-top: 1px solid var(--border);
+    color: var(--fg);
+    font: inherit;
+    font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+    transition: color var(--dur-1) var(--transition);
+  }
+  .followup span {
+    flex: 1;
+    min-width: 0;
+  }
+  .followup :global(.icon) {
+    color: var(--muted);
+    transition:
+      color var(--dur-1) var(--transition),
+      transform var(--dur-1) var(--transition);
+  }
+  .followup:hover {
+    color: var(--accent-soft);
+  }
+  .followup:hover :global(.icon) {
+    color: var(--accent-soft);
+    transform: translateX(2px);
+  }
+  @keyframes followups-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* The reading column centres itself on a wide pane; on a narrower one (a
+     document or the rail beside it, a small window) it still needs a gutter. */
+  .chat-main {
+    padding: 0 14px;
+  }
+
+  /* A document beside the chat: about half the pane on a wide window, the
+     whole window (over the chat) on a narrow one. */
+  .doc-col {
+    flex: 0 0 min(52%, 760px);
+    min-width: 0;
+    min-height: 0;
+  }
+  @media (max-width: 1100px) {
+    .doc-col {
+      position: fixed;
+      inset: 0;
+      z-index: 120;
+      padding: calc(8px + var(--safe-top)) 8px calc(8px + var(--safe-bottom));
+      background: var(--backdrop);
+    }
+  }
+
   .load-error {
     max-width: 720px;
     margin: 24px auto 0;

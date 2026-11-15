@@ -278,6 +278,22 @@ export const api = {
     const r = await fetch(url, { method: 'DELETE' })
     if (!r.ok) await raiseFor(r, url)
   },
+  // Suggested next questions for the answer just given ([] when off).
+  followups: (prompt: string, answer: string) =>
+    form<{ suggestions: string[] }>('/spa/followups', { prompt, answer }).then((r) => r.suggestions),
+  chatFeedback: (id: string) =>
+    getJSON<Record<string, number>>(`/spa/chats/${encodeURIComponent(id)}/feedback`),
+  rateAnswer: (
+    id: string,
+    fields: { key: string; rating: number; prompt: string; answer: string; agent: string },
+  ) =>
+    form<{ key: string; rating: number }>(`/spa/chats/${encodeURIComponent(id)}/feedback`, {
+      key: fields.key,
+      rating: String(fields.rating),
+      prompt: fields.prompt,
+      answer: fields.answer,
+      agent: fields.agent,
+    }),
   history: (id: string) =>
     getJSON<{ session_id: string; events: ChatEvent[] }>(`/spa/chats/${encodeURIComponent(id)}/history`),
 }

@@ -139,6 +139,21 @@ CREATE TABLE IF NOT EXISTS output_state (
     starred  INTEGER NOT NULL DEFAULT 0,
     read_at  TEXT
 );
+
+-- Thumbs up/down on a chat answer, with the question and answer it was given
+-- for: the raw material of an evaluation set. `answer_key` is the UI's
+-- fingerprint of the answer text, so a rating finds its bubble again after a
+-- reload.
+CREATE TABLE IF NOT EXISTS answer_feedback (
+    session_id  TEXT NOT NULL,
+    answer_key  TEXT NOT NULL,
+    rating      INTEGER NOT NULL,
+    prompt      TEXT NOT NULL DEFAULT '',
+    answer      TEXT NOT NULL DEFAULT '',
+    agent       TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL,
+    PRIMARY KEY (session_id, answer_key)
+);
 """
 
 # Created after the tables AND after any migration has added the columns they
@@ -982,6 +997,7 @@ def delete_chat(chat_id: str) -> bool:
             ).fetchall()
         ]
         conn.execute("DELETE FROM app_settings WHERE key = ?", (f"chat_history_db:{chat_id}",))
+        conn.execute("DELETE FROM answer_feedback WHERE session_id = ?", (chat_id,))
     for i in range(0, len(turns), 500):
         delete_runs(turns[i:i + 500])
     return True
@@ -1174,6 +1190,51 @@ def set_setting(key: str, value: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Answer feedback (thumbs up/down in the chat)
+# ---------------------------------------------------------------------------
+
+def set_answer_feedback(
+    session_id: str, answer_key: str, rating: int, *,
+    prompt: str = "", answer: str = "", agent: str = "",
+) -> None:
+    """Record a rating (1 / -1) for one answer; 0 clears it."""
+    with _lock, _conn() as conn:
+        if rating == 0:
+            conn.execute(
+                "DELETE FROM answer_feedback WHERE session_id = ? AND answer_key = ?",
+                (session_id, answer_key),
+            )
+            return
+        conn.execute(
+            "INSERT INTO answer_feedback "
+            "(session_id, answer_key, rating, prompt, answer, agent, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(session_id, answer_key) DO UPDATE SET "
+            "rating = excluded.rating, prompt = excluded.prompt, answer = excluded.answer, "
+            "agent = excluded.agent, created_at = excluded.created_at",
+            (session_id, answer_key, 1 if rating > 0 else -1, prompt, answer, agent, utcnow_iso()),
+        )
+
+
+def list_answer_feedback(session_id: str) -> dict[str, int]:
+    with _lock, _conn() as conn:
+        rows = conn.execute(
+            "SELECT answer_key, rating FROM answer_feedback WHERE session_id = ?", (session_id,)
+        ).fetchall()
+    return {r["answer_key"]: r["rating"] for r in rows}
+
+
+def all_answer_feedback() -> list[dict[str, Any]]:
+    """Every rated answer, newest first (`bran feedback`)."""
+    with _lock, _conn() as conn:
+        rows = conn.execute(
+            "SELECT session_id, rating, prompt, answer, agent, created_at "
+            "FROM answer_feedback ORDER BY created_at DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
 # Retention — what would otherwise grow without bound.
 # ---------------------------------------------------------------------------
 
@@ -1288,9 +1349,15 @@ def _m2_events_to_table(conn: sqlite3.Connection) -> None:
     )
 
 
+def _m3_answer_feedback(conn: sqlite3.Connection) -> None:
+    """The answer_feedback table. Nothing to reshape: `_TABLES` (run before
+    the migrations) creates it; this step only marks the version at which an
+    existing database gained it."""
+
+
 # Append only. A migration never changes once released: a database that has
 # already run it will not run it again.
-_MIGRATIONS = (_m1_legacy_catch_up, _m2_events_to_table)
+_MIGRATIONS = (_m1_legacy_catch_up, _m2_events_to_table, _m3_answer_feedback)
 
 
 def _bring_up_to_date(conn: sqlite3.Connection) -> None:

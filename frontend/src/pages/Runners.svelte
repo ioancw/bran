@@ -6,7 +6,7 @@
   // and fact-check it") or a template; bran drafts the form, the user checks
   // it and creates it. The full form is always one click away.
   import { api } from '../lib/api'
-  import { router, href, link } from '../lib/router.svelte'
+  import { router, href, link, replace } from '../lib/router.svelte'
   import { confirmDialog } from '../lib/confirm.svelte'
   import { errorText } from '../lib/errors'
   import { toast } from '../lib/toast.svelte'
@@ -246,6 +246,19 @@
       fProject = p
       showForm = true
     }
+  })
+
+  // /runners?draft=<a sentence> (the chat's "Make it a runner"): open the
+  // panel with the sentence in the describe box. Nothing is drafted until
+  // the user presses the button — they will usually add the "when" first.
+  // The parameter is consumed so Back or a reload doesn't refill the box.
+  $effect(() => {
+    const d = router.route.query.get('draft')
+    if (!d) return
+    draftText = d
+    stage = 'describe'
+    showForm = true
+    replace('/runners')
   })
 
   const projName = (id: string | null) => (id ? (projects.find((p) => p.id === id)?.name ?? id) : null)

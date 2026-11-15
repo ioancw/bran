@@ -413,6 +413,12 @@
                       size={13}
                     />Copy{/if}
                 </button>
+                <a
+                  href={href('/read/' + r.id)}
+                  use:link
+                  class="btn-ghost btn-sm"
+                  title="Open as a page to read"><Icon name="book-open" size={13} />Read</a
+                >
                 <button class="btn-ghost btn-sm" onclick={() => discuss(r)}
                   ><Icon name="message-square" size={13} />Discuss</button
                 >

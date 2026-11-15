@@ -271,6 +271,30 @@ def prune(
         console.print(f"[green]Vacuumed[/] — {before:,} → {after:,} bytes")
 
 
+@app.command()
+def feedback(
+    out: Path | None = typer.Option(
+        None, "--out", help="Write the rated answers to this file as JSON Lines.",
+    ),
+) -> None:
+    """The answers you rated in the chat (thumbs up/down), with their questions.
+
+    One JSON object per line with --out: the start of an evaluation set.
+    """
+    import json
+
+    from bran.persistence import all_answer_feedback
+
+    rows = all_answer_feedback()
+    up = sum(1 for r in rows if r["rating"] > 0)
+    console.print(f"{len(rows)} rated answer(s): {up} up, {len(rows) - up} down.")
+    if out is not None:
+        out.write_text(
+            "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8"
+        )
+        console.print(f"Wrote {out}")
+
+
 # ---------------------------------------------------------------------------
 # bran runs
 # ---------------------------------------------------------------------------

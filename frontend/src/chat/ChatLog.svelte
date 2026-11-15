@@ -2,27 +2,42 @@
   // Renders a list of ChatItems — the one render path for both live chat and
   // transcript replay. `streamingIndex` marks the assistant bubble that should
   // show a blinking cursor (live only).
-  import { groupRows, type ChatItem, type Row, SPAWN_TOOL, PLAN_TOOL, isDelegation } from './events'
+  import { groupRows, type ChatItem, type Row, SPAWN_TOOL, PLAN_TOOL, DOC_TOOL, isDelegation } from './events'
   import { clock, fullStamp, dayKey, dayLabel } from './format'
+  import { sourcesInRange, turnRanges } from './sources'
+  import { turnStats, turnSummary } from './activity'
+  import { answerKey } from './turn'
   import Prose from '../components/Prose.svelte'
   import Icon from '../components/Icon.svelte'
+  import SourceStrip from '../components/SourceStrip.svelte'
   import ToolBlock from './ToolBlock.svelte'
-  import ToolGroup from './ToolGroup.svelte'
+  import Activity from './Activity.svelte'
   import SpawnCard from './SpawnCard.svelte'
   import SubagentCard from './SubagentCard.svelte'
   import PlanCard from './PlanCard.svelte'
+  import DocCard from './DocCard.svelte'
   import { toast } from '../lib/toast.svelte'
   import type { SourceRef } from '../lib/types'
 
   let {
     items,
     streamingIndex = -1,
+    busy = false,
     onaction,
     onretry,
     sources = [],
+    strips = false,
+    feedback = {},
+    onfeedback,
+    onregenerate,
+    onrunner,
+    onopendoc,
   }: {
     items: ChatItem[]
     streamingIndex?: number
+    // A turn is in flight (live chat only): its newest activity row is live,
+    // and its answer has no actions yet.
+    busy?: boolean
     // Lets interactive cards (PlanCard approve/revise) and the user-message
     // "Edit" action put a message in the composer (and optionally send it).
     // Absent on read-only surfaces.
@@ -30,8 +45,20 @@
     // Re-send the turn that produced a trailing error row. Only the live chat
     // passes this; transcript replays render errors as plain records.
     onretry?: () => void
-    // Where the conversation's answers came from — turns "(Source: x)" into chips.
+    // What the server knows about the conversation's sources (titles, and the
+    // page behind a domain-only citation). Each turn's own list is worked out
+    // from its items (chat/sources.ts).
     sources?: SourceRef[]
+    // Show each turn's sources as a row of cards above its answer.
+    strips?: boolean
+    // Thumbs up/down: answer key -> 1 / -1, and the handler that records one.
+    feedback?: Record<string, number>
+    onfeedback?: (key: string, rating: number, prompt: string, answer: string) => void
+    // Ask the last question again / turn it into a scheduled runner.
+    onregenerate?: () => void
+    onrunner?: (prompt: string) => void
+    // Open a document the agent saved, beside the chat.
+    onopendoc?: (name: string, title: string) => void
   } = $props()
 
   // Copy a turn's text; brief "Copied" feedback inline.
@@ -50,12 +77,10 @@
 
   const rows = $derived(groupRows(items))
 
-  // Stable per-row key so expansion state (a ToolBlock/ToolGroup the user opened
-  // mid-stream) stays attached to its row as later events regroup the list —
-  // index keys would let it bleed onto a different item. Tools carry a toolId;
-  // text/thinking/footer rows key on position (they hold no local state).
+  // Stable per-row key so expansion state (an activity row the user opened
+  // mid-stream) stays attached to its row as later events extend the list.
   function rowKey(row: Row): string {
-    if (row.group) return 'g:' + (row.tools[0]?.toolId ?? row.idx)
+    if (row.group) return 'g:' + row.idx
     if (row.item.kind === 'tool' && row.item.toolId) return 't:' + row.item.toolId
     return 'i:' + row.idx
   }
@@ -78,6 +103,60 @@
     })
     return out
   })
+
+  // --- Turns: a user message and everything up to the next one ---------------
+  const turns = $derived(turnRanges(items))
+  // Item index -> index of its turn.
+  const turnOf = $derived.by(() => {
+    const out: number[] = new Array(items.length).fill(0)
+    turns.forEach((t, k) => {
+      for (let i = t.start; i < t.end; i++) out[i] = k
+    })
+    return out
+  })
+  // Each turn's sources. A finished turn never changes, so only the newest
+  // one is worked out again as a reply streams in.
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity -- a cache, never read by the template
+  let memo = new Map<string, SourceRef[]>()
+  let memoItems: ChatItem[] | null = null
+  let memoKnown: SourceRef[] | null = null
+  const turnSources = $derived.by(() => {
+    if (memoItems !== items || memoKnown !== sources) {
+      memo = new Map()
+      memoItems = items
+      memoKnown = sources
+    }
+    return turns.map((t, k) => {
+      const newest = k === turns.length - 1
+      const key = t.start + ':' + t.end
+      const hit = newest ? undefined : memo.get(key)
+      if (hit) return hit
+      const found = sourcesInRange(items, t.start, t.end, sources)
+      if (!newest) memo.set(key, found)
+      return found
+    })
+  })
+  // The answer of a turn is its last piece of prose: that is the one that
+  // carries the actions (rate, ask again, make it a runner).
+  const answerIdx = $derived(
+    turns.map((t) => {
+      for (let i = t.end - 1; i >= t.start; i--) if (items[i].kind === 'assistant') return i
+      return -1
+    }),
+  )
+  function promptOf(k: number): string {
+    const first = items[turns[k]?.start]
+    return first?.kind === 'user' ? first.text : ''
+  }
+  function footerLine(i: number, cost: number | null): string {
+    const k = turnOf[i]
+    const t = turns[k]
+    return turnSummary(turnStats(items, t.start, t.end), turnSources[k].length, cost)
+  }
+  function rate(k: number, text: string, rating: number) {
+    const key = answerKey(text)
+    onfeedback?.(key, feedback[key] === rating ? 0 : rating, promptOf(k), text)
+  }
 </script>
 
 {#each rows as row, ri (rowKey(row))}
@@ -88,10 +167,11 @@
   {/if}
   <div class="chat-row">
     {#if row.group}
-      <ToolGroup tools={row.tools} />
+      <Activity steps={row.steps} live={busy && ri === rows.length - 1} />
     {:else}
       {@const item = row.item}
       {@const i = row.idx}
+      {@const k = turnOf[i]}
       {#if item.kind === 'user'}
         <!-- Your turn: a compact right-aligned bubble (position says who it is). -->
         <div class="msg-user">
@@ -119,11 +199,22 @@
             {/if}
           </div>
         </div>
+        {#if strips && turnSources[k]?.length}
+          <SourceStrip sources={turnSources[k]} />
+        {/if}
       {:else if item.kind === 'assistant'}
         <!-- bran's turn: prose flows on the canvas, no card chrome — the answer is
          the page, not a boxed message. Actions reveal on hover/focus. -->
-        <div class="msg-assistant">
-          <Prose text={item.text} streaming={i === streamingIndex} class="reading" {sources} />
+        {@const isAnswer = answerIdx[k] === i}
+        {@const settled = !(busy && k === turns.length - 1)}
+        {@const rating = feedback[answerKey(item.text)] ?? 0}
+        <div class="msg-assistant" class:rated={rating !== 0}>
+          <Prose
+            text={item.text}
+            streaming={i === streamingIndex}
+            class="reading"
+            sources={turnSources[k] ?? []}
+          />
           {#if i !== streamingIndex}
             <div class="row-actions">
               <button
@@ -136,6 +227,43 @@
                     size={13}
                   />Copy{/if}
               </button>
+              {#if isAnswer && settled}
+                {#if onfeedback}
+                  <button
+                    class="msg-action-btn icon-only"
+                    class:on={rating > 0}
+                    aria-pressed={rating > 0}
+                    aria-label="Good answer"
+                    title="Good answer"
+                    onclick={() => rate(k, item.text, 1)}><Icon name="thumbs-up" size={13} /></button
+                  >
+                  <button
+                    class="msg-action-btn icon-only"
+                    class:on={rating < 0}
+                    aria-pressed={rating < 0}
+                    aria-label="Poor answer"
+                    title="Poor answer"
+                    onclick={() => rate(k, item.text, -1)}><Icon name="thumbs-down" size={13} /></button
+                  >
+                {/if}
+                {#if k === turns.length - 1 && promptOf(k)}
+                  {#if onregenerate}
+                    <button
+                      class="msg-action-btn"
+                      title="Ask the same question again"
+                      onclick={() => onregenerate?.()}><Icon name="refresh" size={13} />Ask again</button
+                    >
+                  {/if}
+                  {#if onrunner}
+                    <button
+                      class="msg-action-btn"
+                      title="Run this on a schedule"
+                      onclick={() => onrunner?.(promptOf(k))}
+                      ><Icon name="calendar" size={13} />Make it a runner</button
+                    >
+                  {/if}
+                {/if}
+              {/if}
               {#if item.at}<span class="stamp" title={fullStamp(item.at)}>{clock(item.at)}</span>{/if}
             </div>
           {/if}
@@ -153,6 +281,8 @@
           <SpawnCard tool={item} />
         {:else if item.name === PLAN_TOOL}
           <PlanCard tool={item} {onaction} answered={items.slice(i + 1).some((x) => x.kind === 'user')} />
+        {:else if item.name === DOC_TOOL && onopendoc}
+          <DocCard tool={item} onopen={onopendoc} />
         {:else if isDelegation(item.name)}
           <SubagentCard tool={item} />
         {:else}
@@ -161,11 +291,11 @@
       {:else if item.kind === 'routed'}
         <div class="meta-row">Routed to <span class="meta-strong">{item.agent}</span></div>
       {:else if item.kind === 'footer'}
-        <div class="meta-row">
+        <div class="meta-row" title={item.numTurns != null ? `${item.numTurns} model turns` : undefined}>
           {#if item.stopped}
             Stopped
           {:else}
-            Done · {item.numTurns ?? '—'} turns{item.cost != null ? ` · $${item.cost.toFixed(4)}` : ''}
+            {footerLine(i, item.cost)}
           {/if}
         </div>
       {:else if item.kind === 'error'}
@@ -261,6 +391,7 @@
   .row-actions {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 2px;
     margin-top: 2px;
     min-height: 22px;
@@ -269,6 +400,7 @@
   }
   .msg-assistant:hover .row-actions,
   .msg-assistant:focus-within .row-actions,
+  .msg-assistant.rated .row-actions,
   .msg-user:hover .row-actions,
   .msg-user:focus-within .row-actions {
     opacity: 1;
@@ -277,6 +409,14 @@
     .row-actions {
       opacity: 1;
     }
+  }
+  .row-actions :global(.msg-action-btn.icon-only) {
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+  .row-actions :global(.msg-action-btn.on) {
+    color: var(--accent-soft);
+    background: var(--accent-glow);
   }
   .stamp {
     font-size: 11px;

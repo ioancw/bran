@@ -134,6 +134,8 @@ BRAN_NOTIFY_WEBHOOK_URL=https://ntfy.sh/your-topic   # push each finished backgr
 
 The webhook target works with [ntfy.sh](https://ntfy.sh) (push to phone), Slack incoming webhooks, Discord webhooks, or any URL that accepts JSON.
 
+Set `BRAN_PUBLIC_URL` to the address the server can be reached at from your phone (a Tailscale name, say) and each notification links to the report's reading view; without it, notifications carry no link.
+
 Custom notifiers from Python:
 
 ```python
@@ -158,12 +160,15 @@ Hooks fire in a `finally:` block in the runner, so a notifier crash can't break 
 | `/app/` | Today — what needs attention, today's deliveries, upcoming runner fires |
 | `/app/chat`, `/app/chat/{id}` | Chat with the orchestrator (or an `@agent`) |
 | `/app/outputs` | Reading inbox for finished runner and background results |
+| `/app/read/{id}` | One report as a page to read: headline, date, whether it was verified, its sources, earlier and later editions |
 | `/app/runners`, `/app/runners/{name}` | Scheduled runners: create, edit, pause, history |
 | `/app/runs`, `/app/runs/{id}` | Activity log and one run in detail (live while it executes) |
 | `/app/projects`, `/app/projects/{id}` | Projects: instructions, memory, files, chats |
 | `/app/agents`, `/app/settings` | Agent library; appearance, "About me", limits |
 
 The UI is a Svelte single-page app (source in `frontend/`, built into `src/bran/web/spa/`) served by the same FastAPI process and talking to the `/spa/*` JSON endpoints. Point a browser at `http://127.0.0.1:8765/app/`.
+
+In the chat, each answer shows its sources as cards above it (numbered to match the citation chips in the text), the agent's work as one line that expands to every step, and up to three suggested follow-ups. Thumbs up/down on an answer are stored with the question and the answer; `bran feedback --out rated.jsonl` exports them. A document an agent saves opens beside the conversation. Two of these make requests of their own and can be switched off: `BRAN_FAVICONS=0` (site icons, fetched from the cited site itself and cached) and `BRAN_FOLLOWUPS=0` (one small model call per answer).
 
 Files in a project's folder open in the browser from the app's own address, so they are served sandboxed (`Content-Security-Policy: sandbox`): a page an agent wrote can render and print, but cannot act on bran as you.
 

@@ -2,6 +2,7 @@
   import { onReturn } from './lib/refresh'
   import { router } from './lib/router.svelte'
   import { installCodeCopyHandler } from './lib/copy-code'
+  import { installTableSort } from './lib/sort-tables'
   import { api } from './lib/api'
   import { authState, clearAuthError } from './lib/auth.svelte'
   import { workspace } from './lib/workspace.svelte'
@@ -9,6 +10,7 @@
   import Sidebar from './components/Sidebar.svelte'
   import ConfirmHost from './components/ConfirmHost.svelte'
   import CommandPalette from './components/CommandPalette.svelte'
+  import CitePopover from './components/CitePopover.svelte'
   import EmptyState from './components/EmptyState.svelte'
   import Toasts from './components/Toasts.svelte'
   import Today from './pages/Today.svelte'
@@ -16,6 +18,7 @@
   import Runs from './pages/Runs.svelte'
   import Outputs from './pages/Outputs.svelte'
   import RunDetail from './pages/RunDetail.svelte'
+  import Reader from './pages/Reader.svelte'
   import Agents from './pages/Agents.svelte'
   import AgentDetail from './pages/AgentDetail.svelte'
   import Runners from './pages/Runners.svelte'
@@ -25,6 +28,7 @@
   import Settings from './pages/Settings.svelte'
 
   installCodeCopyHandler()
+  installTableSort()
 
   // Nav counts (best-effort; nav still renders if these fail).
   let counts = $state<Record<string, number | null>>({
@@ -211,6 +215,8 @@
       <Outputs />
     {:else if seg[0] === 'runs' && seg[1]}
       <RunDetail runId={seg[1]} />
+    {:else if seg[0] === 'read' && seg[1]}
+      <Reader runId={seg[1]} />
     {:else if seg[0] === 'runs'}
       <Runs />
     {:else if seg[0] === 'agents' && seg[1]}
@@ -236,6 +242,7 @@
 </div>
 <ConfirmHost />
 <CommandPalette />
+<CitePopover />
 <Toasts />
 
 <style>

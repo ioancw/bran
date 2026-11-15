@@ -174,7 +174,13 @@ export type ChatEvent =
       ts?: string
     }
   | { type: 'tool_result'; tool_id: string | null; text: string; is_error: boolean; ts?: string }
-  | { type: 'result'; num_turns: number | null; total_cost_usd: number | null; session_id: string | null }
+  | {
+      type: 'result'
+      num_turns: number | null
+      total_cost_usd: number | null
+      session_id: string | null
+      ts?: string // set by the live chat when the turn ends
+    }
   | { type: 'error'; message: string }
   | { type: 'done' }
 

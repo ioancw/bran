@@ -28,7 +28,7 @@ export type ChatItem =
   | { kind: 'assistant'; text: string; at?: string }
   | { kind: 'thinking'; text: string; at?: string }
   | { kind: 'routed'; agent: string }
-  | { kind: 'footer'; numTurns: number | null; cost: number | null; stopped?: boolean }
+  | { kind: 'footer'; numTurns: number | null; cost: number | null; stopped?: boolean; at?: string }
   | { kind: 'error'; message: string }
   | ToolItem
 
@@ -158,7 +158,7 @@ export function applyEvent(items: ChatItem[], st: ReducerState, ev: ChatEvent): 
 
     case 'result':
       close(st)
-      items.push({ kind: 'footer', numTurns: ev.num_turns, cost: ev.total_cost_usd })
+      items.push({ kind: 'footer', numTurns: ev.num_turns, cost: ev.total_cost_usd, at: ev.ts })
       return {}
 
     case 'error':
@@ -173,37 +173,46 @@ export function applyEvent(items: ChatItem[], st: ReducerState, ev: ChatEvent): 
 }
 
 // --- Row grouping ------------------------------------------------------------
-// A burst of tool calls (any names) folds into one expandable row so a fan-out
-// of searches and reads stays scannable. Spawn and plan cards are never
-// grouped — they carry their own UI — and they break a run.
+// The agent's work between two pieces of prose — its thinking and its tool
+// calls, however many — folds into ONE activity row: a live line while it
+// happens, a one-line summary afterwards, the full trace on demand. Cards
+// that carry their own UI (a spawn, a plan, a delegation, a saved document)
+// are never folded, and they break a run.
+
+export type WorkItem = ToolItem | Extract<ChatItem, { kind: 'thinking' }>
 
 export type Row =
-  { group: false; item: ChatItem; idx: number } | { group: true; tools: ToolItem[]; idx: number }
+  | { group: false; item: ChatItem; idx: number }
+  // `steps` is the whole run in order; `tools` is its tool calls only.
+  | { group: true; tools: ToolItem[]; steps: WorkItem[]; idx: number }
 
 export const SPAWN_TOOL = 'mcp__bran__spawn_agent'
 export const PLAN_TOOL = 'mcp__bran__propose_plan'
+// Writes a document into the project's files — shown as a card that opens it.
+export const DOC_TOOL = 'mcp__bran_docs__save_document'
 // The SDK's delegation tool ("Task" before Claude Code 2.1.63). Each call is
 // its own card, never folded into a tool burst.
 export const DELEGATION_TOOLS = new Set(['Agent', 'Task', 'Workflow'])
 export const isDelegation = (name: string) => DELEGATION_TOOLS.has(name)
-const NEVER_GROUP = new Set([SPAWN_TOOL, PLAN_TOOL, ...DELEGATION_TOOLS])
-export const GROUP_MIN = 3
+const NEVER_GROUP = new Set([SPAWN_TOOL, PLAN_TOOL, DOC_TOOL, ...DELEGATION_TOOLS])
+
+/** Thinking, or a tool call without a card of its own: what an activity
+ * row is made of. */
+export function isWork(it: ChatItem): it is WorkItem {
+  return it.kind === 'thinking' || (it.kind === 'tool' && !NEVER_GROUP.has(it.name))
+}
 
 export function groupRows(items: ChatItem[]): Row[] {
   const out: Row[] = []
   let i = 0
   while (i < items.length) {
     const it = items[i]
-    if (it.kind === 'tool' && !NEVER_GROUP.has(it.name)) {
+    if (isWork(it)) {
       let j = i
-      while (j < items.length && items[j].kind === 'tool' && !NEVER_GROUP.has((items[j] as ToolItem).name))
-        j++
-      const run = items.slice(i, j) as ToolItem[]
-      if (run.length >= GROUP_MIN) {
-        out.push({ group: true, tools: run, idx: i })
-      } else {
-        run.forEach((t, k) => out.push({ group: false, item: t, idx: i + k }))
-      }
+      while (j < items.length && isWork(items[j])) j++
+      const steps = items.slice(i, j) as WorkItem[]
+      const tools = steps.filter((s): s is ToolItem => s.kind === 'tool')
+      out.push({ group: true, tools, steps, idx: i })
       i = j
     } else {
       out.push({ group: false, item: it, idx: i })
@@ -211,15 +220,4 @@ export function groupRows(items: ChatItem[]): Row[] {
     }
   }
   return out
-}
-
-/** "5 tool calls · Read ×3, Grep ×2" — names ordered by frequency, then first appearance. */
-export function groupLabel(tools: ToolItem[]): string {
-  const counts = new Map<string, number>()
-  for (const t of tools) {
-    const n = toolDisplayName(t.name)
-    counts.set(n, (counts.get(n) ?? 0) + 1)
-  }
-  const parts = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([n, c]) => (c > 1 ? `${n} ×${c}` : n))
-  return `${tools.length} tool calls · ${parts.join(', ')}`
 }

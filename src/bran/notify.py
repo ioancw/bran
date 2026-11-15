@@ -147,6 +147,11 @@ async def webhook_notifier(record: RunRecord) -> None:
             "Priority": "default" if record.status == "completed" else "high",
             "Tags": "white_check_mark" if record.status == "completed" else "x",
         }
+    # Tapping the notification opens the report's reading view — when bran
+    # has been told the address it is reachable at from the phone.
+    link = read_link(record)
+    if link:
+        headers["Click"] = link
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             if _webhook_format(url) == "ntfy":
@@ -190,7 +195,20 @@ def webhook_payload(record: RunRecord, alert: bool) -> dict[str, Any]:
         payload[name] = value
     payload["summary"] = _result_snippet(record)
     payload["alert"] = alert
+    link = read_link(record)
+    if link:
+        payload["url"] = link
     return payload
+
+
+def read_link(record: RunRecord) -> str | None:
+    """The reading-view URL of a run, when BRAN_PUBLIC_URL says where this
+    server can be reached from outside (e.g. a Tailscale name). Unset — the
+    default, since bran listens on localhost — notifications carry no link."""
+    base = (os.getenv("BRAN_PUBLIC_URL") or "").strip().rstrip("/")
+    if not base.startswith(("http://", "https://")):
+        return None
+    return f"{base}/app/read/{record.id}"
 
 
 def _safe_target(url: str) -> str:

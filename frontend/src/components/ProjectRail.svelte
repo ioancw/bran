@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { docKind } from './DocPanel.svelte'
   // The project-context right rail (Cowork-style), shared by the project hub
   // and the Chat page so context lives *beside* the conversation. Self-loads
   // the project's detail and owns its own edits (instructions, memory,
@@ -28,9 +29,13 @@
     onrenamed,
     mode = 'home',
     sessionId = null,
+    onopenfile,
   }: {
     projectId: string
     onrenamed?: (name: string) => void
+    // When given (the chat), a file that can be shown in the app opens beside
+    // the conversation instead of in a new tab.
+    onopenfile?: (name: string) => void
     mode?: 'home' | 'chat'
     // The chat this rail sits beside (chat mode). Scopes Progress to *this*
     // conversation's background runs rather than the whole project's.
@@ -328,6 +333,13 @@
   function fileUrl(name: string): string {
     return `/spa/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(name)}`
   }
+  const opensBeside = (name: string) => !!onopenfile && docKind(name) !== 'other'
+  function openFile(e: MouseEvent, name: string) {
+    // A modified click keeps its browser meaning (new tab / window).
+    if (!opensBeside(name) || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return
+    e.preventDefault()
+    onopenfile?.(name)
+  }
   async function removeFile(name: string) {
     if (
       !(await confirmDialog(
@@ -370,7 +382,8 @@
               href={fileUrl(f.name)}
               target="_blank"
               rel="noopener"
-              title="Open {f.name} in a new tab"><Icon name="file" size={12} />{f.name}</a
+              title={opensBeside(f.name) ? `Open ${f.name} beside the chat` : `Open ${f.name} in a new tab`}
+              onclick={(e) => openFile(e, f.name)}><Icon name="file" size={12} />{f.name}</a
             >
             <span class="file-size">{f.size_human}</span>
             <a

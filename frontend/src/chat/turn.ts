@@ -86,6 +86,37 @@ export function writeDraft(sid: string | null, text: string, store: Store = sess
   }
 }
 
+/** A short fingerprint of an answer's text (FNV-1a + length). It is how a
+ * thumbs up/down finds its answer again after a reload: the transcript does
+ * not carry ids, the text is what identifies it. */
+export function answerKey(text: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(16).padStart(8, '0') + '-' + text.length.toString(36)
+}
+
+/** The text of the last user message, or null. */
+export function lastPrompt(items: ChatItem[]): string | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i]
+    if (it.kind === 'user') return it.text
+  }
+  return null
+}
+
+/** The last answer given after the last user message, or null. */
+export function lastAnswer(items: ChatItem[]): string | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i]
+    if (it.kind === 'user') return null
+    if (it.kind === 'assistant' && it.text.trim()) return it.text
+  }
+  return null
+}
+
 /** The run ids of this conversation's background spawns (fan-out tracking). */
 export function spawnRunIds(items: ChatItem[]): string[] {
   const ids: string[] = []

@@ -2,6 +2,8 @@
 // app-relative (e.g. '/runs' lives at '/app/runs'). One reactive `router` rune
 // drives the outlet in App.svelte.
 
+import { tick } from 'svelte'
+
 const BASE = '/app'
 
 export interface Route {
@@ -32,12 +34,41 @@ export const router = $state<{ route: Route; full: string }>({
   full: currentFull(),
 })
 
+/** True when moving between these two routes should cross-fade. Not within
+ * the chat (a new conversation's URL pivot happens mid-stream, and freezing
+ * the page for a transition there would stall the reply), and not when only
+ * the query changes. */
+export function shouldTransition(from: Route, to: Route): boolean {
+  if (from.path === to.path) return false
+  return !(from.segments[0] === 'chat' && to.segments[0] === 'chat')
+}
+
+type ViewTransitionDocument = Document & {
+  startViewTransition?: (update: () => void | Promise<void>) => unknown
+}
+
 export function navigate(to: string): void {
   if (to === router.full) return
-  window.history.pushState({}, '', BASE + to)
-  router.route = toRoute(to)
-  router.full = to
-  window.scrollTo(0, 0)
+  const next = toRoute(to)
+  const apply = () => {
+    window.history.pushState({}, '', BASE + to)
+    router.route = next
+    router.full = to
+    window.scrollTo(0, 0)
+  }
+  const doc = document as ViewTransitionDocument
+  const calm = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
+  if (doc.startViewTransition && !calm && shouldTransition(router.route, next)) {
+    // The browser snapshots the old page, runs the update, then fades to the
+    // new one (see ::view-transition-* in global.css). The update must have
+    // reached the DOM when the callback settles, hence the tick.
+    doc.startViewTransition(async () => {
+      apply()
+      await tick()
+    })
+  } else {
+    apply()
+  }
 }
 
 /** Like navigate(), but rewrites the current history entry instead of adding
