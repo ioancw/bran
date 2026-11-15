@@ -210,17 +210,25 @@
     navigate('/chat?draft=' + encodeURIComponent(draft))
   }
 
+  // Search keystrokes, the focus refresh and "load older" all call load();
+  // only the latest call may write its result.
+  let loadSeq = 0
   async function load() {
+    const seq = ++loadSeq
     error = null // clear a stale banner so a recovered search/refresh shows clean
     try {
-      ;[runs, runners] = await Promise.all([
+      const [nextRuns, nextRunners] = await Promise.all([
         api.runs({ limit, exclude_chats: true, status: 'completed', q }),
         api.schedules(),
       ])
+      if (seq !== loadSeq) return
+      runs = nextRuns
+      runners = nextRunners
     } catch (e) {
+      if (seq !== loadSeq) return
       error = String(e)
     } finally {
-      loaded = true
+      if (seq === loadSeq) loaded = true
     }
     // Reading your deliveries: when not searching, highlight what was unread and
     // mark it read on the server (durable + clears the sidebar badge). Search is

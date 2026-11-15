@@ -40,6 +40,16 @@ export function navigate(to: string): void {
   window.scrollTo(0, 0)
 }
 
+/** Like navigate(), but rewrites the current history entry instead of adding
+ * one — for consuming a one-shot query parameter (e.g. ?prompt=) so that Back
+ * or a reload cannot replay it. */
+export function replace(to: string): void {
+  if (to === router.full) return
+  window.history.replaceState({}, '', BASE + to)
+  router.route = toRoute(to)
+  router.full = to
+}
+
 if (typeof window !== 'undefined') {
   window.addEventListener('popstate', () => {
     router.route = toRoute(currentFull())

@@ -26,7 +26,9 @@
     { label: 'Mondays 9am', expr: 'every Monday at 9am' },
   ]
 
+  let checkSeq = 0
   async function check(expr: string) {
+    const seq = ++checkSeq
     const v = expr.trim()
     if (!v) {
       human = ''
@@ -35,6 +37,7 @@
     }
     try {
       const r = await api.parseSchedule(v)
+      if (seq !== checkSeq) return // an answer for text the field no longer holds
       if (r.ok) {
         human = r.human
         error = ''
@@ -43,6 +46,7 @@
         error = r.error
       }
     } catch {
+      if (seq !== checkSeq) return
       human = ''
       error = ''
     }

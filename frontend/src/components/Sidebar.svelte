@@ -3,6 +3,7 @@
   // live conversation list (Recents) scoped to the current project. Collapses
   // to a 56px icon rail on desktop (Ctrl/Cmd+B); becomes an off-canvas drawer
   // on phones.
+  import { untrack } from 'svelte'
   import { router, href, link, navigate } from '../lib/router.svelte'
   import { workspace, loadChats, loadProjects, projectName } from '../lib/workspace.svelte'
   import { relativeTime } from '../lib/time'
@@ -32,8 +33,12 @@
 
   // Load Recents + project names once; pages drive scope via setScope().
   $effect(() => {
-    void loadChats()
-    void loadProjects()
+    // untrack: loadChats() reads the scope, which would re-run this on every
+    // scope change — on top of setScope()'s own reload.
+    untrack(() => {
+      void loadChats()
+      void loadProjects()
+    })
   })
 
   // Two domains, surfaced as labeled groups so the IA is self-explanatory:

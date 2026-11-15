@@ -3,7 +3,7 @@
   // and how long each tool call took. Rows expand to the full detail (the
   // same ToolBlock / prose the transcript uses), so the timeline is the
   // overview and the transcript the long form.
-  import { toolDisplayName, type ChatItem, type ToolItem } from './events'
+  import { isDelegation as isDelegationTool, toolDisplayName, type ChatItem, type ToolItem } from './events'
   import { category, categoryIcon, preview, summary, truncate } from './tool-labels'
   import ToolBlock from './ToolBlock.svelte'
   import Prose from '../components/Prose.svelte'
@@ -30,10 +30,7 @@
     const line = text.split('\n').find((l) => l.trim()) ?? ''
     return truncate(line.trim(), max)
   }
-  function isDelegation(t: ToolItem): boolean {
-    const n = t.name.toLowerCase()
-    return n === 'agent' || n === 'task'
-  }
+  const isDelegation = (t: ToolItem) => isDelegationTool(t.name)
 
   type Row = {
     i: number

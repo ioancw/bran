@@ -69,12 +69,15 @@
   }
 
   async function load() {
+    const pid = projectId
     error = null
     try {
-      data = await api.projectDetail(projectId)
-      name = data.project.name
+      const d = await api.projectDetail(pid)
+      if (projectId !== pid) return // moved to another project while awaiting
+      data = d
+      name = d.project.name
     } catch (e) {
-      error = String(e)
+      if (projectId === pid) error = String(e)
     }
   }
   $effect(() => {
@@ -100,7 +103,7 @@
   async function deleteProject() {
     if (
       !(await confirmDialog(
-        `Delete project "${name}"? Its chats are kept and move to Recents; its runners are detached. Nothing else is lost.`,
+        `Delete project "${name}"? Its chats are kept and move to Recents; its runners keep running, detached from it; its daily summary runner is removed. Files in its folder stay on disk.`,
         'Delete project',
       ))
     )

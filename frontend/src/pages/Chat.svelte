@@ -2,7 +2,7 @@
   import { onDestroy, tick } from 'svelte'
   import { fly } from 'svelte/transition'
   import { api, streamChat } from '../lib/api'
-  import { router, navigate, href, link } from '../lib/router.svelte'
+  import { router, navigate, replace, href, link } from '../lib/router.svelte'
   import {
     workspace,
     setScope,
@@ -19,9 +19,20 @@
   import Section from '../components/Section.svelte'
   import SourcesPanel from '../components/SourcesPanel.svelte'
   import Skeleton from '../components/Skeleton.svelte'
+  import ErrorBanner from '../components/ErrorBanner.svelte'
   import Icon from '../components/Icon.svelte'
   import ChatLog from '../chat/ChatLog.svelte'
   import { applyEvent, freshState, toolDisplayName, type ChatItem, type ReducerState } from '../chat/events'
+  import {
+    beginTurn,
+    endTurnStopped,
+    failTurn,
+    itemsFromHistory,
+    readDraft,
+    spawnRunIds,
+    takeRetry,
+    writeDraft,
+  } from '../chat/turn'
   import type { Attachment, Catalog, ChatSummary, RunRecord, ScheduleRecord, SourceRef } from '../lib/types'
   import { relativeTime } from '../lib/time'
   import { sourceLabel } from '../lib/labels'
@@ -58,7 +69,7 @@
     void model
     // Only persist once the chat's own saved choice has been loaded, so the
     // route change doesn't write the previous chat's model under the new key.
-    if (modelKeyLoaded === modelKey(loadedId)) writeModel(loadedId, model)
+    if (loadedId !== undefined && modelKeyLoaded === modelKey(loadedId)) writeModel(loadedId, model)
   })
   let attachments = $state<Attachment[]>([])
   // Sources the conversation cited or read (right rail + citation chips).
@@ -74,7 +85,11 @@
   }
 
   let rstate: ReducerState = freshState()
-  let loadedId: string | null = null
+  // The conversation the view currently holds: a session id, null for a new
+  // chat, and `undefined` until the route effect has synced for the first
+  // time. (It used to start as null, so a fresh /chat never ran the route
+  // effect: the saved draft was not restored and was then wiped.)
+  let loadedId: string | null | undefined = undefined
   // Bumped each time the route effect takes over the view. A send() started
   // under an older epoch must not touch `items`/`input` after a mid-stream
   // navigation — those now belong to a different conversation.
@@ -89,27 +104,19 @@
     if (matchMedia('(hover: hover) and (pointer: fine)').matches) composer?.focusInput()
   }
 
-  // --- per-chat drafts -------------------------------------------------------
-  // A half-typed message survives navigation and never leaks into another
-  // conversation: each chat (and "new") keeps its own draft for the session.
-  const draftKey = (sid: string | null) => 'bran.draft:' + (sid ?? 'new')
-  function readDraft(sid: string | null): string {
-    try {
-      return sessionStorage.getItem(draftKey(sid)) ?? ''
-    } catch {
-      return ''
-    }
-  }
+  // --- per-chat drafts (see chat/turn.ts) -------------------------------------
   $effect(() => {
     const v = input
-    try {
-      if (v.trim()) sessionStorage.setItem(draftKey(loadedId), v)
-      else sessionStorage.removeItem(draftKey(loadedId))
-    } catch {
-      /* storage unavailable — drafts just don't persist */
-    }
+    // Nothing is persisted before the first route sync: until then `input` is
+    // just the empty initial value, and writing it would erase the draft the
+    // sync is about to restore.
+    if (loadedId !== undefined) writeDraft(loadedId, v)
   })
   let historyLoading = $state(false)
+  // Set when the conversation could not be loaded. The view must not look
+  // like an empty new chat then — sending would silently start a different
+  // conversation.
+  let loadError = $state<unknown>(null)
   // Abort handle for the in-flight stream — the "stop" button's lever.
   let streamAbort: AbortController | null = null
 
@@ -216,16 +223,6 @@
   let watchedSpawnIds = new Set<string>()
   let fanoutTimers: ReturnType<typeof setInterval>[] = []
 
-  function spawnRunIds(): string[] {
-    const ids: string[] = []
-    for (const it of items) {
-      if (it.kind === 'tool' && it.name === 'mcp__bran__spawn_agent') {
-        const m = it.resultText?.match(/run_id=([0-9a-f-]{8,})/i)
-        if (m) ids.push(m[1])
-      }
-    }
-    return ids
-  }
   // Guards work that must not run after the component leaves the DOM — a stream
   // in flight when you navigate away would otherwise navigate() you back and
   // keep mutating global state from a dead instance.
@@ -262,7 +259,9 @@
       if (!synth) return
       clearInterval(timer)
       fanoutTimers = fanoutTimers.filter((t) => t !== timer)
-      await loadHistory(sid) // pull the server-written synthesis turn into view
+      // Pull the server-written synthesis turn into view — unless a turn
+      // started while we were fetching (checked again inside, after the await).
+      await loadHistory(sid, true)
       bumpActivity()
     }, 3000)
     fanoutTimers.push(timer)
@@ -293,6 +292,7 @@
     if (streaming) streamAbort?.abort()
     viewEpoch++
     loadedId = sid
+    loadError = null
     sources = []
     clearFanoutWatchers()
     watchedSpawnIds = new Set()
@@ -306,25 +306,40 @@
     modelKeyLoaded = modelKey(sid)
     attachments = []
     focusComposer()
-    if (sid) {
-      historyLoading = true // before the first await, so no empty-state flash
-      void (async () => {
-        try {
-          const c = await api.chat(sid)
-          if (loadedId !== sid) return // navigated on while awaiting — drop stale result
-          activeChat = c
-          setScope(c.project_id) // a chat is scoped to its project (null = loose)
-        } catch {
-          if (loadedId !== sid) return
-          activeChat = null
-        }
-        await loadHistory(sid)
-      })()
-    } else {
-      activeChat = null
-      setScope(router.route.query.get('project'))
-    }
+    if (sid) void openChat(sid)
+    else activeChat = null
   })
+
+  // Load a conversation into the view: its metadata, then its history.
+  async function openChat(sid: string) {
+    loadError = null
+    historyLoading = true // before the first await, so no empty-state flash
+    try {
+      const c = await api.chat(sid)
+      if (loadedId !== sid) return // navigated on while awaiting — drop stale result
+      activeChat = c
+      setScope(c.project_id) // a chat is scoped to its project (null = loose)
+    } catch (e) {
+      if (loadedId !== sid) return
+      activeChat = null
+      loadError = e // a deleted chat, or the server is unreachable
+      historyLoading = false
+      return
+    }
+    await loadHistory(sid)
+  }
+
+  // A new chat's scope follows ?project= — also when only the query changes
+  // (the palette's "New chat in <project>" from another new chat), which the
+  // effect above cannot see because the session id stays null.
+  $effect(() => {
+    const proj = router.route.query.get('project')
+    if (!sessionId && !activeChat) setScope(proj)
+  })
+
+  function reloadChat() {
+    if (sessionId && loadedId === sessionId) void openChat(sessionId)
+  }
 
   // The breadcrumb title comes from `activeChat`, but a freshly-created chat
   // starts as "(new)" until the backend generates a title. Once Recents
@@ -342,8 +357,15 @@
     const p = router.route.query.get('prompt')
     if (p && !sessionId && !autoSent && !streaming) {
       autoSent = true
-      input = p
-      void send()
+      // Consume the parameter: left in the URL it stays in history, and coming
+      // Back to it (or reloading) would send the prompt again — a duplicate
+      // chat and real spend.
+      const qs = [...router.route.query]
+        .filter(([k]) => k !== 'prompt')
+        .map(([k, v]) => encodeURIComponent(k) + '=' + encodeURIComponent(v))
+        .join('&')
+      replace('/chat' + (qs ? '?' + qs : ''))
+      void send(p)
     }
   })
 
@@ -358,23 +380,26 @@
     }
   })
 
-  async function loadHistory(sid: string) {
-    historyLoading = true
+  // `background` = a refresh nobody asked for (the fan-out watcher): it must
+  // never replace the view under a turn that started meanwhile, and a failure
+  // is not worth an error banner.
+  async function loadHistory(sid: string, background = false) {
+    if (!background) historyLoading = true
     try {
       void loadSources(sid)
       const { events } = await api.history(sid)
       if (loadedId !== sid) return // a newer navigation owns the view now
-      const next: ChatItem[] = []
-      const st = freshState()
-      for (const ev of events) applyEvent(next, st, ev)
-      items = next
+      if (background && streaming) return // a live turn owns `items` now
+      const replay = itemsFromHistory(events)
+      items = replay.items
+      rstate = replay.state // indexes into the old array mean nothing now
       // Seed already-spawned ids so loading a historical fan-out never auto-fires.
-      spawnRunIds().forEach((id) => watchedSpawnIds.add(id))
+      spawnRunIds(items).forEach((id) => watchedSpawnIds.add(id))
       scrollSoon(true)
-    } catch {
-      /* ignore */
+    } catch (e) {
+      if (!background && loadedId === sid) loadError = e
     } finally {
-      historyLoading = false
+      if (!background) historyLoading = false
     }
   }
 
@@ -415,35 +440,46 @@
     else focusComposer()
   }
 
-  // A failed turn's inputs, kept so the error row's retry can re-send them.
-  let lastFailed: { text: string } | null = null
+  // What a failed send handed back to the composer (raw text + attachments),
+  // so a Retry can tell "still the failed prompt" from a new draft.
+  let handedBack: string | null = null
+  // Retry re-sends the prompt that failed — whatever failed (the network, or
+  // an error the server reported) and even after a reload (see takeRetry).
   function retryFailed() {
-    if (streaming || !lastFailed) return
-    // Drop the error row and its unanswered user bubble — send() re-adds both.
-    if (items[items.length - 1]?.kind === 'error') items.pop()
-    if (items[items.length - 1]?.kind === 'user') items.pop()
-    // The failed text was handed back to the composer; if the user has since
-    // cleared it, fall back to what actually failed.
-    if (!input.trim()) input = lastFailed.text
-    void send()
+    if (streaming) return
+    const text = takeRetry(items)
+    if (text == null) return
+    // The transcript's copy already carries the attachment lines; drop the
+    // handed-back composer contents so they are not sent a second time.
+    if (handedBack != null && input === handedBack) {
+      input = ''
+      attachments = []
+    }
+    handedBack = null
+    void send(text)
   }
 
-  async function send() {
-    let text = input.trim()
-    if (!text || streaming) return
+  // `override` sends that exact text (a retry, the ?prompt= launcher) and
+  // leaves the composer's own draft alone.
+  async function send(override?: string) {
+    if (streaming || loadError) return
+    const fromComposer = override === undefined
+    let text = (fromComposer ? input : override).trim()
+    if (!text) return
     // Remember the raw input so a failed send can hand it back (see catch) —
     // losing a paragraph-long prompt to a dropped connection is unacceptable.
-    const priorInput = input
-    const priorAttachments = attachments
+    const priorInput = fromComposer ? input : override
+    const priorAttachments = fromComposer ? attachments : []
     // Fold attachments into the prompt as absolute paths the agent reads on
     // demand — shown in the user bubble too, so what was sent is transparent.
-    if (attachments.length) {
+    if (fromComposer && attachments.length) {
       const lines = attachments.map((a) => `- ${a.path}`).join('\n')
       text += `\n\nAttached files (read with Read, or mcp__bran_docs__read_pdf for PDFs):\n${lines}`
       attachments = []
     }
-    input = ''
-    items.push({ kind: 'user', text, at: new Date().toISOString() })
+    if (fromComposer) input = ''
+    handedBack = null
+    beginTurn(items, rstate, text)
     streaming = true
     setLive(true, 'thinking…')
     scrollSoon(true)
@@ -505,14 +541,16 @@
         // another conversation now; leave them alone.
       } else if (streamAbort?.signal.aborted) {
         // User pressed stop — a quiet note, not an error.
-        items.push({ kind: 'footer', numTurns: null, cost: null, stopped: true })
+        endTurnStopped(items, rstate)
       } else {
-        lastFailed = { text: priorInput }
-        items.push({ kind: 'error', message: errorText(e) })
+        failTurn(items, rstate, errorText(e))
         // Send failed before reaching the server — give the text back so it can
-        // be retried instead of retyped.
-        input = priorInput
-        attachments = priorAttachments
+        // be retried instead of retyped (unless the composer has moved on).
+        if (!input.trim() && !attachments.length) {
+          input = priorInput
+          attachments = priorAttachments
+          handedBack = priorInput
+        }
       }
     } finally {
       streamAbort = null
@@ -526,7 +564,7 @@
         // Auto fan-in: if this turn fanned out >=2 new background runs, the
         // server will synthesise when they finish — watch for that synthesis
         // run and refresh the conversation when it lands.
-        const fresh = spawnRunIds().filter((id) => !watchedSpawnIds.has(id))
+        const fresh = spawnRunIds(items).filter((id) => !watchedSpawnIds.has(id))
         fresh.forEach((id) => watchedSpawnIds.add(id))
         if (fresh.length >= 2) watchFanout()
       }
@@ -627,7 +665,15 @@
         onscroll={onMessagesScroll}
         style="flex: 1; overflow-y: auto; padding-right: 6px;"
       >
-        {#if historyLoading && !items.length}
+        {#if loadError}
+          <div class="load-error">
+            <ErrorBanner error={loadError} onretry={reloadChat} />
+            <p class="text-muted">
+              This conversation could not be loaded, so nothing can be sent to it.
+              <a href={href('/chat')} use:link>Start a new chat</a> instead.
+            </p>
+          </div>
+        {:else if historyLoading && !items.length}
           <Skeleton rows={6} />
         {:else if !items.length}
           <div class="empty-state chat-welcome">
@@ -730,7 +776,7 @@
           hint="Enter to send · Shift+Enter for a new line"
           busy={streaming}
           placeholder="Message bran…"
-          onsubmit={send}
+          onsubmit={() => send()}
           onstop={stop}
         >
           {#snippet leading()}
@@ -779,6 +825,14 @@
 </Page>
 
 <style>
+  .load-error {
+    max-width: 720px;
+    margin: 24px auto 0;
+  }
+  .load-error p {
+    margin-top: 10px;
+    font-size: 13px;
+  }
   .rail-sources {
     margin-top: 10px;
   }

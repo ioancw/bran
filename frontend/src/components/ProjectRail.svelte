@@ -13,6 +13,7 @@
   import Section from './Section.svelte'
   import Icon from './Icon.svelte'
   import Skeleton from './Skeleton.svelte'
+  import ErrorBanner from './ErrorBanner.svelte'
   import StatusBadge from './StatusBadge.svelte'
   import CronField from './CronField.svelte'
   import Prose from './Prose.svelte'
@@ -38,6 +39,8 @@
 
   let data = $state<ProjectDetail | null>(null)
   let railLoading = $state(true)
+  // Why the project could not be loaded (shown instead of stale content).
+  let railError = $state<unknown>(null)
   let agents = $state<AgentInfo[]>([])
   // Background runs spawned by the current chat (chat mode only).
   let chatRuns = $state<RunRecord[]>([])
@@ -83,13 +86,17 @@
       const d = await api.projectDetail(pid)
       if (projectId !== pid) return // rail switched projects while awaiting
       data = d
+      railError = null
       // Reset the form on project change (reseedForm) or when it holds no
       // unsaved edits; a dirty form only ever loses its text via explicit save.
       if (reseedForm || !formDirty()) seedForm()
-    } catch {
-      /* ignore — rail just stays empty */
+    } catch (e) {
+      if (projectId !== pid) return
+      // A background refresh that fails keeps what is on screen; a first load
+      // (nothing to show yet) says why.
+      if (!data) railError = e
     } finally {
-      railLoading = false
+      if (projectId === pid) railLoading = false
     }
   }
   let loadedProjectId: string | null = null
@@ -97,7 +104,19 @@
     void workspace.activityTick // reload Progress when a chat/run completes
     const projectChanged = projectId !== loadedProjectId
     loadedProjectId = projectId
+    if (projectChanged) {
+      // The rail instance is reused when the chat's scope changes: the previous
+      // project's files, memory and runners must not stay on screen under the
+      // new one (their remove buttons would act on the wrong project).
+      data = null
+      railError = null
+      railLoading = true
+    }
     void load(projectChanged)
+  })
+  let alive = true
+  $effect(() => () => {
+    alive = false
   })
   $effect(() => {
     void api
@@ -143,18 +162,31 @@
   async function refreshSummary() {
     if (summarising) return
     summarising = true
+    const pid = projectId
     try {
-      const run = await api.summariseProject(projectId)
+      const run = await api.summariseProject(pid)
       // One short run; poll it so the rail updates itself when the brief lands.
+      // Stops when the rail goes away or moves to another project, and rides
+      // out a blip: one failed poll is not the run failing.
+      let misses = 0
       for (let i = 0; i < 80; i++) {
         await new Promise((r) => setTimeout(r, 3000))
-        const r = await api.run(run.id)
+        if (!alive || projectId !== pid) return
+        let r: RunRecord
+        try {
+          r = await api.run(run.id)
+          misses = 0
+        } catch (e) {
+          if (++misses > 5) throw e
+          continue
+        }
         if (r.status !== 'running' && r.status !== 'pending') {
           if (r.status !== 'completed')
             toast(r.error_summary?.title ?? r.error ?? 'The summary run did not finish', 'err')
           break
         }
       }
+      if (!alive || projectId !== pid) return
       await load()
       bumpActivity()
     } catch (e) {
@@ -426,6 +458,15 @@
 
 {#if !data && railLoading}
   <Skeleton rows={4} />
+{:else if !data && railError}
+  <ErrorBanner
+    error={railError}
+    onretry={() => {
+      railError = null
+      railLoading = true
+      void load(true)
+    }}
+  />
 {:else if data}
   <div class="space-y-4">
     <!-- Progress is the chat-side "what's happening now"; the home page is for

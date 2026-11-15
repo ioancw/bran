@@ -17,6 +17,11 @@
       return `Signed in to claude.ai${l.subscription ? ` (${l.subscription})` : ''}`
     return 'No Claude login found'
   })
+
+  // What the last server start did about runner fires missed while it was down.
+  const caughtUp = $derived(health?.scheduler?.caught_up ?? [])
+  const skipped = $derived(health?.scheduler?.skipped ?? [])
+  const names = (rows: { name: string }[]) => rows.map((r) => r.name).join(', ')
 </script>
 
 {#if health}
@@ -47,6 +52,24 @@
       <span class="dot" class:warn={health.slots.in_use > 0}></span>
       {health.slots.in_use} of {health.slots.max} slots in use
     </span>
+    {#if caughtUp.length}
+      <span
+        class="chip"
+        title={`The server was down when these were due, so they ran when it came back: ${names(caughtUp)}`}
+      >
+        <span class="dot warn"></span>
+        Caught up {caughtUp.length} missed {caughtUp.length === 1 ? 'run' : 'runs'}
+      </span>
+    {/if}
+    {#if skipped.length}
+      <span
+        class="chip bad"
+        title={`Missed while the server was down, and too long ago to run now: ${names(skipped)}`}
+      >
+        <span class="dot err"></span>
+        {skipped.length} missed {skipped.length === 1 ? 'run' : 'runs'} skipped
+      </span>
+    {/if}
     <span class="chip spend" title="Estimated spend (client-side SDK estimate, not billing)">
       Today {usd(health.spend.today.cost)} · 7 days {usd(health.spend.week.cost)} · 30 days {usd(
         health.spend.month.cost,

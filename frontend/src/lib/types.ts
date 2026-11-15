@@ -227,6 +227,16 @@ export interface HealthSnapshot {
     default_model: string
   }
   slots: { in_use: number; max: number }
+  // Absent on a server older than the catch-up feature.
+  scheduler?: {
+    running: boolean
+    alive_at: string | null
+    catchup_hours: number
+    // Recurring runners whose fire was missed while the server was down:
+    // run now at startup (caught_up) or too old to be worth it (skipped).
+    caught_up: { name: string; due: string }[]
+    skipped: { name: string; due: string }[]
+  }
   spend: {
     today: { cost: number; runs: number }
     week: { cost: number; runs: number }

@@ -51,9 +51,14 @@
     return v && typeof v === 'object' ? (v as Verification) : null
   })
 
-  async function loadTranscript() {
+  // `current()` is false once the page has moved on to another run: this
+  // component instance is reused when the id changes in place (Re-run, a
+  // child-run link, Back/Forward), so every await below can resolve for a run
+  // that is no longer the one on screen.
+  async function loadTranscript(id: string, current: () => boolean) {
     try {
-      const { events } = await api.runTranscript(runId)
+      const { events } = await api.runTranscript(id)
+      if (!current()) return
       const items: ChatItem[] = []
       const st = freshState()
       for (const ev of events) applyEvent(items, st, ev)
@@ -62,7 +67,8 @@
       /* transcript optional */
     }
     try {
-      artifacts = await api.runArtifacts(runId)
+      const next = await api.runArtifacts(id)
+      if (current()) artifacts = next
     } catch {
       /* artifacts optional */
     }
@@ -70,24 +76,41 @@
 
   $effect(() => {
     void reloadTick // retry re-triggers the whole load/stream cycle
+    const id = runId
     let timer: ReturnType<typeof setInterval> | undefined
     const aborter = new AbortController()
+    const current = () => !aborter.signal.aborted
+    // Nothing of the previous run may linger under the new URL.
+    run = null
+    children = []
+    sources = []
+    transcript = []
+    artifacts = []
+    error = null
+    showRawError = false
     void (async () => {
+      let first: RunRecord
       try {
-        run = await api.run(runId)
+        first = await api.run(id)
       } catch (e) {
-        error = String(e)
+        if (current()) error = String(e)
         return
       }
+      if (!current()) return
+      run = first
       api
-        .runs({ parent_run_id: runId, limit: 200 })
-        .then((r) => (children = r))
+        .runs({ parent_run_id: id, limit: 200 })
+        .then((r) => {
+          if (current()) children = r
+        })
         .catch(() => {})
       api
-        .runSources(runId)
-        .then((r) => (sources = r))
+        .runSources(id)
+        .then((r) => {
+          if (current()) sources = r
+        })
         .catch(() => {})
-      if (run.status === 'running' || run.status === 'pending') {
+      if (first.status === 'running' || first.status === 'pending') {
         // Live: stream the run's events into the transcript as it executes
         // (replay-then-live, see /spa/runs/{id}/stream). A dropped connection
         // mid-run reconnects with backoff — the server replays the buffer, so
@@ -95,33 +118,42 @@
         // ends the run finished — refetch the canonical record + transcript.
         void (async () => {
           let attempts = 0
-          while (!aborter.signal.aborted) {
+          while (current()) {
             transcript = []
             const st = freshState()
             try {
-              for await (const ev of streamRunEvents(runId, aborter.signal)) {
+              for await (const ev of streamRunEvents(id, aborter.signal)) {
+                if (!current()) return
                 if (ev.type === 'done') break
                 attempts = 0 // healthy stream — reset the backoff
                 applyEvent(transcript, st, ev)
               }
               break // clean end: the run finished (or isn't live in this process)
             } catch {
-              if (aborter.signal.aborted) break
+              if (!current()) return
               // Transient drop. Reconnect only while the run is still going.
+              let again: RunRecord
               try {
-                run = await api.run(runId)
+                again = await api.run(id)
               } catch {
                 break
               }
-              if (run.status !== 'running' && run.status !== 'pending') break
+              if (!current()) return
+              run = again
+              if (again.status !== 'running' && again.status !== 'pending') break
               if (++attempts > 5) break // the 3s poll still covers status
               await new Promise((r) => setTimeout(r, Math.min(800 * 2 ** attempts, 8000)))
             }
           }
-          if (!aborter.signal.aborted) {
-            run = await api.run(runId)
-            await loadTranscript()
+          if (!current()) return
+          try {
+            const done = await api.run(id)
+            if (!current()) return
+            run = done
+          } catch {
+            /* the poll below keeps trying */
           }
+          await loadTranscript(id, current)
         })()
         // Status/cost poll — also the fallback when the live stream isn't
         // available (e.g. the run predates a server restart). Tolerate transient
@@ -129,20 +161,23 @@
         // dead server doesn't throw every 3s forever.
         let pollFails = 0
         timer = setInterval(async () => {
+          let polled: RunRecord
           try {
-            run = await api.run(runId)
+            polled = await api.run(id)
             pollFails = 0
           } catch {
             if (++pollFails > 5) clearInterval(timer)
             return
           }
-          if (run.status !== 'running' && run.status !== 'pending') {
+          if (!current()) return
+          run = polled
+          if (polled.status !== 'running' && polled.status !== 'pending') {
             clearInterval(timer)
-            await loadTranscript()
+            await loadTranscript(id, current)
           }
         }, 3000)
       } else {
-        await loadTranscript()
+        await loadTranscript(id, current)
       }
     })()
     return () => {
