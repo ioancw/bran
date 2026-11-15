@@ -209,7 +209,7 @@ def test_session_lock_is_per_session_and_exclusive():
 # ---------------------------------------------------------------------------
 
 def test_delegation_prompt_names_the_subagent():
-    from bran.web.spa_api import delegation_prompt
+    from bran.web.spa_routes.chats import delegation_prompt
 
     p = delegation_prompt("research")
     assert "`research` subagent" in p and p.startswith("## Delegation request")
@@ -220,7 +220,7 @@ def test_mention_in_orchestrator_chat_keeps_the_session(monkeypatch):
     with a delegation prompt, instead of starting a new chat with research."""
     from fastapi.testclient import TestClient
 
-    import bran.web.spa_api as spa
+    import bran.web.spa_routes.chats as spa
     from bran.api import build_app
     from bran.persistence import ChatRecord, upsert_chat
 

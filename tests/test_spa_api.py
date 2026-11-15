@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from bran.api import build_app
 from bran.persistence import ScheduleRecord
-from bran.web.spa_api import _schedule_dict
+from bran.web.spa_routes.schedules import schedule_dict as _schedule_dict
 
 
 @pytest.fixture(scope="module")

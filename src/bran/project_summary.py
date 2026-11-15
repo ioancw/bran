@@ -15,7 +15,6 @@ import re
 from bran.persistence import (
     ProjectRecord,
     ScheduleRecord,
-    delete_schedule,
     insert_schedule,
     list_schedules,
 )
@@ -67,12 +66,9 @@ def enable_daily_summary(project: ProjectRecord) -> ScheduleRecord:
         cron=SUMMARY_CRON, project_id=project.id,
     )
     insert_schedule(rec)
-    try:
-        from bran.scheduler import register_schedule
+    from bran.schedule_service import sync_job
 
-        register_schedule(rec)
-    except Exception:  # noqa: BLE001 — no live scheduler (tests, --no-scheduler)
-        pass
+    sync_job(rec)  # a no-op without a live scheduler (tests, --no-scheduler)
     return rec
 
 
@@ -80,11 +76,6 @@ def disable_daily_summary(project_id: str) -> bool:
     existing = find_summary_schedule(project_id)
     if existing is None:
         return False
-    delete_schedule(existing.name)
-    try:
-        from bran.scheduler import unregister_schedule
+    from bran.schedule_service import remove_schedule
 
-        unregister_schedule(existing.name)
-    except Exception:  # noqa: BLE001
-        pass
-    return True
+    return remove_schedule(existing.name)

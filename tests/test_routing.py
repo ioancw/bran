@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from bran.web.spa_api import _parse_agent_prefix
+from bran.web.spa_routes.chats import parse_agent_prefix as _parse_agent_prefix
 
 
 def test_plain_prompt_routes_to_orchestrator():

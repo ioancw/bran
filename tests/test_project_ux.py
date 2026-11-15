@@ -63,7 +63,7 @@ def test_archived_chats_leave_recents_but_are_kept(client):
 # --- summary ---------------------------------------------------------------
 
 def test_summary_is_stored_and_rides_in_the_project_context(client):
-    from bran.web.spa_api import _build_project_context
+    from bran.web.spa_routes.projects import build_project_context as _build_project_context
 
     p = _project("Beta")
     assert set_project_summary(p.id, "# Beta\nIt is about bees.")
@@ -130,7 +130,7 @@ def test_new_project_can_start_with_a_daily_summary(client):
 
 
 def test_summarise_now_launches_a_summariser_run(client, monkeypatch):
-    import bran.web.spa_api as spa
+    import bran.web.spa_routes.common as spa
 
     launched = {}
 

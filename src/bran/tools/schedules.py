@@ -59,21 +59,16 @@ def _when(rec: Any) -> str:
 
 
 def _register(rec: Any) -> None:
-    try:
-        from bran.scheduler import register_schedule
+    """(Re)sync the runner's live job — a no-op without a live scheduler."""
+    from bran.schedule_service import sync_job
 
-        register_schedule(rec)
-    except Exception:
-        pass  # no live scheduler (e.g. --no-scheduler / CLI) — DB row is enough
+    sync_job(rec)
 
 
 def _unregister(name: str) -> None:
-    try:
-        from bran.scheduler import unregister_schedule
+    from bran.schedule_service import remove_job
 
-        unregister_schedule(name)
-    except Exception:
-        pass
+    remove_job(name)
 
 
 def _next_run(rec: Any) -> str:
@@ -126,8 +121,7 @@ def _next_run(rec: Any) -> str:
      "verify": bool, "delta": bool, "alert": str},
 )
 async def create_runner(args: dict[str, Any]) -> dict[str, Any]:
-    from bran.agents import get_agent
-    from bran.persistence import ScheduleRecord, get_schedule, insert_schedule
+    from bran.schedule_service import ScheduleError, create_schedule
 
     name = (args.get("name") or "").strip()
     agent = (args.get("agent") or "").strip()
@@ -142,23 +136,16 @@ async def create_runner(args: dict[str, Any]) -> dict[str, Any]:
     if not agent:
         return _err("an agent name is required.")
     try:
-        get_agent(agent)
-    except KeyError:
-        return _err(f"unknown agent {agent!r}. List agents first if unsure.")
-    if get_schedule(name) is not None:
-        return _err(f"a runner named {name!r} already exists — pick another name or delete it first.")
-    try:
         cron, run_at = _parse_schedule(args.get("schedule") or "")
+        rec = create_schedule(
+            name=name, agent=agent, task=task, cron=cron, run_at=run_at,
+            project_id=project_id, verify=verify, delta=delta, alert=alert,
+        )
+    except ScheduleError as e:
+        hint = " List agents first if unsure." if "Unknown agent" in str(e) else ""
+        return _err(str(e) + hint)
     except ValueError as e:
         return _err(str(e))
-
-    rec = ScheduleRecord.new(
-        name=name, agent=agent, task=task, cron=cron,
-        project_id=project_id, run_at=run_at, verify=verify, delta=delta,
-        alert=alert,
-    )
-    insert_schedule(rec)
-    _register(rec)
     scope = f" (in project {project_id})" if project_id else ""
     modes = "".join(
         f" [{m}]" for m, on in (("verify", verify), ("delta", delta)) if on
@@ -288,8 +275,9 @@ async def update_runner(args: dict[str, Any]) -> dict[str, Any]:
         name, agent=agent, task=task, cron=cron, run_at=run_at,
         verify=_tri("verify"), delta=_tri("delta"), alert=alert,
     )
-    _unregister(name)
-    _register(new)  # no-op when paused
+    if new is None:
+        return _err(f"no runner named {name!r}.")
+    _register(new)  # drops the old job; a paused runner stays unregistered
     return _ok(f"Updated runner '{name}': {agent} runs {_when(new)}. {_next_run(new)}")
 
 

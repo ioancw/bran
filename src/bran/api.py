@@ -33,17 +33,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from bran import __version__
-from bran.agents import list_agents
 from bran.background import spawn_background
 from bran.config import SETTINGS
-from bran.persistence import (
-    ScheduleRecord,
-    delete_schedule,
-    get_run,
-    insert_schedule,
-    list_runs,
-    list_schedules,
-)
+from bran.persistence import get_run, list_runs, list_schedules
 from bran.runner import run_agent
 
 # ---------------------------------------------------------------------------
@@ -102,18 +94,10 @@ def _build_api_router(enable_scheduler: bool) -> APIRouter:
     api = APIRouter(prefix="/api", tags=["api"], dependencies=[Depends(_require_token)])
 
     @api.get("/agents")
-    async def agents() -> list[dict[str, Any]]:
-        return [
-            {
-                "name": p.name,
-                "description": p.description,
-                "model": p.model,
-                "tools": p.tools,
-                "subagents": list(p.subagents),
-                "file": p.source,
-            }
-            for p in list_agents()
-        ]
+    def agents() -> list[dict[str, Any]]:
+        from bran.web.spa_routes.meta import agents_list
+
+        return agents_list()
 
     @api.post("/agents/{name}/run")
     async def run_agent_endpoint(
@@ -170,7 +154,7 @@ def _build_api_router(enable_scheduler: bool) -> APIRouter:
         return asdict(record)
 
     @api.get("/runs")
-    async def runs(
+    def runs(
         agent: str | None = Query(None),
         status_: str | None = Query(None, alias="status"),
         limit: int = Query(50, ge=1, le=500),
@@ -178,7 +162,7 @@ def _build_api_router(enable_scheduler: bool) -> APIRouter:
         return [asdict(r) for r in list_runs(agent=agent, status=status_, limit=limit)]
 
     @api.get("/runs/{run_id}")
-    async def run_detail(run_id: str) -> dict[str, Any]:
+    def run_detail(run_id: str) -> dict[str, Any]:
         rec = get_run(run_id)
         if rec is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"No run {run_id}")
@@ -195,29 +179,32 @@ def _build_api_router(enable_scheduler: bool) -> APIRouter:
         return {"run_id": run_id, "cancelled": cancel_background(run_id)}
 
     @api.get("/schedules")
-    async def schedules() -> list[dict[str, Any]]:
+    def schedules() -> list[dict[str, Any]]:
         return [asdict(s) for s in list_schedules()]
 
     @api.post("/schedules", status_code=status.HTTP_201_CREATED)
     async def create_schedule(body: ScheduleCreateRequest) -> dict[str, Any]:
-        rec = ScheduleRecord.new(
-            name=body.name, agent=body.agent, task=body.task, cron=body.cron
-        )
-        insert_schedule(rec)
-        if enable_scheduler:
-            from bran.scheduler import register_schedule
+        # Same rules as the SPA form and the chat tool: a known agent, a cron
+        # the scheduler can run (plain English is accepted and normalised), a
+        # name that is free — 400 / 409 rather than a stored runner that never
+        # fires or a 500.
+        from bran import schedule_service
 
-            register_schedule(rec)
+        try:
+            rec = schedule_service.create_schedule(
+                name=body.name, agent=body.agent, task=body.task, cron=body.cron
+            )
+        except schedule_service.ScheduleError as e:
+            code = status.HTTP_409_CONFLICT if e.kind == "conflict" else status.HTTP_400_BAD_REQUEST
+            raise HTTPException(code, str(e))
         return asdict(rec)
 
     @api.delete("/schedules/{name}")
     async def remove_schedule(name: str) -> dict[str, Any]:
-        if not delete_schedule(name):
-            raise HTTPException(status.HTTP_404_NOT_FOUND, f"No schedule {name}")
-        if enable_scheduler:
-            from bran.scheduler import unregister_schedule
+        from bran import schedule_service
 
-            unregister_schedule(name)
+        if not schedule_service.remove_schedule(name):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"No schedule {name}")
         return {"deleted": name}
 
     return api

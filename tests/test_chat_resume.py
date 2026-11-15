@@ -9,7 +9,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-import bran.web.spa_api as spa
+import bran.web.spa_routes.chats as spa
 from bran.api import build_app
 from bran.persistence import ChatRecord, RunRecord, get_setting, insert_run, upsert_chat, utcnow_iso
 from bran.web.events import restored_context
@@ -70,7 +70,7 @@ def test_pruned_transcript_starts_fresh_session_with_same_id(monkeypatch):
         assert "restored" in seen["append_system"]
         assert "User: what is the fx vol smile?" in seen["append_system"]
         assert "You: A smile is the shape" in seen["append_system"]
-        assert get_setting(spa._DB_HISTORY_KEY + sid) == "1"
+        assert get_setting(spa.DB_HISTORY_KEY + sid) == "1"
 
         # From now on history comes from the database even once a new SDK
         # file exists (it would only hold the turns since the restart).
@@ -90,4 +90,4 @@ def test_intact_transcript_resumes_normally(monkeypatch):
         c.post("/spa/chat/stream", data={"prompt": "hi", "session_id": sid})
     assert seen["resume"] == sid and seen["session_id"] is None
     assert not (seen["append_system"] or "")  # nothing restored, nothing injected
-    assert get_setting(spa._DB_HISTORY_KEY + sid, "") == ""
+    assert get_setting(spa.DB_HISTORY_KEY + sid, "") == ""
