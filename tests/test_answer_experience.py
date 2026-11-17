@@ -194,3 +194,33 @@ def test_notifications_link_to_the_reading_view_only_when_a_public_url_is_set(mo
     assert webhook_payload(rec, False)["url"] == "https://box.tailnet.ts.net:8765/app/read/run-123"
     monkeypatch.setenv("BRAN_PUBLIC_URL", "javascript:alert(1)")
     assert read_link(rec) is None
+
+
+# --- the library (Artifacts page) ------------------------------------------------
+
+def test_library_lists_project_files_and_loose_documents_newest_first(client):
+    import os
+
+    from bran.doc_export import documents_dir
+    from bran.persistence import ProjectRecord, insert_project
+    from bran.project_files import files_dir
+
+    proj = ProjectRecord.new(name="Library project")
+    insert_project(proj)
+    page = files_dir(proj.id, create=True) / "fx vol.html"
+    page.write_text("<html><head><title>FX vol &amp; skew</title></head></html>", encoding="utf-8")
+    loose = documents_dir() / "loose-note.md"
+    loose.write_text("# hi", encoding="utf-8")
+    os.utime(page, (2_000_000_000, 2_000_000_000))
+    os.utime(loose, (2_000_000_100, 2_000_000_100))
+
+    rows = client.get("/spa/library", headers=SAME).json()
+    mine = [r for r in rows if r["name"] in ("fx vol.html", "loose-note.md")]
+    assert [r["name"] for r in mine] == ["loose-note.md", "fx vol.html"]
+    assert mine[0]["project_id"] is None and mine[0]["title"] == ""
+    assert mine[0]["url"] == "/spa/documents/loose-note.md"
+    assert mine[1]["project_name"] == "Library project" and mine[1]["title"] == "FX vol & skew"
+    assert mine[1]["url"] == f"/spa/projects/{proj.id}/files/fx%20vol.html"
+    # The URL each entry gives is one the server actually serves.
+    assert client.get(mine[1]["url"], headers=SAME).status_code == 200
+    assert client.get(mine[0]["url"], headers=SAME).status_code == 200

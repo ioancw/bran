@@ -117,7 +117,7 @@
            showing an empty grid. -->
       <EmptyState
         title="No projects yet"
-        hint="A project keeps a topic's chats, instructions, files and scheduled runners in one place. Your projects will appear here."
+        hint="A project keeps a topic's chats, instructions, files and automations in one place. Your projects will appear here."
         icon="folder"
       >
         <button class="btn-primary" onclick={() => (showForm = true)}
@@ -125,9 +125,7 @@
         >
       </EmptyState>
     {:else}
-      <p class="intro">
-        A project keeps a topic's chats, instructions, files and scheduled runners together.
-      </p>
+      <p class="intro">A project keeps a topic's chats, instructions, files and automations together.</p>
       <div class="proj-grid">
         {#each projects as p (p.id)}
           <a href={href('/projects/' + encodeURIComponent(p.id))} use:link class="card project-card">

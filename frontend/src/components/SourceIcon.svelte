@@ -49,6 +49,11 @@
     object-fit: contain;
     vertical-align: -0.2em;
   }
+  /* Many sites ship a dark mark on a transparent ground, which vanishes on a
+     dark page. A pale backing keeps every icon visible; light keeps none. */
+  :global(:root:not([data-theme='light'])) img.src-icon {
+    background: #ece9e4;
+  }
   .tile {
     display: inline-flex;
     align-items: center;
@@ -57,7 +62,7 @@
     font-weight: 600;
     line-height: 1;
     color: #fff;
-    background: hsl(var(--h) 38% 44%);
+    background: hsl(var(--h) 40% 36%); /* dark enough for the white letter to read */
     user-select: none;
   }
 </style>

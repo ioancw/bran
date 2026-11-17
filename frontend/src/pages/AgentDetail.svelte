@@ -2,6 +2,7 @@
   // Agent detail: the blueprint's config, plus the managed-agent actions —
   // run it now, schedule it, and see its runners + recent runs.
   import { api } from '../lib/api'
+  import { toolDisplayName } from '../chat/events'
   import { href, link, navigate } from '../lib/router.svelte'
   import { fmtCost, relativeTime } from '../lib/time'
   import { errorText } from '../lib/errors'
@@ -133,7 +134,7 @@
           </dl>
           {#if agent.tools.length}
             <div class="cfg-tools">
-              {#each agent.tools as t (t)}<span class="chip">{t}</span>{/each}
+              {#each agent.tools as t (t)}<span class="chip" title={t}>{toolDisplayName(t)}</span>{/each}
             </div>
           {/if}
           {#if agent.subagents.length}
@@ -142,7 +143,7 @@
         </div>
 
         <div class="card">
-          <div class="label-cap" style="margin-bottom: 8px;">Runners · {runners.length}</div>
+          <div class="label-cap" style="margin-bottom: 8px;">Automations · {runners.length}</div>
           {#if runners.length}
             <div class="runner-list">
               {#each runners as s (s.name)}
@@ -213,7 +214,7 @@
     grid-template-columns: auto 1fr;
     gap: 4px 12px;
     margin: 0;
-    font-size: 12.5px;
+    font-size: 13px;
   }
   .cfg dt {
     color: var(--muted);

@@ -112,7 +112,12 @@
   async function load() {
     error = null // clear a stale banner so a recovered refresh shows clean
     try {
-      ;[runs, schedules] = await Promise.all([api.runs({ limit: 200, exclude_chats: true }), api.schedules()])
+      ;[runs, schedules] = await Promise.all([
+        // Sub-agent steps belong to the run that started them; counted on
+        // their own they turn two briefs into "56 done".
+        api.runs({ limit: 200, exclude_chats: true, exclude_subagents: true }),
+        api.schedules(),
+      ])
     } catch (e) {
       error = String(e)
     } finally {
@@ -164,7 +169,8 @@
       hint="Once your agents start working, this page becomes their morning report: deliveries, failures, and what's coming up."
       icon="calendar"
     >
-      <a href={href('/runners')} use:link class="btn-primary"><Icon name="plus" size={14} />Create a runner</a
+      <a href={href('/runners')} use:link class="btn-primary"
+        ><Icon name="plus" size={14} />Create an automation</a
       >
       <a href={href('/chat')} use:link class="btn-outline">Start a chat</a>
     </EmptyState>
@@ -235,7 +241,7 @@
             </div>
           {:else}
             <p class="quiet">
-              Nothing delivered yet. <a href={href('/runners')} use:link>Create a runner</a> to change that.
+              Nothing delivered yet. <a href={href('/runners')} use:link>Create an automation</a> to change that.
             </p>
           {/if}
         </section>
@@ -256,7 +262,7 @@
               {/each}
             </div>
           {:else}
-            <p class="quiet">No scheduled runners.</p>
+            <p class="quiet">Nothing scheduled.</p>
           {/if}
         </div>
 
@@ -275,18 +281,20 @@
               <span class="stat-num num">{stats.running}</span>
               <span class="stat-label">Running</span>
             </div>
+            <!-- All three spend figures come from the server and include chats,
+                 so they agree with the strip at the top of the page. -->
             <div class="stat">
-              <span class="stat-num num">{fmtCost(stats.cost)}</span>
-              <span class="stat-label">Cost</span>
+              <span class="stat-num num">{fmtCost(health ? health.spend.today.cost : stats.cost)}</span>
+              <span class="stat-label">Spent today</span>
             </div>
             {#if health}
               <div class="stat">
                 <span class="stat-num num">${health.spend.week.cost.toFixed(2)}</span>
-                <span class="stat-label">This week</span>
+                <span class="stat-label">Last 7 days</span>
               </div>
               <div class="stat">
                 <span class="stat-num num">${health.spend.month.cost.toFixed(2)}</span>
-                <span class="stat-label">This month</span>
+                <span class="stat-label">Last 30 days</span>
               </div>
             {/if}
           </div>

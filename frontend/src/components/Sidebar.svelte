@@ -14,15 +14,20 @@
   import { requestPalette } from '../lib/palette.svelte'
   import Icon from './Icon.svelte'
   import OnboardingChecklist from './OnboardingChecklist.svelte'
+  import { isTeammateActive, teammateHint, teammateHref } from '../lib/teammates'
+  import type { Teammate } from '../lib/types'
 
   let {
     counts,
+    teammates = [],
     version,
     open = false,
     collapsed = false,
     oncollapse,
   }: {
     counts: Record<string, number | null>
+    // Agents with a standing job (lib/teammates.ts).
+    teammates?: Teammate[]
     version: string
     open?: boolean
     collapsed?: boolean
@@ -41,25 +46,23 @@
     })
   })
 
-  // Two domains, surfaced as labeled groups so the IA is self-explanatory:
-  // Workspace (where you work) vs Fleet (the agents and their runs).
+  // Where you work. The agents that work for you follow as their own section
+  // (Teammates), listed by name — on the collapsed rail they are one icon.
   const groups = [
     {
       label: 'Workspace',
       items: [
         { key: 'today', label: 'Today', to: '/', icon: 'calendar' },
-        { key: 'projects', label: 'Projects', to: '/projects', icon: 'folder' },
-      ],
-    },
-    {
-      label: 'Fleet',
-      items: [
-        { key: 'runners', label: 'Runners', to: '/runners', icon: 'bot' },
         { key: 'outputs', label: 'Outputs', to: '/outputs', icon: 'inbox' },
+        { key: 'artifacts', label: 'Artifacts', to: '/artifacts', icon: 'layers' },
+        { key: 'projects', label: 'Projects', to: '/projects', icon: 'folder' },
+        { key: 'runners', label: 'Automations', to: '/runners', icon: 'clock' },
         { key: 'runs', label: 'Runs', to: '/runs', icon: 'history' },
       ],
     },
   ]
+  const TEAM_SHOWN = 5
+  const teamShown = $derived(teammates.slice(0, TEAM_SHOWN))
   const seg0 = $derived(router.route.segments[0] ?? '')
   const active = $derived(seg0 === '' ? 'today' : seg0)
 
@@ -302,6 +305,55 @@
       </div>
     {/each}
   </nav>
+
+  <!-- Teammates: agents with a standing job, by name, with how each is doing.
+       Clicking one opens its chat. -->
+  <div class="team">
+    <a
+      href={href('/teammates')}
+      use:link
+      class="nav-item team-head"
+      class:active={active === 'teammates'}
+      aria-current={active === 'teammates' ? 'page' : undefined}
+      title={collapsed ? 'Teammates' : 'All teammates'}
+    >
+      <Icon name="bot" size={16} class="nav-ico" />
+      <span class="nav-label">Teammates</span>
+      {#if teammates.length}<span class="count">{teammates.length}</span>{/if}
+    </a>
+    <div class="team-list">
+      {#each teamShown as t (t.id)}
+        {@const on = isTeammateActive(t, router.route.segments, router.route.query)}
+        <a
+          href={href(teammateHref(t))}
+          use:link
+          class="team-row"
+          class:active={on}
+          aria-current={on ? 'page' : undefined}
+          title="{t.name} · {t.agent}"
+        >
+          <span class="team-dot {t.state}"></span>
+          <span class="team-name">{t.name}</span>
+          <span class="team-hint">{teammateHint(t)}</span>
+        </a>
+      {/each}
+      {#if teammates.length > TEAM_SHOWN}
+        <a href={href('/teammates')} use:link class="team-row team-more"
+          >{teammates.length - TEAM_SHOWN} more</a
+        >
+      {:else if teammates.length}
+        <a href={href('/teammates?new=1')} use:link class="team-row team-more"
+          ><Icon name="plus" size={12} />Create teammate</a
+        >
+      {:else}
+        <div class="team-empty">
+          <span class="team-empty-title">Hire your first teammate</span>
+          <span class="team-empty-text">Persistent agents that work for you.</span>
+          <a href={href('/teammates?new=1')} use:link class="btn-outline btn-sm">Create new teammate</a>
+        </div>
+      {/if}
+    </div>
+  </div>
 
   <!-- Recents: the conversation list, scoped to the current project. -->
   <div class="recents-head">
@@ -576,6 +628,101 @@
     color: var(--accent-fg);
   }
 
+  .team {
+    padding: 0 12px;
+    margin-bottom: 10px;
+  }
+  .team-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    margin-top: 1px;
+  }
+  .team-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 4px 10px 4px 14px;
+    border-radius: var(--radius);
+    color: var(--fg-dim);
+    font-size: 13px;
+    text-decoration: none;
+    min-width: 0;
+  }
+  .team-row:hover {
+    background: var(--surface2);
+    color: var(--fg-bright);
+    text-decoration: none;
+  }
+  .team-row.active {
+    background: var(--accent-glow);
+    color: var(--accent-soft);
+  }
+  .team-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    align-self: center;
+    background: var(--green);
+  }
+  .team-dot.working {
+    background: var(--amber);
+    animation: brn-pulse 1.2s ease-in-out infinite;
+  }
+  .team-dot.failed {
+    background: var(--red);
+  }
+  .team-dot.paused {
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px var(--muted);
+  }
+  .team-name {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+  }
+  .team-hint {
+    margin-left: auto;
+    flex-shrink: 0;
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .team-empty {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin: 2px 4px 0;
+    padding: 10px 11px 11px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+  }
+  .team-empty-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg-bright);
+  }
+  .team-empty-text {
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--muted);
+    margin-bottom: 7px;
+  }
+  .team-empty .btn-outline {
+    justify-content: center;
+  }
+  .team-more {
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
   .recents-head {
     display: flex;
     align-items: center;
@@ -751,7 +898,7 @@
     overflow-y: auto;
   }
   .menu-item.sub {
-    font-size: 12.5px;
+    font-size: 13px;
     padding: 5px 8px;
   }
   .menu-check {
@@ -807,8 +954,12 @@
       justify-content: center;
       padding: 0;
     }
-    .collapsed .side-nav {
+    .collapsed .side-nav,
+    .collapsed .team {
       padding: 0 10px;
+    }
+    .collapsed .team-list {
+      display: none;
     }
     .collapsed .nav-group-label {
       display: none;

@@ -112,7 +112,7 @@
             }
       runner = await api.updateSchedule(runner.name, fields)
       editing = false
-      toast('Runner saved', 'ok')
+      toast('Saved', 'ok')
     } catch (e) {
       editError = errorText(e)
     } finally {
@@ -159,14 +159,14 @@
     if (!runner) return
     if (
       !(await confirmDialog(
-        `Delete runner "${runner.name}"? Its schedule stops. Past runs and outputs are kept.`,
-        'Delete runner',
+        `Delete the automation "${runner.name}"? Its schedule stops. Past runs and outputs are kept.`,
+        'Delete automation',
       ))
     )
       return
     try {
       await api.deleteSchedule(runner.name)
-      toast(`Deleted runner ${runner.name}`, 'ok')
+      toast(`Deleted ${runner.name}`, 'ok')
     } catch (e) {
       toast(errorText(e), 'err')
       return
@@ -176,7 +176,7 @@
 </script>
 
 <Page title={runnerName}>
-  {#snippet subtitle()}Runner{/snippet}
+  {#snippet subtitle()}Automation{/snippet}
   {#snippet actions()}
     {#if runner && !editing}
       <button class="btn-outline" onclick={startEdit}><Icon name="pencil" size={13} />Edit</button>
@@ -190,8 +190,12 @@
   {:else if !loaded}
     <Skeleton rows={5} />
   {:else if !runner}
-    <EmptyState title="Runner not found" hint="It may have been deleted. Check the runners list." icon="bot">
-      <a href={href('/runners')} use:link class="btn-outline">All runners</a>
+    <EmptyState
+      title="Automation not found"
+      hint="It may have been deleted. Check the list of automations."
+      icon="bot"
+    >
+      <a href={href('/runners')} use:link class="btn-outline">All automations</a>
     </EmptyState>
   {:else}
     <div class="grid grid-cols-3 gap-6">
@@ -199,7 +203,7 @@
       <div class="col-span-2 space-y-6">
         {#if editing}
           <div class="card">
-            <h2 class="card-title">Edit runner</h2>
+            <h2 class="card-title">Edit automation</h2>
             <div class="space-y-4">
               <div class="fld">
                 <label for="{uid}-task">Task</label>
@@ -507,7 +511,7 @@
   }
   .form-error {
     color: var(--red);
-    font-size: 12.5px;
+    font-size: 13px;
   }
   .form-actions {
     display: flex;

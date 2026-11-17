@@ -62,7 +62,25 @@ CREATE TABLE IF NOT EXISTS schedules (
     run_at      TEXT,
     verify      INTEGER NOT NULL DEFAULT 0,
     delta       INTEGER NOT NULL DEFAULT 0,
-    alert       TEXT NOT NULL DEFAULT ''
+    alert       TEXT NOT NULL DEFAULT '',
+    -- The teammate this automation works for (NULL = a plain automation).
+    teammate_id TEXT
+);
+
+-- Teammates: an agent given a name and a standing job. Each has ONE chat it
+-- is steered from (`chat_id`, the SDK session; NULL until the first message)
+-- and any number of automations (schedules.teammate_id) that do its repeating
+-- work. `brief` is the standing job description: it rides in the system
+-- prompt of both the chat and the scheduled runs.
+CREATE TABLE IF NOT EXISTS teammates (
+    id          TEXT PRIMARY KEY,
+    name        TEXT UNIQUE NOT NULL,
+    agent       TEXT NOT NULL,
+    brief       TEXT NOT NULL DEFAULT '',
+    chat_id     TEXT,
+    project_id  TEXT,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
 );
 
 -- Files a run produced (captured from its Write/Edit tool calls). First-class
@@ -316,17 +334,21 @@ class ScheduleRecord:
     verify: bool = False
     delta: bool = False
     alert: str = ""
+    # The teammate this automation works for (None = a plain automation). Its
+    # runs carry the teammate's brief and what the user last told it.
+    teammate_id: str | None = None
 
     @staticmethod
     def new(
         name: str, agent: str, task: str, cron: str,
         project_id: str | None = None, run_at: str | None = None,
         verify: bool = False, delta: bool = False, alert: str = "",
+        teammate_id: str | None = None,
     ) -> ScheduleRecord:
         return ScheduleRecord(
             id=str(uuid.uuid4()), name=name, agent=agent, task=task, cron=cron,
             project_id=project_id, run_at=run_at, verify=verify, delta=delta,
-            alert=alert,
+            alert=alert, teammate_id=teammate_id,
         )
 
 
@@ -597,6 +619,7 @@ def list_runs(
     project_id: str | None = None, exclude_chats: bool = False,
     schedule_id: str | None = None, q: str | None = None,
     session_id: str | None = None, parent_run_id: str | None = None,
+    exclude_subagents: bool = False,
 ) -> list[RunRecord]:
     sql = "SELECT * FROM runs"
     clauses: list[str] = []
@@ -638,6 +661,10 @@ def list_runs(
         # reliable even for failed/orphaned chat runs the old session_id
         # heuristic leaked.
         clauses.append("(source IS NULL OR source != 'chat')")
+    if exclude_subagents:
+        # The steps a run handed to sub-agents: one workflow records dozens,
+        # which would crowd the runs someone actually started out of the page.
+        clauses.append("(source IS NULL OR source != 'subagent')")
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
     sql += " ORDER BY started_at DESC LIMIT ?"
@@ -645,6 +672,17 @@ def list_runs(
     with _lock, _conn() as conn:
         rows = conn.execute(sql, params).fetchall()
     return [RunRecord.from_row(r) for r in rows]
+
+
+def count_runs_by_source() -> dict[str, int]:
+    """How many runs exist per source, chat turns left out: the true totals
+    behind a page that only ever loads the newest few hundred."""
+    with _lock, _conn() as conn:
+        rows = conn.execute(
+            "SELECT COALESCE(source, 'manual') AS s, count(*) AS n FROM runs"
+            " WHERE source IS NULL OR source != 'chat' GROUP BY s"
+        ).fetchall()
+    return {r["s"]: int(r["n"]) for r in rows}
 
 
 def _row_to_schedule(r: sqlite3.Row) -> ScheduleRecord:
@@ -661,6 +699,7 @@ def _row_to_schedule(r: sqlite3.Row) -> ScheduleRecord:
         verify=bool(r["verify"]),
         delta=bool(r["delta"]),
         alert=r["alert"] or "",
+        teammate_id=r["teammate_id"],
     )
 
 
@@ -669,8 +708,8 @@ def insert_schedule(record: ScheduleRecord) -> None:
         conn.execute(
             """INSERT INTO schedules
                (id, name, agent, task, cron, enabled, created_at, project_id, run_at,
-                verify, delta, alert)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                verify, delta, alert, teammate_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 record.id,
                 record.name,
@@ -684,6 +723,7 @@ def insert_schedule(record: ScheduleRecord) -> None:
                 1 if record.verify else 0,
                 1 if record.delta else 0,
                 record.alert or "",
+                record.teammate_id,
             ),
         )
 
@@ -906,6 +946,7 @@ def touch_chat(chat_id: str) -> None:
 
 def list_chats(
     limit: int = 100, project_id: str | None = None, archived: bool | None = False,
+    exclude_teammates: bool = False,
 ) -> list[ChatRecord]:
     """Return chats sorted by most-recently updated.
 
@@ -915,11 +956,14 @@ def list_chats(
     default sidebar until you re-scoped to that project.)
 
     `archived` False (default) → live chats only; True → archived only;
-    None → both.
+    None → both. `exclude_teammates` leaves out each teammate's own chat: it
+    is reached from the teammate, not from Recents.
     """
     sql = "SELECT * FROM chats"
     where: list[str] = []
     params: list[Any] = []
+    if exclude_teammates:
+        where.append("id NOT IN (SELECT chat_id FROM teammates WHERE chat_id IS NOT NULL)")
     if project_id:
         where.append("project_id = ?")
         params.append(project_id)
@@ -998,6 +1042,8 @@ def delete_chat(chat_id: str) -> bool:
         ]
         conn.execute("DELETE FROM app_settings WHERE key = ?", (f"chat_history_db:{chat_id}",))
         conn.execute("DELETE FROM answer_feedback WHERE session_id = ?", (chat_id,))
+        # A teammate whose chat is deleted starts a new one on its next message.
+        conn.execute("UPDATE teammates SET chat_id = NULL WHERE chat_id = ?", (chat_id,))
     for i in range(0, len(turns), 500):
         delete_runs(turns[i:i + 500])
     return True
@@ -1022,6 +1068,105 @@ def move_chat_to_project(chat_id: str, project_id: str | None) -> bool:
 # ---------------------------------------------------------------------------
 # Projects (Claude-Cowork-style containers for related chats + memory)
 # ---------------------------------------------------------------------------
+
+# Teammates
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TeammateRecord:
+    id: str
+    name: str
+    agent: str                    # the role: which agent does the work
+    brief: str = ""               # the standing job, in the user's words
+    chat_id: str | None = None    # its one chat (SDK session); None until first used
+    project_id: str | None = None
+    created_at: str = field(default_factory=utcnow_iso)
+    updated_at: str = field(default_factory=utcnow_iso)
+
+    @staticmethod
+    def new(name: str, agent: str, brief: str = "", project_id: str | None = None) -> TeammateRecord:
+        return TeammateRecord(
+            id=str(uuid.uuid4()), name=name, agent=agent, brief=brief, project_id=project_id,
+        )
+
+
+def _row_to_teammate(r: sqlite3.Row) -> TeammateRecord:
+    return TeammateRecord(
+        id=r["id"], name=r["name"], agent=r["agent"], brief=r["brief"] or "",
+        chat_id=r["chat_id"], project_id=r["project_id"],
+        created_at=r["created_at"], updated_at=r["updated_at"],
+    )
+
+
+def insert_teammate(record: TeammateRecord) -> None:
+    with _lock, _conn() as conn:
+        conn.execute(
+            """INSERT INTO teammates
+               (id, name, agent, brief, chat_id, project_id, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (record.id, record.name, record.agent, record.brief, record.chat_id,
+             record.project_id, record.created_at, record.updated_at),
+        )
+
+
+def list_teammates() -> list[TeammateRecord]:
+    with _lock, _conn() as conn:
+        rows = conn.execute("SELECT * FROM teammates ORDER BY created_at").fetchall()
+    return [_row_to_teammate(r) for r in rows]
+
+
+def get_teammate(teammate_id: str) -> TeammateRecord | None:
+    with _lock, _conn() as conn:
+        row = conn.execute("SELECT * FROM teammates WHERE id = ?", (teammate_id,)).fetchone()
+    return _row_to_teammate(row) if row else None
+
+
+def get_teammate_by_chat(chat_id: str) -> TeammateRecord | None:
+    with _lock, _conn() as conn:
+        row = conn.execute("SELECT * FROM teammates WHERE chat_id = ?", (chat_id,)).fetchone()
+    return _row_to_teammate(row) if row else None
+
+
+def update_teammate(teammate_id: str, *, name: str, agent: str, brief: str) -> TeammateRecord | None:
+    with _lock, _conn() as conn:
+        cur = conn.execute(
+            "UPDATE teammates SET name = ?, agent = ?, brief = ?, updated_at = ? WHERE id = ?",
+            (name, agent, brief, utcnow_iso(), teammate_id),
+        )
+        if cur.rowcount == 0:
+            return None
+    return get_teammate(teammate_id)
+
+
+def set_teammate_chat(teammate_id: str, chat_id: str | None) -> None:
+    with _lock, _conn() as conn:
+        conn.execute(
+            "UPDATE teammates SET chat_id = ?, updated_at = ? WHERE id = ?",
+            (chat_id, utcnow_iso(), teammate_id),
+        )
+
+
+def delete_teammate(teammate_id: str) -> bool:
+    """Remove a teammate. Its automations are kept as plain automations and
+    its chat as an ordinary chat: nothing it produced is deleted."""
+    with _lock, _conn() as conn:
+        cur = conn.execute("DELETE FROM teammates WHERE id = ?", (teammate_id,))
+        if cur.rowcount == 0:
+            return False
+        conn.execute("UPDATE schedules SET teammate_id = NULL WHERE teammate_id = ?", (teammate_id,))
+    return True
+
+
+def set_schedule_teammate(name: str, teammate_id: str | None) -> ScheduleRecord | None:
+    """Give an automation to a teammate, or take it back (None)."""
+    with _lock, _conn() as conn:
+        cur = conn.execute(
+            "UPDATE schedules SET teammate_id = ? WHERE name = ?", (teammate_id, name)
+        )
+        if cur.rowcount == 0:
+            return None
+    return get_schedule(name)
+
 
 @dataclass
 class ProjectRecord:
@@ -1355,9 +1500,15 @@ def _m3_answer_feedback(conn: sqlite3.Connection) -> None:
     existing database gained it."""
 
 
+def _m4_teammates(conn: sqlite3.Connection) -> None:
+    """Teammates: `_TABLES` creates the table; an existing schedules table
+    gains the column that ties an automation to one."""
+    _add_column_if_missing(conn, "schedules", "teammate_id", "TEXT")
+
+
 # Append only. A migration never changes once released: a database that has
 # already run it will not run it again.
-_MIGRATIONS = (_m1_legacy_catch_up, _m2_events_to_table, _m3_answer_feedback)
+_MIGRATIONS = (_m1_legacy_catch_up, _m2_events_to_table, _m3_answer_feedback, _m4_teammates)
 
 
 def _bring_up_to_date(conn: sqlite3.Connection) -> None:

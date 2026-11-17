@@ -62,6 +62,18 @@ function close(st: ReducerState): void {
   st.openAssistant = -1
 }
 
+/** The turn is over, so nothing in it is still running. A tool call whose
+ * result never arrived (a dropped event, a stopped turn) is closed here, with
+ * no duration since nobody measured one; otherwise its row would spin and
+ * count up forever beside a finished answer. */
+function settleTools(items: ChatItem[], st: ReducerState): void {
+  for (const idx of Object.values(st.tools)) {
+    const it = items[idx]
+    if (it?.kind === 'tool' && it.status === 'running') it.status = 'done'
+  }
+  st.tools = {}
+}
+
 /**
  * Apply one event to the items list (mutating in place so Svelte's deep
  * reactivity picks it up). Returns a session id when the event carries one, so
@@ -158,16 +170,19 @@ export function applyEvent(items: ChatItem[], st: ReducerState, ev: ChatEvent): 
 
     case 'result':
       close(st)
+      settleTools(items, st)
       items.push({ kind: 'footer', numTurns: ev.num_turns, cost: ev.total_cost_usd, at: ev.ts })
       return {}
 
     case 'error':
       close(st)
+      settleTools(items, st)
       items.push({ kind: 'error', message: ev.message })
       return {}
 
     case 'done':
       close(st)
+      settleTools(items, st)
       return {}
   }
 }

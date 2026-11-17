@@ -14,11 +14,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from bran.web.spa_routes import answers, chats, meta, projects, runs, schedules
+from bran.web.spa_routes import answers, chats, meta, projects, runs, schedules, teammates
 from bran.web.spa_routes.security import require_same_origin
 
 router = APIRouter(
     prefix="/spa", tags=["spa"], dependencies=[Depends(require_same_origin)]
 )
-for _module in (meta, runs, schedules, projects, answers, chats):
+for _module in (meta, runs, schedules, projects, answers, chats, teammates):
     router.include_router(_module.router)

@@ -15,7 +15,8 @@
   import Skeleton from '../components/Skeleton.svelte'
   import Composer from '../components/Composer.svelte'
   import ProjectRail from '../components/ProjectRail.svelte'
-  import type { Catalog, ChatSummary, ProjectDetail } from '../lib/types'
+  import { displayTitle, groupOf, type LibraryGroup } from '../lib/library'
+  import type { Catalog, ChatSummary, LibraryItem, ProjectDetail } from '../lib/types'
 
   let { projectId }: { projectId: string } = $props()
 
@@ -79,7 +80,24 @@
     } catch (e) {
       if (projectId === pid) error = String(e)
     }
+    // What the project has produced, newest first (the same list Artifacts
+    // shows). A failure here only leaves the section out.
+    try {
+      const all = await api.library()
+      if (projectId === pid) docs = all.filter((it) => it.project_id === pid)
+    } catch {
+      /* the page works without it */
+    }
   }
+  let docs = $state<LibraryItem[]>([])
+  const DOC_ICON: Record<LibraryGroup, string> = {
+    page: 'file-text',
+    pdf: 'book',
+    note: 'list',
+    image: 'image',
+    other: 'file-text',
+  }
+  const DOCS_SHOWN = 6
   $effect(() => {
     void projectId
     setScope(projectId) // sidebar Recents shows this project's conversations
@@ -103,7 +121,7 @@
   async function deleteProject() {
     if (
       !(await confirmDialog(
-        `Delete project "${name}"? Its chats are kept and move to Recents; its runners keep running, detached from it; its daily summary runner is removed. Files in its folder stay on disk.`,
+        `Delete project "${name}"? Its chats are kept and move to Recents; its automations keep running, detached from it; its daily summary is switched off. Files in its folder stay on disk.`,
         'Delete project',
       ))
     )
@@ -172,7 +190,7 @@
                   >{#if hasRunner}<Icon name="check" size={10} stroke={3} />{/if}</span
                 >
                 <span class="setup-body">
-                  <span class="setup-title">Attach a runner</span>
+                  <span class="setup-title">Add an automation</span>
                   <span class="setup-desc"
                     >An agent on a schedule that works inside this project: a morning brief, a weekly digest,
                     a watch that alerts you.</span
@@ -248,6 +266,31 @@
             <p class="quiet">No chats in this project yet. Start one above.</p>
           {/if}
         </section>
+
+        {#if docs.length}
+          <section>
+            <div class="list-head">
+              <div class="label-cap">Documents · {docs.length}</div>
+              {#if docs.length > DOCS_SHOWN}
+                <a href={href('/artifacts')} use:link class="docs-all">All in Artifacts</a>
+              {/if}
+            </div>
+            <div class="space-y-2">
+              {#each docs.slice(0, DOCS_SHOWN) as it (it.url)}
+                <a href={it.url} target="_blank" rel="noopener" class="conv-card card">
+                  <span class="conv-icon" aria-hidden="true"
+                    ><Icon name={DOC_ICON[groupOf(it.name)]} size={15} /></span
+                  >
+                  <div style="flex: 1; min-width: 0;">
+                    <div class="conv-title">{displayTitle(it)}</div>
+                    <div class="conv-meta">{it.name} · {it.size_human}</div>
+                  </div>
+                  <span class="conv-time">{relativeTime(new Date(it.modified * 1000).toISOString())}</span>
+                </a>
+              {/each}
+            </div>
+          </section>
+        {/if}
       </div>
 
       <!-- Right: settings/context rail (fixed width) -->
@@ -268,8 +311,13 @@
   }
   @media (max-width: 900px) {
     .ph-grid {
-      grid-template-columns: 1fr;
+      /* minmax(0, …): a bare 1fr grows to its widest child and runs off-screen. */
+      grid-template-columns: minmax(0, 1fr);
     }
+  }
+  .docs-all {
+    margin-left: auto;
+    font-size: 12px;
   }
 
   /* Setup checklist: three rows, each a door to the control that does it. */
@@ -338,7 +386,7 @@
     color: var(--fg-bright);
   }
   .setup-desc {
-    font-size: 12.5px;
+    font-size: 13px;
     color: var(--muted);
     line-height: 1.4;
   }

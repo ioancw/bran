@@ -258,6 +258,15 @@ async def upload_files(
     return saved
 
 
+@router.get("/library")
+def library() -> list[dict[str, Any]]:
+    """Every document across the projects, plus those saved outside one —
+    the Artifacts page."""
+    from bran.project_files import library as list_library
+
+    return list_library([(p.id, p.name) for p in list_projects()])
+
+
 @router.post("/uploads")
 async def upload_attachments(files: Annotated[list[UploadFile], File()]) -> list[dict[str, Any]]:
     """Chat-composer attachments: one-off files referenced by absolute path in

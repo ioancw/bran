@@ -3,13 +3,38 @@
   // and how long each tool call took. Rows expand to the full detail (the
   // same ToolBlock / prose the transcript uses), so the timeline is the
   // overview and the transcript the long form.
-  import { isDelegation as isDelegationTool, toolDisplayName, type ChatItem, type ToolItem } from './events'
+  //
+  // Handing work to another agent is part of the story: a delegation row
+  // names the agent (or workflow), shows how that agent's own run went and
+  // how long it took, and links to it; when the run was told a background
+  // agent had finished, the row says so and how long the wait was.
+  import {
+    isDelegation as isDelegationTool,
+    SPAWN_TOOL,
+    toolDisplayName,
+    type ChatItem,
+    type ToolItem,
+  } from './events'
   import { category, categoryIcon, preview, summary, truncate } from './tool-labels'
+  import { delegationLabel, parseTaskNotification } from './delegation'
+  import { fmtSpan } from './activity'
+  import { href, link } from '../lib/router.svelte'
+  import { fmtCost } from '../lib/time'
+  import type { RunRecord } from '../lib/types'
   import ToolBlock from './ToolBlock.svelte'
   import Prose from '../components/Prose.svelte'
   import Icon from '../components/Icon.svelte'
 
-  let { items }: { items: ChatItem[] } = $props()
+  let {
+    items,
+    children = [],
+  }: {
+    items: ChatItem[]
+    // The runs this run handed work to (its child runs), when the page has them.
+    children?: RunRecord[]
+  } = $props()
+
+  const childOf = (t: ToolItem) => (t.runId ? children.find((c) => c.id === t.runId) : undefined)
 
   let openRows = $state<Record<number, boolean>>({})
   function toggle(i: number) {
@@ -30,7 +55,7 @@
     const line = text.split('\n').find((l) => l.trim()) ?? ''
     return truncate(line.trim(), max)
   }
-  const isDelegation = (t: ToolItem) => isDelegationTool(t.name)
+  const isDelegation = (t: ToolItem) => isDelegationTool(t.name) || t.name === SPAWN_TOOL
 
   type Row = {
     i: number
@@ -42,12 +67,32 @@
     right: string
     tone: '' | 'ok' | 'err' | 'warn'
     expandable: boolean
+    child?: RunRecord
   }
   const rows = $derived.by((): Row[] => {
     const out: Row[] = []
     items.forEach((item, i) => {
       if (item.kind === 'routed') return
-      if (item.kind === 'user') {
+      const note = item.kind === 'user' ? parseTaskNotification(item.text) : null
+      if (item.kind === 'user' && note) {
+        // Not something a person typed: the SDK telling the run that an agent
+        // it started in the background has finished.
+        const started = items.find((x) => x.kind === 'tool' && x.toolId === note.toolUseId)
+        const from = started?.kind === 'tool' && started.at ? Date.parse(started.at) : NaN
+        const waited = item.at ? Date.parse(item.at) - from : NaN
+        const failed = note.status !== 'completed'
+        out.push({
+          i,
+          item,
+          time: clockSeconds(item.at),
+          icon: 'bell',
+          label: failed ? 'Agent did not finish' : 'Agent finished',
+          detail: note.summary,
+          right: !Number.isNaN(waited) && waited >= 1000 ? `waited ${fmtSpan(waited)}` : '',
+          tone: failed ? 'err' : 'ok',
+          expandable: true,
+        })
+      } else if (item.kind === 'user') {
         out.push({
           i,
           item,
@@ -85,36 +130,45 @@
         })
       } else if (item.kind === 'tool') {
         const cat = category(item.name)
-        const label = isDelegation(item)
-          ? `Delegated to ${(item.input.subagent_type as string) || 'general-purpose'}`
-          : toolDisplayName(item.name)
-        const detail = isDelegation(item)
-          ? truncate(String(item.input.prompt ?? item.input.description ?? ''), 110)
-          : summary(item.name, item.input)
-        const tone = item.status === 'error' ? 'err' : item.status === 'running' ? 'warn' : 'ok'
+        const child = childOf(item)
+        const handoff = isDelegation(item) ? delegationLabel(item.name, item.input, child?.agent) : null
+        const label = handoff ? handoff.label : toolDisplayName(item.name)
+        const detail = handoff ? truncate(handoff.detail, 110) : summary(item.name, item.input)
+        // A delegation that runs in the background returns at once; what the
+        // reader wants is how the agent's own run went, and how long it took.
+        const childLive = child?.status === 'running' || child?.status === 'pending'
+        const tone =
+          item.status === 'error' || child?.status === 'failed'
+            ? 'err'
+            : item.status === 'running' || childLive
+              ? 'warn'
+              : 'ok'
         const right =
-          item.status === 'running'
+          item.status === 'running' || childLive
             ? 'working…'
-            : [preview(item.name, item.resultText, item.isError), fmtMs(item.durationMs)]
-                .filter(Boolean)
-                .join(' · ')
+            : child
+              ? [child.status, fmtMs(child.duration_ms)].filter(Boolean).join(' · ')
+              : [preview(item.name, item.resultText, item.isError), fmtMs(item.durationMs)]
+                  .filter(Boolean)
+                  .join(' · ')
         out.push({
           i,
           item,
           time: clockSeconds(item.at),
-          icon: categoryIcon(cat),
+          icon: handoff ? 'bot' : categoryIcon(cat),
           label,
           detail,
           right,
           tone,
           expandable: true,
+          child,
         })
       } else if (item.kind === 'footer') {
         const detail = item.stopped
           ? 'Stopped'
           : [
               item.numTurns != null ? `${item.numTurns} turns` : '',
-              item.cost != null ? `$${item.cost.toFixed(4)}` : '',
+              item.cost != null ? fmtCost(item.cost) : '',
             ]
               .filter(Boolean)
               .join(' · ')
@@ -167,6 +221,11 @@
       {#if openRows[r.i]}
         <div class="step-body">
           {#if r.item.kind === 'tool'}
+            {#if r.child}
+              <a href={href('/runs/' + r.child.id)} use:link class="step-child">
+                <Icon name="corner-down-right" size={13} />Open {r.child.agent}'s run
+              </a>
+            {/if}
             <ToolBlock tool={r.item} open />
           {:else if r.item.kind === 'assistant'}
             <div class="step-prose"><Prose text={r.item.text} /></div>
@@ -182,6 +241,14 @@
 </ol>
 
 <style>
+  .step-child {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0 0 8px;
+    font-size: 13px;
+    font-weight: 500;
+  }
   .timeline {
     list-style: none;
     margin: 0;
@@ -258,7 +325,7 @@
     white-space: nowrap;
   }
   .step-detail {
-    font-size: 12.5px;
+    font-size: 13px;
     color: var(--fg-dim);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -266,7 +333,7 @@
     min-width: 0;
   }
   .step-right {
-    font-size: 11.5px;
+    font-size: 12px;
     color: var(--muted);
     white-space: nowrap;
     font-variant-numeric: tabular-nums;

@@ -1,38 +1,3 @@
-<script lang="ts" module>
-  export type DocKind = 'page' | 'pdf' | 'markdown' | 'text' | 'image' | 'other'
-
-  const TEXT_EXT = new Set([
-    'txt',
-    'csv',
-    'tsv',
-    'json',
-    'log',
-    'tex',
-    'py',
-    'js',
-    'ts',
-    'yaml',
-    'yml',
-    'toml',
-    'xml',
-    'ini',
-    'sql',
-    'sh',
-  ])
-  const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'])
-
-  /** How a file can be shown beside the chat, by its extension. */
-  export function docKind(name: string): DocKind {
-    const ext = name.toLowerCase().split('.').pop() ?? ''
-    if (ext === 'html' || ext === 'htm') return 'page'
-    if (ext === 'pdf') return 'pdf'
-    if (ext === 'md' || ext === 'markdown') return 'markdown'
-    if (TEXT_EXT.has(ext)) return 'text'
-    if (IMAGE_EXT.has(ext)) return 'image'
-    return 'other'
-  }
-</script>
-
 <script lang="ts">
   // A document, open beside the conversation: the report the agent just
   // saved, or a file from the project. The chat stays live next to it, so
@@ -41,6 +6,7 @@
   //
   // Files are untrusted (an agent or an upload wrote them): the server sends
   // them with a sandbox policy, and the frame is sandboxed here as well.
+  import { docKind } from '../lib/doc-kind'
   import Icon from './Icon.svelte'
   import Prose from './Prose.svelte'
 
@@ -202,7 +168,7 @@
     min-width: 0;
   }
   .doc-title {
-    font-size: 13.5px;
+    font-size: 14px;
     font-weight: 600;
     color: var(--fg-bright);
     overflow: hidden;
@@ -210,7 +176,7 @@
     white-space: nowrap;
   }
   .doc-file {
-    font-size: 11.5px;
+    font-size: 12px;
     color: var(--muted);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -245,7 +211,7 @@
   .doc-text {
     margin: 0;
     font-family: var(--font-mono);
-    font-size: 12.5px;
+    font-size: 13px;
     line-height: 1.55;
     white-space: pre-wrap;
     overflow-wrap: anywhere;

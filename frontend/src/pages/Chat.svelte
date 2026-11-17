@@ -23,6 +23,7 @@
   import Icon from '../components/Icon.svelte'
   import ChatLog from '../chat/ChatLog.svelte'
   import DocPanel from '../components/DocPanel.svelte'
+  import TeammateRail from '../components/TeammateRail.svelte'
   import { savedDocName } from '../chat/DocCard.svelte'
   import { toast } from '../lib/toast.svelte'
   import {
@@ -49,6 +50,7 @@
   import type { Attachment, Catalog, ChatSummary, RunRecord, ScheduleRecord, SourceRef } from '../lib/types'
   import { relativeTime } from '../lib/time'
   import { sourceLabel } from '../lib/labels'
+  import { isSuperseded } from '../lib/verification'
 
   let { sessionId }: { sessionId: string | null } = $props()
 
@@ -58,6 +60,9 @@
   let streaming = $state(false)
   let streamingIndex = $state(-1)
   let pendingAgent = $state<string | null>(null)
+  // Set when this is a teammate's chat (its one chat): the header, the rail
+  // and every message sent follow from it.
+  let mate = $state<{ id: string; name: string } | null>(null)
   let input = $state('')
   // Model override for this chat ('' = the agent's own), remembered per chat.
   let model = $state('')
@@ -372,6 +377,7 @@
     items = []
     rstate = freshState()
     pendingAgent = null
+    mate = null
     // Each conversation gets its own composer contents — a draft typed in the
     // previous chat must not follow us here (it's saved under its own key).
     input = readDraft(sid)
@@ -391,6 +397,7 @@
       const c = await api.chat(sid)
       if (loadedId !== sid) return // navigated on while awaiting — drop stale result
       activeChat = c
+      mate = c.teammate ?? null
       setScope(c.project_id) // a chat is scoped to its project (null = loose)
       void loadFeedback(sid)
     } catch (e) {
@@ -409,6 +416,35 @@
   $effect(() => {
     const proj = router.route.query.get('project')
     if (!sessionId && !activeChat) setScope(proj)
+  })
+
+  // A new chat addressed to a teammate (?teammate=…): if it already has its
+  // chat, go there — it has only the one; otherwise this becomes it.
+  $effect(() => {
+    const id = router.route.query.get('teammate')
+    if (sessionId) return
+    if (!id) {
+      if (!activeChat) mate = null
+      return
+    }
+    let live = true
+    void api
+      .teammate(id)
+      .then((t) => {
+        if (!live) return
+        if (t.chat_id) {
+          replace('/chat/' + encodeURIComponent(t.chat_id))
+          return
+        }
+        mate = { id: t.id, name: t.name }
+        pendingAgent = t.agent
+      })
+      .catch(() => {
+        /* an unknown teammate: this is just a new chat */
+      })
+    return () => {
+      live = false
+    }
   })
 
   function reloadChat() {
@@ -490,12 +526,20 @@
     recentLoaded = true
     try {
       const [runs, runners] = await Promise.all([
-        api.runs({ exclude_chats: true, limit: 12 }),
+        // A workflow alone records dozens of child runs, so look well past
+        // the newest handful to find finished reports.
+        api.runs({ exclude_chats: true, exclude_subagents: true, limit: 40 }),
         api.schedules().catch(() => [] as ScheduleRecord[]),
       ])
       recentRunners = runners
       recentOutputs = runs
-        .filter((r) => r.status === 'completed' && (r.result ?? '').trim() && r.source !== 'subagent')
+        .filter(
+          (r) =>
+            r.status === 'completed' &&
+            (r.result ?? '').trim() &&
+            r.source !== 'subagent' &&
+            !isSuperseded(r),
+        )
         .slice(0, 3)
     } catch {
       /* the block simply stays hidden */
@@ -505,6 +549,34 @@
     (r.schedule_id && recentRunners.find((s) => s.id === r.schedule_id)?.name) || r.agent
   $effect(() => {
     if (!items.length && !historyLoading) void loadRecentOutputs()
+  })
+
+  // The home screen: a brand-new chat with nothing in it. The composer sits in
+  // the middle of the page with the question above it, and below it where the
+  // chat will live (a project), a few things to ask, and recent work.
+  const isHome = $derived(!sessionId && !items.length && !historyLoading && !loadError)
+  // How a new chat is handled: "Ask" is the orchestrator (it delegates when
+  // that helps), "Research" the research agent, or any one agent directly.
+  const hasResearch = $derived(catalog.agents.some((a) => a.name === 'research'))
+  const otherAgents = $derived(
+    catalog.agents.filter((a) => a.name !== 'orchestrator' && a.name !== 'research'),
+  )
+  // Things to ask, from what is actually here — the newest runner report first.
+  const suggestions = $derived.by(() => {
+    const out: { label: string; text: string }[] = []
+    const report = recentOutputs.find((r) => r.schedule_id)
+    if (report) {
+      out.push({
+        label: `What matters most in the latest ${outputTitle(report)}?`,
+        text: `Read the output of run ${report.id} (${outputTitle(report)}) and tell me the three things that matter most.`,
+      })
+    }
+    out.push({
+      label: 'What did my automations deliver today?',
+      text: 'What did my automations deliver today?',
+    })
+    out.push({ label: 'Digest a topic', text: '/digest ' })
+    return out
   })
 
   function onComposerAction(text: string, sendNow: boolean) {
@@ -599,6 +671,7 @@
       if (proj) fields.project_id = proj // else loose
     }
     if (model) fields.model = model
+    if (mate) fields.teammate_id = mate.id
 
     streamAbort = new AbortController()
     const epoch = viewEpoch
@@ -625,7 +698,7 @@
           const proj = router.route.query.get('project')
           activeChat = {
             id,
-            title: '(new)',
+            title: mate ? mate.name : '(new)',
             agent: pendingAgent ?? 'orchestrator',
             project_id: proj,
             updated_at: new Date().toISOString(),
@@ -697,47 +770,51 @@
   {#snippet head()}
     <!-- Breadcrumb: <scope ▾> / conversation -->
     <div class="bc">
-      <span class="crumb-wrap" bind:this={scopeMenuEl}>
-        <button
-          class="crumb-scope"
-          bind:this={scopeBtnEl}
-          aria-haspopup="menu"
-          aria-expanded={scopeMenuOpen}
-          onclick={() => (scopeMenuOpen = !scopeMenuOpen)}
-        >
-          {scopeName}
-          <Icon name="chevron-down" size={14} />
-        </button>
-        {#if scopeMenuOpen}
-          <div
-            class="crumb-menu card elev-md"
-            role="menu"
-            tabindex="-1"
-            aria-label="Conversation scope"
-            transition:fly={{ y: -4, duration: 120 }}
-            onkeydown={onMenuKeydown}
+      {#if mate}
+        <a href={href('/teammates')} use:link class="crumb-scope crumb-link">Teammates</a>
+      {:else}
+        <span class="crumb-wrap" bind:this={scopeMenuEl}>
+          <button
+            class="crumb-scope"
+            bind:this={scopeBtnEl}
+            aria-haspopup="menu"
+            aria-expanded={scopeMenuOpen}
+            onclick={() => (scopeMenuOpen = !scopeMenuOpen)}
           >
-            <button
-              class="crumb-opt"
-              class:on={!scopeId}
-              role="menuitem"
+            {scopeName}
+            <Icon name="chevron-down" size={14} />
+          </button>
+          {#if scopeMenuOpen}
+            <div
+              class="crumb-menu card elev-md"
+              role="menu"
               tabindex="-1"
-              onclick={() => switchScope(null)}>Recents (all chats)</button
+              aria-label="Conversation scope"
+              transition:fly={{ y: -4, duration: 120 }}
+              onkeydown={onMenuKeydown}
             >
-            {#each workspace.projects as p (p.id)}
               <button
                 class="crumb-opt"
-                class:on={scopeId === p.id}
+                class:on={!scopeId}
                 role="menuitem"
                 tabindex="-1"
-                onclick={() => switchScope(p.id)}>{p.name}</button
+                onclick={() => switchScope(null)}>Recents (all chats)</button
               >
-            {/each}
-          </div>
-        {/if}
-      </span>
+              {#each workspace.projects as p (p.id)}
+                <button
+                  class="crumb-opt"
+                  class:on={scopeId === p.id}
+                  role="menuitem"
+                  tabindex="-1"
+                  onclick={() => switchScope(p.id)}>{p.name}</button
+                >
+              {/each}
+            </div>
+          {/if}
+        </span>
+      {/if}
       <span class="crumb-sep">/</span>
-      <span class="crumb-title">{activeChat?.title ?? 'New chat'}</span>
+      <span class="crumb-title">{mate ? mate.name : (activeChat?.title ?? 'New chat')}</span>
       {#if activeChat}<span class="pill mute crumb-agent">{activeChat.agent}</span>{/if}
     </div>
     {#if streaming}<span class="ml-auto thinking"><span class="live-dot sm"></span>Thinking…</span>{/if}
@@ -771,6 +848,7 @@
     <!-- Center: conversation + composer -->
     <div
       class="chat-main"
+      class:home={isHome}
       style="flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative;"
     >
       <div
@@ -778,7 +856,7 @@
         class="space-y-3 chat-scroll"
         class:chat-empty={!items.length}
         onscroll={onMessagesScroll}
-        style="flex: 1; overflow-y: auto; padding-right: 6px;"
+        style={isHome ? 'padding-right: 6px;' : 'flex: 1; overflow-y: auto; padding-right: 6px;'}
       >
         {#if loadError}
           <div class="load-error">
@@ -798,52 +876,12 @@
               />
             </svg>
             <h3 class="welcome-title">
-              {currentAgent !== 'orchestrator' ? `Chat with ${currentAgent}` : 'What can bran do for you?'}
+              {mate
+                ? `Brief ${mate.name}`
+                : currentAgent !== 'orchestrator'
+                  ? `Chat with ${currentAgent}`
+                  : 'What can bran do for you?'}
             </h3>
-            <p class="cta">Ask anything, or try <code>/digest</code> or <code>@research</code></p>
-            <div class="starters">
-              <button
-                class="btn-outline"
-                onclick={() => {
-                  input = 'What did my runners deliver today?'
-                  focusComposer()
-                }}>What did my runners deliver today?</button
-              >
-              <button
-                class="btn-outline"
-                onclick={() => {
-                  input = 'Summarise the latest finance briefing for me.'
-                  focusComposer()
-                }}>Summarise the latest briefing</button
-              >
-              <button
-                class="btn-outline"
-                onclick={() => {
-                  input = '/digest '
-                  focusComposer()
-                }}>Digest a topic</button
-              >
-            </div>
-            {#if recentOutputs.length}
-              <div class="pickup">
-                <div class="label-cap pickup-label">Pick up where the fleet left off</div>
-                {#each recentOutputs as r (r.id)}
-                  <div class="pickup-row">
-                    <a href={href('/runs/' + r.id)} use:link class="pickup-title">{outputTitle(r)}</a>
-                    <span class="src src-{r.source}">{sourceLabel(r.source)}</span>
-                    <span class="pickup-time">{relativeTime(r.started_at)}</span>
-                    <button
-                      class="btn-text"
-                      onclick={() =>
-                        onComposerAction(
-                          `Let's discuss the output of run ${r.id} (${outputTitle(r)}).`,
-                          false,
-                        )}>Discuss</button
-                    >
-                  </div>
-                {/each}
-              </div>
-            {/if}
           </div>
         {:else}
           <ChatLog
@@ -914,29 +952,104 @@
           {catalog}
           hint="Enter to send · Shift+Enter for a new line"
           busy={streaming}
-          placeholder="Message bran…"
+          placeholder={mate ? `Message ${mate.name}…` : 'Message bran…'}
           onsubmit={() => send()}
           onstop={stop}
         >
           {#snippet leading()}
-            {#if activeChat}
-              <span class="composer-agent agent-fixed"><Icon name="bot" size={13} />{activeChat.agent}</span>
+            {#if activeChat || mate}
+              <span class="composer-agent agent-fixed"
+                ><Icon name="bot" size={13} />{activeChat?.agent ?? pendingAgent ?? 'orchestrator'}</span
+              >
             {:else}
-              <label class="agent-pick btn-ghost btn-sm" title="Agent for this chat">
-                <Icon name="bot" size={13} />
-                <span>{pendingAgent ?? 'orchestrator'}</span>
-                <Icon name="chevron-down" size={12} />
-                <select class="agent-select" bind:value={pendingAgent} aria-label="Agent for this chat">
-                  <option value={null}>orchestrator</option>
-                  {#each catalog.agents.filter((a) => a.name !== 'orchestrator') as a (a.name)}<option
-                      value={a.name}>{a.name}</option
-                    >{/each}
-                </select>
-              </label>
+              <div class="seg mode-seg" role="group" aria-label="How bran should handle this">
+                <button
+                  type="button"
+                  class="seg-btn"
+                  class:on={!pendingAgent}
+                  title="bran answers, and hands work to its agents when that helps"
+                  onclick={() => (pendingAgent = null)}>Ask</button
+                >
+                {#if hasResearch}
+                  <button
+                    type="button"
+                    class="seg-btn"
+                    class:on={pendingAgent === 'research'}
+                    title="The research agent: searches the web and cites its sources"
+                    onclick={() => (pendingAgent = 'research')}>Research</button
+                  >
+                {/if}
+                {#if otherAgents.length}
+                  <label
+                    class="seg-btn agent-pick"
+                    class:on={!!pendingAgent && pendingAgent !== 'research'}
+                    title="Talk to one agent directly"
+                  >
+                    <span>{pendingAgent && pendingAgent !== 'research' ? pendingAgent : 'Agent'}</span>
+                    <Icon name="chevron-down" size={12} />
+                    <select
+                      class="agent-select"
+                      aria-label="Talk to one agent directly"
+                      value={pendingAgent && pendingAgent !== 'research' ? pendingAgent : ''}
+                      onchange={(e) => (pendingAgent = e.currentTarget.value || null)}
+                    >
+                      <option value="" disabled>Choose an agent</option>
+                      {#each otherAgents as a (a.name)}<option value={a.name}>{a.name}</option>{/each}
+                    </select>
+                  </label>
+                {/if}
+              </div>
             {/if}
           {/snippet}
         </Composer>
       </div>
+
+      {#if isHome && mate}
+        <p class="mate-intro">
+          This is {mate.name}'s chat, and it stays open. Hand it work, ask what it has done, or tell it what
+          to change: its scheduled runs read what you say here.
+        </p>
+      {:else if isHome}
+        <div class="home-below">
+          <label class="proj-pick" title="Start this chat inside a project">
+            <Icon name="folder" size={13} />
+            <span>{scopeId ? scopeName : 'Choose a project'}</span>
+            <Icon name="chevron-down" size={12} />
+            <select
+              class="agent-select"
+              aria-label="Project for this chat"
+              value={scopeId ?? ''}
+              onchange={(e) => switchScope(e.currentTarget.value || null)}
+            >
+              <option value="">No project</option>
+              {#each workspace.projects as p (p.id)}<option value={p.id}>{p.name}</option>{/each}
+            </select>
+          </label>
+          <div class="starters">
+            {#each suggestions as sug (sug.label)}
+              <button class="starter" onclick={() => onComposerAction(sug.text, false)}>{sug.label}</button>
+            {/each}
+          </div>
+          {#if recentOutputs.length}
+            <div class="pickup">
+              <div class="label-cap pickup-label">Pick up where your agents left off</div>
+              {#each recentOutputs as r (r.id)}
+                <div class="pickup-row">
+                  <a href={href('/read/' + r.id)} use:link class="pickup-title">{outputTitle(r)}</a>
+                  <span class="src src-{r.source}">{sourceLabel(r.source)}</span>
+                  <span class="pickup-time">{relativeTime(r.started_at)}</span>
+                  <button
+                    class="btn-text"
+                    onclick={() =>
+                      onComposerAction(`Let's discuss the output of run ${r.id} (${outputTitle(r)}).`, false)}
+                    >Discuss</button
+                  >
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/if}
     </div>
 
     {#if doc}
@@ -951,6 +1064,18 @@
           onask={askAboutDoc}
         />
       </div>
+    {:else if mate}
+      <!-- A teammate's chat: who it is, its brief, its automations, its work. -->
+      <aside class="chat-rail">
+        <TeammateRail teammateId={mate.id} onchange={(t) => (mate = { id: t.id, name: t.name })} />
+        {#if sources.length}
+          <div class="rail-sources">
+            <Section label="Sources">
+              <SourcesPanel {sources} />
+            </Section>
+          </div>
+        {/if}
+      </aside>
     {:else if scopeId || sources.length}
       <!-- Right rail: project context (Cowork-style), only when in a project. -->
       <aside class="chat-rail">
@@ -1058,6 +1183,18 @@
     }
   }
 
+  .mate-intro {
+    max-width: 560px;
+    margin: 14px auto 0;
+    font-size: 13px;
+    line-height: 1.55;
+    text-align: center;
+    color: var(--muted);
+  }
+  .crumb-link {
+    text-decoration: none;
+  }
+
   .load-error {
     max-width: 720px;
     margin: 24px auto 0;
@@ -1134,16 +1271,70 @@
     color: var(--fg-bright);
     margin-bottom: 6px;
   }
+  /* Home screen: the question and the composer in the middle of the page. */
+  .chat-main.home {
+    justify-content: center;
+    padding-bottom: 6vh;
+  }
+  .chat-main.home .chat-welcome {
+    padding: 0 24px 6px;
+  }
+  .chat-main.home .welcome-title {
+    font-size: 26px;
+    letter-spacing: -0.01em;
+    margin-bottom: 0;
+  }
+  .home-below {
+    width: 100%;
+    max-width: var(--chat-col);
+    margin: 2px auto 0;
+  }
+  .proj-pick {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-radius: var(--radius);
+    font-size: 13px;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .proj-pick:hover,
+  .proj-pick:focus-within {
+    background: var(--surface2);
+    color: var(--fg-bright);
+  }
+  .mode-seg {
+    flex-wrap: nowrap;
+  }
   .starters {
     display: flex;
-    justify-content: center;
     flex-wrap: wrap;
     gap: 8px;
-    margin-top: 20px;
+    margin-top: 16px;
+  }
+  .starter {
+    padding: 7px 13px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--fg-dim);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    transition:
+      background var(--dur-1) var(--transition),
+      border-color var(--dur-1) var(--transition),
+      color var(--dur-1) var(--transition);
+  }
+  .starter:hover {
+    background: var(--surface2);
+    border-color: var(--border2);
+    color: var(--fg-bright);
   }
   .pickup {
-    margin: 28px auto 0;
-    max-width: 520px;
+    margin: 26px 0 0;
     text-align: left;
   }
   .pickup-label {
@@ -1285,10 +1476,10 @@
   }
 
   .chat-rail {
-    width: 320px;
+    width: 334px;
     flex-shrink: 0;
     overflow-y: auto;
-    padding-left: 4px;
+    padding: 12px 14px 12px 4px; /* a gutter: the cards used to touch the window edge */
   }
   .rail-title {
     font-weight: 600;

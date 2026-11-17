@@ -8,12 +8,15 @@ import type {
   ChatEvent,
   ChatSummary,
   ProjectDetail,
+  LibraryItem,
   ProjectFile,
   ProjectMemory,
   ProjectSummary,
   RunRecord,
   RunnerDraft,
   ScheduleRecord,
+  Teammate,
+  TeammateDetail,
   HealthSnapshot,
   SourceRef,
 } from './types'
@@ -85,6 +88,7 @@ export const api = {
       session_id?: string
       parent_run_id?: string
       exclude_chats?: boolean
+      exclude_subagents?: boolean
       limit?: number
       q?: string
     } = {},
@@ -97,11 +101,15 @@ export const api = {
     if (q.schedule_id) p.set('schedule_id', q.schedule_id)
     if (q.session_id) p.set('session_id', q.session_id)
     if (q.exclude_chats) p.set('exclude_chats', 'true')
+    if (q.exclude_subagents) p.set('exclude_subagents', 'true')
     if (q.limit) p.set('limit', String(q.limit))
     if (q.q && q.q.trim()) p.set('q', q.q.trim())
     const qs = p.toString()
     return getJSON<RunRecord[]>(`/spa/runs${qs ? `?${qs}` : ''}`)
   },
+  // True totals behind the capped list: runs, and the sub-agent steps in them.
+  runCounts: () =>
+    getJSON<{ runs: number; subagent: number; by_source: Record<string, number> }>('/spa/runs/counts'),
   starOutput: (id: string, starred: boolean) =>
     form<{ run_id: string; starred: boolean }>(`/spa/outputs/${encodeURIComponent(id)}/star`, {
       starred: starred ? 'true' : 'false',
@@ -122,6 +130,23 @@ export const api = {
   runArtifacts: (id: string) => getJSON<ArtifactEntry[]>(`/spa/runs/${encodeURIComponent(id)}/artifacts`),
 
   schedules: () => getJSON<ScheduleRecord[]>('/spa/schedules'),
+
+  teammates: () => getJSON<Teammate[]>('/spa/teammates'),
+  teammate: (id: string) => getJSON<TeammateDetail>(`/spa/teammates/${encodeURIComponent(id)}`),
+  newTeammate: (fields: { name: string; agent: string; brief: string; schedule: string; adopt: string }) =>
+    form<Teammate>('/spa/teammates', fields),
+  updateTeammate: (id: string, fields: { name: string; agent: string; brief: string }) =>
+    form<Teammate>(`/spa/teammates/${encodeURIComponent(id)}`, fields),
+  teammateAutomation: (id: string, name: string, attach: boolean) =>
+    form<Teammate>(`/spa/teammates/${encodeURIComponent(id)}/automations`, {
+      name,
+      attach: attach ? 'true' : 'false',
+    }),
+  deleteTeammate: async (id: string): Promise<void> => {
+    const url = `/spa/teammates/${encodeURIComponent(id)}`
+    const r = await fetch(url, { method: 'DELETE' })
+    if (!r.ok) await raiseFor(r, url)
+  },
   parseSchedule: (expr: string) =>
     getJSON<{ ok: boolean; cron: string; human: string; error: string }>(
       `/spa/schedules/parse?expr=${encodeURIComponent(expr)}`,
@@ -159,6 +184,7 @@ export const api = {
     if (!r.ok) await raiseFor(r, url)
   },
 
+  library: () => getJSON<LibraryItem[]>('/spa/library'),
   uploadFiles: async (projectId: string, files: FileList | File[]): Promise<ProjectFile[]> => {
     const body = new FormData()
     for (const f of Array.from(files)) body.append('files', f)

@@ -103,7 +103,7 @@
         <h2 class="card-title">About me</h2>
         <p class="card-desc">
           Who you are and how you like things done: role, location and timezone, preferences, standing
-          context. Every agent sees this on every run (chats, runners, background spawns). Project
+          context. Every agent sees this on every run (chats, automations, background runs). Project
           instructions layer on top for project-specific guidance.
         </p>
         <textarea
@@ -144,7 +144,7 @@
             <dd>{health.limits.max_spawn_depth}</dd>
             <dt>Subagent depth / concurrency</dt>
             <dd>{health.limits.subagent_depth} / {health.limits.subagent_concurrency}</dd>
-            <dt>Runner retries</dt>
+            <dt>Automation retries</dt>
             <dd>{health.limits.runner_retries}</dd>
           </dl>
           <div class="defs-head">Integrations</div>
@@ -235,7 +235,7 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    font-size: 12.5px;
+    font-size: 13px;
     color: var(--green);
   }
   .save-err {
@@ -282,7 +282,7 @@
   }
   .foot code {
     font-family: var(--font-mono);
-    font-size: 11.5px;
+    font-size: 12px;
   }
   .theme-grid {
     display: grid;

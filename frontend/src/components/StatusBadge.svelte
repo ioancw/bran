@@ -21,7 +21,7 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    font-size: 12.5px;
+    font-size: 13px;
     font-weight: 500;
     color: var(--fg-dim);
     white-space: nowrap;

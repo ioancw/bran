@@ -95,7 +95,7 @@ def resolve_trigger(cron: str, run_at: str | None) -> tuple[str, str | None]:
 def create_schedule(
     *, name: str, agent: str, task: str = "", cron: str = "", run_at: str | None = None,
     project_id: str | None = None, verify: bool = False, delta: bool = False,
-    alert: str = "",
+    alert: str = "", teammate_id: str | None = None,
 ) -> ScheduleRecord:
     """Validate, store and register a new runner. Raises ScheduleError."""
     name = validate_name(name)
@@ -109,6 +109,7 @@ def create_schedule(
     rec = ScheduleRecord.new(
         name=name, agent=agent, task=task, cron=cron, project_id=project_id or None,
         run_at=run_at, verify=verify, delta=delta, alert=(alert or "").strip(),
+        teammate_id=teammate_id or None,
     )
     try:
         insert_schedule(rec)

@@ -19,6 +19,8 @@ operates strictly inside the project's files dir.
 
 from __future__ import annotations
 
+import html
+import re
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +89,66 @@ def list_files(project_id: str) -> list[dict[str, Any]]:
                 "path": str(p),
             }
         )
+    out.sort(key=lambda f: f["modified"], reverse=True)
+    return out
+
+
+_TITLE_RE = re.compile(r"<title>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+
+
+def _page_title(path: Path) -> str:
+    """The <title> of a saved HTML document ('' if it has none). Only the head
+    of the file is read: a saved document inlines its fonts and scripts and
+    can be most of a megabyte."""
+    if path.suffix.lower() not in (".html", ".htm"):
+        return ""
+    try:
+        with path.open("rb") as f:
+            head = f.read(4096).decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    m = _TITLE_RE.search(head)
+    return html.unescape(m.group(1)).strip()[:200] if m else ""
+
+
+def library(projects: list[tuple[str, str]]) -> list[dict[str, Any]]:
+    """Every document bran holds, newest first: the files of each project in
+    `projects` (id, name) and the documents agents saved outside any project.
+    Each entry says where it lives (`project_id` None = no project) and the URL
+    that serves it."""
+    from urllib.parse import quote
+
+    from bran.doc_export import documents_dir
+
+    out: list[dict[str, Any]] = []
+
+    def add(p: Path, project_id: str | None, project_name: str | None, base: str) -> None:
+        try:
+            st = p.stat()
+        except OSError:
+            return
+        out.append(
+            {
+                "name": p.name,
+                "title": _page_title(p),
+                "size": st.st_size,
+                "size_human": _fmt_size(st.st_size),
+                "modified": st.st_mtime,
+                "project_id": project_id,
+                "project_name": project_name,
+                "url": f"{base}/{quote(p.name)}",
+            }
+        )
+
+    for project_id, name in projects:
+        d = files_dir(project_id)
+        if d.is_dir():
+            for p in d.iterdir():
+                if p.is_file():
+                    add(p, project_id, name, f"/spa/projects/{quote(project_id)}/files")
+    for p in documents_dir().iterdir():
+        if p.is_file():
+            add(p, None, None, "/spa/documents")
     out.sort(key=lambda f: f["modified"], reverse=True)
     return out
 

@@ -30,7 +30,7 @@
   const steps = $derived([
     { done: projectDone, label: 'Create a project', to: '/projects' },
     { done: chatDone, label: 'Start a chat', to: '/chat' },
-    { done: runnerDone, label: 'Schedule a runner', to: '/runners' },
+    { done: runnerDone, label: 'Set up an automation', to: '/runners' },
   ])
   const doneCount = $derived(steps.filter((s) => s.done).length)
   const allDone = $derived(doneCount === steps.length)

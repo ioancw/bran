@@ -4,9 +4,9 @@
 
 const SOURCE_LABELS: Record<string, string> = {
   chat: 'Chat',
-  runner: 'Runner',
+  runner: 'Automation',
   spawn: 'Background',
-  subagent: 'Subagent',
+  subagent: 'Sub-agent',
   manual: 'Manual',
   synthesis: 'Synthesis',
 }
@@ -21,11 +21,11 @@ export function sourceLabel(source: string | null | undefined): string {
 export function sourceHint(source: string | null | undefined): string {
   switch (source) {
     case 'runner':
-      return 'Fired by a scheduled runner'
+      return 'Started by an automation, on its schedule'
     case 'spawn':
       return 'A background run started from a conversation'
     case 'subagent':
-      return 'An inline subagent a run delegated to'
+      return 'A step another run handed to a sub-agent'
     case 'synthesis':
       return 'The combined answer bran wrote when a fan-out finished'
     case 'manual':

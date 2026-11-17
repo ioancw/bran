@@ -332,11 +332,11 @@
       {:else}
         <EmptyState
           title="No outputs yet"
-          hint="When a runner fires or a background agent finishes, its result lands here to read."
+          hint="When an automation runs or a background agent finishes, its result lands here to read."
           icon="inbox"
         >
           <a href={href('/runners')} use:link class="btn-primary">
-            <Icon name="plus" size={14} stroke={2.2} />Create a runner
+            <Icon name="plus" size={14} stroke={2.2} />Create an automation
           </a>
         </EmptyState>
       {/if}
@@ -428,7 +428,7 @@
                     use:link
                     class="btn-ghost btn-sm"
                   >
-                    <Icon name="bot" size={13} />Open runner
+                    <Icon name="bot" size={13} />Open automation
                   </a>
                 {/if}
               </footer>
@@ -467,7 +467,7 @@
   }
   .output.quiet .reading-col :global(.prose-md) {
     font-family: var(--font-ui);
-    font-size: 13.5px;
+    font-size: 14px;
     color: var(--fg-dim);
   }
   /* A sensing runner that crossed its bar — the one card that must not be missed. */
@@ -517,7 +517,7 @@
   }
   .reading-col :global(.prose-md) {
     font-family: var(--font-prose);
-    font-size: 16.5px;
+    font-size: 17px;
     line-height: 1.7;
   }
   /* Collapsed long outputs fade out; "Show more" expands them in place. */
@@ -550,7 +550,7 @@
     text-decoration: none;
   }
   .art-chip .mono {
-    font-size: 11.5px;
+    font-size: 12px;
   }
 
   /* Controls row: search on the left, source + starred segments on the right. */

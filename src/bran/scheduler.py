@@ -168,12 +168,48 @@ def _alert_append_system(condition: str) -> str:
     )
 
 
-def _verification_prompt(task: str, output: str) -> str:
-    if len(output) > 12000:
-        output = output[:12000] + "\n[… output truncated for review …]"
+# A report is reviewed whole. The reviewer used to see only its first 12,000
+# characters with a "truncated" marker, and a full morning brief runs to
+# ~16,000: it failed every brief as "cut off mid-sentence", which also cost a
+# pointless corrective re-run each day. This cap is only a guard against a
+# runaway output; a report that long keeps its opening and its ending.
+_REVIEW_CAP = 120_000
+
+
+def _verification_prompt(
+    task: str, output: str, today: str | None = None, context: str | None = None,
+) -> str:
+    from datetime import datetime, timezone
+
+    cut_note = ""
+    if len(output) > _REVIEW_CAP:
+        head, tail = output[: _REVIEW_CAP * 3 // 4], output[-_REVIEW_CAP // 4 :]
+        output = head + "\n\n[… middle of the report left out of this review copy …]\n\n" + tail
+        cut_note = (
+            "The copy above leaves out the middle of a very long report. That "
+            "cut was made for this review, not by the agent: do not count it "
+            "as missing or incomplete content.\n"
+        )
+    today = today or datetime.now(timezone.utc).strftime("%A %d %B %Y")
+    # What else the agent was told (its project, its teammate brief, the
+    # previous report in delta mode). Without it the reviewer calls a mention
+    # of the user's own project an invented assumption.
+    background = ""
+    if context and context.strip():
+        ctx = context.strip()
+        if len(ctx) > 12_000:
+            ctx = ctx[:12_000] + "\n[… rest of the background left out …]"
+        background = (
+            "The agent was also given the background below. Referring to it is "
+            "not fabrication.\n<background>\n" + ctx + "\n</background>\n\n"
+        )
     return (
         "Review the agent output below against the task it was given.\n\n"
-        f"<task>\n{task}\n</task>\n\n<output>\n{output}\n</output>\n\n"
+        f"<task>\n{task}\n</task>\n\n{background}<output>\n{output}\n</output>\n\n"
+        f"{cut_note}"
+        f"Today is {today}. Dates up to today are not in the future, and you "
+        "cannot open links or look anything up, so do not fail the output "
+        "because its events or links are newer than you know of.\n"
         "Judge ONLY: did the output actually do what the task asked (structure, "
         "scope, completeness), and is it internally consistent (no obvious "
         "fabrication, no placeholder/error text passed off as content)? Style "
@@ -184,7 +220,7 @@ def _verification_prompt(task: str, output: str) -> str:
     )
 
 
-async def _verify_output(task: str, output: str) -> dict | None:
+async def _verify_output(task: str, output: str, context: str | None = None) -> dict | None:
     """Evaluator step (cookbook evaluator-optimizer): a cheap, tool-less query
     judges the output against the task. Returns the parsed verdict dict, or
     None if the critic itself failed — verification fails OPEN (a broken critic
@@ -209,7 +245,7 @@ async def _verify_output(task: str, output: str) -> dict | None:
     )
     async def _collect() -> str:
         out = ""
-        async for msg in query(prompt=_verification_prompt(task, output), options=options):
+        async for msg in query(prompt=_verification_prompt(task, output, context=context), options=options):
             if isinstance(msg, AssistantMessage):
                 for block in msg.content:
                     if isinstance(block, TextBlock):
@@ -249,7 +285,7 @@ async def _run_verification(
     from bran.persistence import update_run
 
     try:
-        verdict = await _verify_output(task, record.result or "")
+        verdict = await _verify_output(task, record.result or "", append_system)
         if verdict is None:
             record.metadata["verification"] = {"status": "skipped", "reason": "critic failed"}
             update_run(record)
@@ -277,7 +313,7 @@ async def _run_verification(
         record.metadata["verification"]["retried_run_id"] = retry.id
         update_run(record)
         if retry.status == "completed":
-            second = await _verify_output(task, retry.result or "")
+            second = await _verify_output(task, retry.result or "", append_system)
             retry.metadata["verification"] = (
                 {"status": "done", **second, "retry_of": record.id}
                 if second is not None
@@ -308,8 +344,13 @@ async def _fire(
         "scheduler firing: %s (%s)%s", schedule_name, agent,
         f" [retry {attempt}/{SETTINGS.runner_retries}]" if attempt else "",
     )
+    from bran.teammates import run_context
+
     append_parts = [
         p for p in (
+            # A teammate's automation runs as the teammate: its brief, and
+            # what the user has told it in its chat.
+            run_context(rec.teammate_id) if rec is not None else None,
             _project_append_system(project_id),
             _delta_append_system(schedule_id) if (rec is not None and rec.delta) else None,
             _alert_append_system(rec.alert) if (rec is not None and rec.alert.strip()) else None,

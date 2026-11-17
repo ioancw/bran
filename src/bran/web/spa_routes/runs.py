@@ -44,10 +44,12 @@ def runs(
     limit: Annotated[int, Query(ge=1, le=1000)] = 200,
     q: str | None = None,
     session_id: str | None = None, parent_run_id: str | None = None,
+    exclude_subagents: bool = False,
 ) -> list[dict[str, Any]]:
     from bran.persistence import list_artifacts_for_runs
 
     records = list_runs(agent=agent or None, status=status_ or None,
+                        exclude_subagents=exclude_subagents,
                         project_id=project_id or None,
                         schedule_id=schedule_id or None,
                         exclude_chats=exclude_chats, limit=limit, q=q or None,
@@ -65,6 +67,17 @@ def runs(
         d["read_at"] = st["read_at"] if st else None
         out.append(d)
     return out
+
+
+@router.get("/runs/counts")
+def run_counts() -> dict[str, Any]:
+    """True totals for the activity log (the list itself is capped): the runs
+    someone or something started, and the sub-agent steps inside them."""
+    from bran.persistence import count_runs_by_source
+
+    by_source = count_runs_by_source()
+    steps = by_source.get("subagent", 0)
+    return {"runs": sum(by_source.values()) - steps, "subagent": steps, "by_source": by_source}
 
 
 @router.get("/runs/{run_id}")

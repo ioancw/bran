@@ -25,9 +25,16 @@
 
   // The Runs page is the fleet activity log — autonomous/managed executions.
   // Interactive chat turns live in Chat/Recents, so they're excluded here.
-  const SOURCES = ['all', 'runner', 'spawn', 'subagent', 'manual'] as const
+  // "All" is every run someone or something started. The steps those runs
+  // handed to sub-agents are a separate view: one workflow records dozens, and
+  // mixed in they bury the runs themselves. Each is also listed on its parent.
+  const SOURCES = ['all', 'runner', 'spawn', 'manual', 'subagent'] as const
   type Source = (typeof SOURCES)[number]
   let filter = $state<Source>('all')
+  const steps = $derived(filter === 'subagent')
+  // True totals from the server; the table only holds the newest `limit`.
+  let totals = $state<{ runs: number; subagent: number; by_source: Record<string, number> } | null>(null)
+  const total = $derived(totals ? (steps ? totals.subagent : totals.runs) : runs.length)
 
   // Status filter — the #1 reason to open the activity log is "what failed?".
   // "running" folds in pending (both mean "not finished yet").
@@ -44,15 +51,32 @@
   )
   // Each chip row counts within the *other* row's filter, so the numbers always
   // describe what clicking would show.
-  const countFor = (s: Source) =>
-    runs.filter((r) => (s === 'all' || r.source === s) && matchStatus(r, statusFilter)).length
+  // The two views load different rows, so a chip for the view you are not in
+  // can only show the server's total (and only when no status narrows it).
+  const countFor = (s: Source): number | null => {
+    if ((s === 'subagent') !== steps) {
+      if (!totals || statusFilter !== 'all') return null
+      if (s === 'subagent') return totals.subagent
+      return s === 'all' ? totals.runs : (totals.by_source[s] ?? 0)
+    }
+    return runs.filter((r) => (s === 'all' || r.source === s) && matchStatus(r, statusFilter)).length
+  }
   const countForStatus = (s: Status) =>
     runs.filter((r) => (filter === 'all' || r.source === filter) && matchStatus(r, s)).length
 
+  let seq = 0
   async function load() {
+    const mine = ++seq
+    const wantSteps = steps
     error = null // clear a stale banner so a recovered refresh shows clean
     try {
-      runs = await api.runs({ limit, exclude_chats: true })
+      const [rows, t] = await Promise.all([
+        api.runs({ limit, exclude_chats: true, exclude_subagents: !wantSteps }),
+        api.runCounts().catch(() => null),
+      ])
+      if (mine !== seq) return
+      runs = wantSteps ? rows.filter((r) => r.source === 'subagent') : rows
+      totals = t
     } catch (e) {
       error = String(e)
     } finally {
@@ -70,6 +94,7 @@
     }
   }
   $effect(() => {
+    void steps // switching between runs and sub-agent steps loads the other rows
     void load()
   })
   // Stay fresh: pick up runs that started/finished while the tab was unfocused.
@@ -93,14 +118,18 @@
 </script>
 
 <Page title="Runs">
-  {#snippet subtitle()}{shown.length} of {runs.length}{/snippet}
+  {#snippet subtitle()}
+    {#if shown.length === total}{total}
+      {steps ? 'sub-agent steps' : total === 1 ? 'run' : 'runs'}{:else}Showing
+      {shown.length} of {total}{steps ? ' sub-agent steps' : ''}{/if}
+  {/snippet}
   {#if error}<ErrorBanner {error} onretry={load} />{/if}
   {#if !loaded}
     <Skeleton rows={5} />
-  {:else if !runs.length}
+  {:else if !runs.length && !steps && statusFilter === 'all'}
     <EmptyState
       title="No runs yet"
-      hint="Every agent run lands here: from chat, from a runner, or from the command line."
+      hint="Every agent run lands here: from an automation, a background agent, or the command line."
       icon="history"
     />
   {:else}
@@ -113,7 +142,8 @@
             aria-pressed={filter === s}
             onclick={() => (filter = s)}
           >
-            {s === 'all' ? 'All' : sourceLabel(s)} <span class="seg-n">{countFor(s)}</span>
+            {s === 'all' ? 'All' : s === 'subagent' ? 'Sub-agent steps' : sourceLabel(s)}
+            {#if countFor(s) != null}<span class="seg-n">{countFor(s)}</span>{/if}
           </button>
         {/each}
       </div>
@@ -131,13 +161,16 @@
         {/each}
       </div>
     </div>
-    <div style="overflow-x: auto;">
-      <table class="bran-table" style="min-width: 760px;">
+    <!-- No sideways scroll: the Task column takes the room that is left, and
+         the least important columns drop out as the page narrows. Every
+         dropped field is on the run's own page. -->
+    <div class="runs-wrap">
+      <table class="bran-table">
         <thead>
           <tr>
-            <th>ID</th><th>Agent</th><th>Source</th><th>Status</th><th>Started</th><th class="num"
-              >Duration</th
-            ><th class="num">Cost</th><th>Task</th><th></th>
+            <th>ID</th><th class="c-agent">Agent</th><th class="c-src">Source</th><th>Status</th><th
+              class="c-start">Started</th
+            ><th class="num c-dur">Duration</th><th class="num c-cost">Cost</th><th>Task</th><th></th>
           </tr>
         </thead>
         <tbody>
@@ -151,16 +184,16 @@
                     >{/if}
                 </span>
               </td>
-              <td style="color: var(--fg-bright);">{r.agent}</td>
-              <td
+              <td class="c-agent" style="color: var(--fg-bright);">{r.agent}</td>
+              <td class="c-src"
                 ><span class="src src-{r.source}" title={sourceHint(r.source)}>{sourceLabel(r.source)}</span
                 ></td
               >
               <td><StatusBadge status={r.status} /></td>
-              <td class="text-dim" style="white-space: nowrap;">{localDateTime(r.started_at)}</td>
-              <td class="num mono">{fmtDuration(r.duration_ms)}</td>
-              <td class="num mono">{fmtCost(r.total_cost_usd)}</td>
-              <td class="text-dim" style="max-width: 320px;">
+              <td class="text-dim c-start" style="white-space: nowrap;">{localDateTime(r.started_at)}</td>
+              <td class="num mono c-dur">{fmtDuration(r.duration_ms)}</td>
+              <td class="num mono c-cost">{fmtCost(r.total_cost_usd)}</td>
+              <td class="text-dim task-cell">
                 <div class="task-line">{r.task}</div>
                 {#if r.status === 'failed' && (r.error_summary || r.error)}
                   <div class="task-err" title={r.error ?? ''}>{r.error_summary?.title ?? r.error}</div>
@@ -201,6 +234,35 @@
     margin-bottom: 14px;
     flex-wrap: wrap;
     align-items: center;
+  }
+  .runs-wrap {
+    container-type: inline-size;
+    overflow-x: auto; /* a last resort; the rules below keep the table inside */
+  }
+  /* The elastic column: takes what the others leave and truncates to it. */
+  .task-cell {
+    width: 100%;
+    max-width: 0;
+  }
+  .c-agent {
+    white-space: nowrap;
+  }
+  @container (max-width: 900px) {
+    .c-dur,
+    .c-cost {
+      display: none;
+    }
+  }
+  @container (max-width: 720px) {
+    .c-src {
+      display: none;
+    }
+  }
+  @container (max-width: 560px) {
+    .c-agent,
+    .c-start {
+      display: none;
+    }
   }
   .id-cell {
     display: inline-flex;

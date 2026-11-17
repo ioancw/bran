@@ -14,7 +14,9 @@ export function shortId(id: string, n = 8): string {
 }
 
 export function fmtCost(v: number | null | undefined): string {
-  return v != null ? `$${v.toFixed(4)}` : '—'
+  if (v == null) return '—'
+  // Money to the cent; a real cost too small to show as one says so.
+  return v > 0 && v < 0.005 ? '<$0.01' : `$${v.toFixed(2)}`
 }
 
 export function fmtDuration(ms: number | null | undefined): string {

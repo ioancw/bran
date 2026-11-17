@@ -75,6 +75,20 @@ def test_user_message_tool_results():
     ]
 
 
+def test_user_message_typed_tool_results():
+    # What the SDK's parser really yields on a live stream: typed blocks.
+    from claude_agent_sdk import ToolResultBlock
+
+    msg = UserMessage([
+        ToolResultBlock(tool_use_id="t1", content=[{"type": "text", "text": "ok"}], is_error=None),
+        ToolResultBlock(tool_use_id="t2", content="boom", is_error=True),
+    ])
+    assert _no_ts(events_from_message(msg)) == [
+        {"type": "tool_result", "tool_id": "t1", "is_error": False, "text": "ok"},
+        {"type": "tool_result", "tool_id": "t2", "is_error": True, "text": "boom"},
+    ]
+
+
 def test_result_message():
     msg = ResultMessage(num_turns=3, total_cost_usd=0.12, session_id="sess-1")
     assert events_from_message(msg) == [{
@@ -149,3 +163,22 @@ def test_replay_carries_the_transcript_timestamp_when_known():
     ]
     # No timestamp on the entry → no key at all (never ts=None).
     assert "ts" not in events_from_transcript_entry(Entry(kind="user_text", text="hi"))[0]
+
+
+def test_runs_can_leave_out_subagent_steps_and_report_true_totals():
+    # The Runs page loads a capped list, so its totals and its "no sub-agent
+    # steps" view both have to come from the database, not from the page.
+    import bran.persistence as p
+
+    p.init_db()
+    before = p.count_runs_by_source()
+    agent = "zz-count-test"
+    for i, source in enumerate(["runner", "subagent", "subagent", "manual", "chat"]):
+        p.insert_run(p.RunRecord(id=f"zz-count-{i}", agent=agent, task="t", status="completed", source=source))
+    listed = p.list_runs(agent=agent, exclude_chats=True)
+    assert sorted(r.source for r in listed) == ["manual", "runner", "subagent", "subagent"]
+    top = p.list_runs(agent=agent, exclude_chats=True, exclude_subagents=True)
+    assert sorted(r.source for r in top) == ["manual", "runner"]
+    after = p.count_runs_by_source()
+    grew = {s: after.get(s, 0) - before.get(s, 0) for s in after}
+    assert {s: n for s, n in grew.items() if n} == {"runner": 1, "subagent": 2, "manual": 1}

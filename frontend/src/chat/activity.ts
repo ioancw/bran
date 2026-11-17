@@ -6,6 +6,7 @@
 import { isDelegation, SPAWN_TOOL, toolDisplayName, type ChatItem, type ToolItem } from './events'
 import { domainOf, FETCH_TOOLS } from './sources'
 import { shortPath, truncate } from './tool-labels'
+import { fmtCost } from '../lib/time'
 
 export type Step = ToolItem | Extract<ChatItem, { kind: 'thinking' }>
 
@@ -160,6 +161,6 @@ export function turnSummary(
   parts.push(stats.durationMs != null ? `Worked for ${fmtSpan(stats.durationMs)}` : 'Done')
   if (nSources) parts.push(plural(nSources, 'source', 'sources'))
   if (stats.agents) parts.push(plural(stats.agents, 'agent', 'agents'))
-  if (cost != null) parts.push(`$${cost.toFixed(4)}`)
+  if (cost != null) parts.push(fmtCost(cost))
   return parts.join(' · ')
 }

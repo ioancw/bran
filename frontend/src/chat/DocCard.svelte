@@ -98,7 +98,7 @@
     min-width: 0;
   }
   .doc-title {
-    font-size: 13.5px;
+    font-size: 14px;
     font-weight: 600;
     color: var(--fg-bright);
     overflow: hidden;
@@ -120,7 +120,7 @@
     align-items: center;
     gap: 4px;
     flex-shrink: 0;
-    font-size: 12.5px;
+    font-size: 13px;
     font-weight: 500;
     color: var(--accent-soft);
   }

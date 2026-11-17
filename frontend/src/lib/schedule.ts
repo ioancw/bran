@@ -9,7 +9,7 @@ export function validateTrigger(kind: 'cron' | 'once', cron: string, runAt: stri
     if (!runAt) return 'pick a date and time for the one-shot run'
     if (new Date(runAt).getTime() < Date.now()) return 'that time is in the past — pick a future one'
   } else if (!cron.trim()) {
-    return 'give the runner a schedule'
+    return 'give it a schedule'
   }
   return null
 }

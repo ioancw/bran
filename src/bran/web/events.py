@@ -133,6 +133,38 @@ def _text_from_tool_result_content(content: Any) -> str:
     return str(content or "")
 
 
+def tool_results(message: Any) -> list[tuple[str | None, str, bool]]:
+    """(tool_use_id, text, is_error) for each tool result in a user message.
+
+    The SDK's parser hands these as typed ToolResultBlock objects; a message
+    built by hand (tests, older SDKs) carries plain dicts. Both must be read:
+    missing the typed form leaves every live tool call looking unfinished.
+    """
+    content = (
+        getattr(getattr(message, "message", None), "content", None)
+        or getattr(message, "content", None)
+    )
+    if not isinstance(content, list):
+        return []
+    out: list[tuple[str | None, str, bool]] = []
+    for block in content:
+        if isinstance(block, dict):
+            if block.get("type") != "tool_result":
+                continue
+            out.append((
+                block.get("tool_use_id"),
+                _text_from_tool_result_content(block.get("content")),
+                bool(block.get("is_error")),
+            ))
+        elif getattr(block, "tool_use_id", None):
+            out.append((
+                block.tool_use_id,
+                _text_from_tool_result_content(getattr(block, "content", None)),
+                bool(getattr(block, "is_error", False)),
+            ))
+    return out
+
+
 def events_from_message(message: Any) -> list[dict[str, Any]]:
     """Convert one live SDK message into zero or more normalized events.
 
@@ -166,24 +198,11 @@ def events_from_message(message: Any) -> list[dict[str, Any]]:
         return out
 
     if mtype == "UserMessage":
-        # User messages in the stream are tool results echoed back. The SDK hands
-        # these as dicts, not typed blocks.
-        out = []
-        content = (
-            getattr(getattr(message, "message", None), "content", None)
-            or getattr(message, "content", None)
-        )
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "tool_result":
-                    out.append({
-                        "type": "tool_result",
-                        "tool_id": block.get("tool_use_id"),
-                        "is_error": bool(block.get("is_error")),
-                        "text": _text_from_tool_result_content(block.get("content")),
-                        "ts": _now_iso(),
-                    })
-        return out
+        # User messages in the stream are tool results echoed back.
+        return [
+            {"type": "tool_result", "tool_id": tool_id, "is_error": is_error, "text": text, "ts": _now_iso()}
+            for tool_id, text, is_error in tool_results(message)
+        ]
 
     if mtype == "ResultMessage":
         return [{

@@ -485,7 +485,7 @@
   }
   .ac-name {
     font-family: var(--font-mono);
-    font-size: 12.5px;
+    font-size: 13px;
     min-width: 110px;
     flex-shrink: 0;
     color: var(--fg-bright);

@@ -79,6 +79,18 @@ describe('applyEvent', () => {
     expect(read.isError).toBe(false)
   })
 
+  it('closes a tool call whose result never arrived once the turn ends', () => {
+    const items = reduce([
+      { type: 'tool_use', name: 'WebFetch', input: {}, tool_id: 't1' },
+      { type: 'text', text: 'answer' },
+      { type: 'result', num_turns: 1, total_cost_usd: 0.1, session_id: null },
+      { type: 'done' },
+    ])
+    const fetch = items[0] as Extract<ChatItem, { kind: 'tool' }>
+    expect(fetch.status).toBe('done')
+    expect(fetch.durationMs).toBeNull()
+  })
+
   it('marks an errored tool_result', () => {
     const items = reduce([
       { type: 'tool_use', name: 'Bash', input: {}, tool_id: 't1' },

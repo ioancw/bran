@@ -808,28 +808,9 @@ def _finish_subagent_run(child_id: str, text: str, is_error: bool, *, error: str
 def _tool_results(message: Any) -> list[tuple[str, str, bool]]:
     """(tool_use_id, text, is_error) for each tool_result block in a user
     message — the SDK hands these as dicts, occasionally as typed blocks."""
-    from bran.web.events import _text_from_tool_result_content
+    from bran.web.events import tool_results
 
-    content = getattr(message, "content", None)
-    if not isinstance(content, list):
-        return []
-    out: list[tuple[str, str, bool]] = []
-    for block in content:
-        if isinstance(block, dict):
-            if block.get("type") != "tool_result":
-                continue
-            out.append((
-                str(block.get("tool_use_id") or ""),
-                _text_from_tool_result_content(block.get("content")),
-                bool(block.get("is_error")),
-            ))
-        elif getattr(block, "tool_use_id", None):
-            out.append((
-                str(block.tool_use_id),
-                _text_from_tool_result_content(getattr(block, "content", None)),
-                bool(getattr(block, "is_error", False)),
-            ))
-    return out
+    return [(str(tool_id or ""), text, is_error) for tool_id, text, is_error in tool_results(message)]
 
 
 def _absorb_message(record: RunRecord, message: Any) -> None:

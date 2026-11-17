@@ -259,7 +259,7 @@
                       class="msg-action-btn"
                       title="Run this on a schedule"
                       onclick={() => onrunner?.(promptOf(k))}
-                      ><Icon name="calendar" size={13} />Make it a runner</button
+                      ><Icon name="calendar" size={13} />Make it an automation</button
                     >
                   {/if}
                 {/if}

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { docKind } from './DocPanel.svelte'
+  import { docKind } from '../lib/doc-kind'
   // The project-context right rail (Cowork-style), shared by the project hub
   // and the Chat page so context lives *beside* the conversation. Self-loads
   // the project's detail and owns its own edits (instructions, memory,
@@ -164,6 +164,10 @@
   // --- Summary: written by the summariser from the project's own activity ---
   let summarising = $state(false)
   let dailyBusy = $state(false)
+  // A long summary shows its opening and opens on request — a scroll box
+  // inside the (already scrolling) rail was awkward to read.
+  let summaryOpen = $state(false)
+  const summaryLong = $derived((data?.project.summary ?? '').length > 700)
   async function refreshSummary() {
     if (summarising) return
     summarising = true
@@ -285,8 +289,8 @@
   async function removeSchedule(n: string) {
     if (
       !(await confirmDialog(
-        `Delete runner "${n}"? Its schedule stops. Past runs and outputs are kept.`,
-        'Delete runner',
+        `Delete the automation "${n}"? Its schedule stops. Past runs and outputs are kept.`,
+        'Delete automation',
       ))
     )
       return
@@ -383,7 +387,8 @@
               target="_blank"
               rel="noopener"
               title={opensBeside(f.name) ? `Open ${f.name} beside the chat` : `Open ${f.name} in a new tab`}
-              onclick={(e) => openFile(e, f.name)}><Icon name="file" size={12} />{f.name}</a
+              onclick={(e) => openFile(e, f.name)}
+              ><Icon name="file" size={12} /><span class="file-text">{f.name}</span></a
             >
             <span class="file-size">{f.size_human}</span>
             <a
@@ -529,7 +534,18 @@
         {/if}
       {/snippet}
       {#if data.project.summary}
-        <Prose text={data.project.summary} class="reading summary-prose" />
+        <div class="summary-box" class:clamped={summaryLong && !summaryOpen}>
+          <Prose text={data.project.summary} class="reading summary-prose" />
+        </div>
+        {#if summaryLong}
+          <button
+            class="btn-text summary-more"
+            aria-expanded={summaryOpen}
+            onclick={() => (summaryOpen = !summaryOpen)}
+          >
+            {summaryOpen ? 'Show less' : 'Show all'}
+          </button>
+        {/if}
         <div class="summary-meta">
           Written {relativeTime(data.project.summary_at ?? data.project.updated_at)}
           {#if data.daily_summary}· refreshed daily{/if}
@@ -560,7 +576,9 @@
     <Section label="Knowledge" open={mode === 'home'}>
       {#if mode === 'home'}
         <!-- Project page: full editable config. -->
-        <p class="rail-help">What the agent always knows here — applied to every chat and attached runner.</p>
+        <p class="rail-help">
+          What the agent always knows here — applied to every chat and automation in this project.
+        </p>
 
         <div class="label-cap" style="margin-bottom: 6px;">Instructions · always on</div>
         <textarea
@@ -649,14 +667,14 @@
             ><Icon name="plus" size={13} />Add</button
           >
         {/snippet}
-        <p class="rail-help">Recurring runners for this project.</p>
+        <p class="rail-help">Scheduled work for this project.</p>
         {#if showSchedForm}
           <div class="card-quiet" style="margin-bottom: 8px;">
             <input
               class="field"
               bind:value={sName}
               placeholder="Name (unique)"
-              aria-label="Runner name"
+              aria-label="Automation name"
               style="margin-bottom: 6px;"
             />
             <select class="field" bind:value={sAgent} aria-label="Agent" style="margin-bottom: 6px;">
@@ -667,7 +685,7 @@
               class="field"
               bind:value={sTask}
               rows="4"
-              aria-label="Runner task"
+              aria-label="What it should do"
               placeholder="What should the agent do each run?"
               style="resize: vertical; line-height: 1.5;"></textarea>
             <div style="display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px;">
@@ -675,7 +693,7 @@
                 >Cancel</button
               >
               <button class="btn-primary" disabled={schedAdding} onclick={addSchedule}
-                >{schedAdding ? 'Adding…' : 'Add runner'}</button
+                >{schedAdding ? 'Adding…' : 'Add automation'}</button
               >
             </div>
           </div>
@@ -689,14 +707,14 @@
                 <button
                   class="btn-icon danger ml-auto"
                   onclick={() => removeSchedule(s.name)}
-                  title="Delete runner"
-                  aria-label="Delete runner {s.name}"><Icon name="trash" size={13} /></button
+                  title="Delete automation"
+                  aria-label="Delete the automation {s.name}"><Icon name="trash" size={13} /></button
                 >
               </div>
             {/each}
           </div>
         {:else}
-          <div class="rail-empty">No runners yet.</div>
+          <div class="rail-empty">No automations yet.</div>
         {/if}
       </Section>
     {:else if data.schedules.length}
@@ -823,7 +841,13 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--fg);
-    font-size: 12.5px;
+    font-size: 13px;
+  }
+  .file-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   a.file-name:hover {
     color: var(--accent-soft);
@@ -868,7 +892,7 @@
 
   /* Read-only instructions preview in the chat rail. */
   .ref-text {
-    font-size: 12.5px;
+    font-size: 13px;
     line-height: 1.5;
     color: var(--fg);
     white-space: pre-wrap;
@@ -888,14 +912,37 @@
     background: var(--border);
     margin: 14px 0;
   }
-  :global(.summary-prose) {
+  /* The summary is a note in a narrow rail, not a report: small type, and
+     headings that are labels rather than titles. The selector carries the
+     prose classes so it outranks `.prose-md.reading` (which set 16.5px — the
+     14px written here on its own never applied). */
+  :global(.prose-md.reading.summary-prose) {
     font-size: 14px;
-    max-height: 320px;
-    overflow-y: auto;
-    padding-right: 4px;
+    line-height: 1.6;
+  }
+  .summary-box.clamped {
+    max-height: 250px;
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 56px), transparent);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 56px), transparent);
+  }
+  .summary-more {
+    margin-top: 4px;
+  }
+  :global(.prose-md.reading.summary-prose :is(h1, h2, h3, h4)) {
+    font-family: var(--font-ui);
+    font-size: 13px;
+    letter-spacing: 0;
+    margin: 14px 0 4px;
+  }
+  :global(.prose-md.reading.summary-prose :is(h1, h2, h3, h4):first-child) {
+    margin-top: 0;
+  }
+  :global(.prose-md.reading.summary-prose p) {
+    margin-bottom: 8px;
   }
   .summary-meta {
-    font-size: 11.5px;
+    font-size: 12px;
     color: var(--muted);
     margin-top: 8px;
   }

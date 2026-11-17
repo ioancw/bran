@@ -62,7 +62,7 @@
     grid-template-columns: 18px minmax(0, 1fr) auto;
     gap: 6px;
     align-items: start;
-    font-size: 12.5px;
+    font-size: 13px;
   }
   .src-n {
     font-size: 11px;
@@ -110,7 +110,7 @@
     padding-top: 2px;
   }
   .src-empty {
-    font-size: 12.5px;
+    font-size: 13px;
     color: var(--muted);
   }
 </style>

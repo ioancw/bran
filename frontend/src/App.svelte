@@ -5,8 +5,9 @@
   import { installTableSort } from './lib/sort-tables'
   import { api } from './lib/api'
   import { authState, clearAuthError } from './lib/auth.svelte'
-  import { workspace } from './lib/workspace.svelte'
-  import type { HealthSnapshot, RunRecord } from './lib/types'
+  import { setScope, workspace } from './lib/workspace.svelte'
+  import { isSuperseded } from './lib/verification'
+  import type { HealthSnapshot, RunRecord, Teammate } from './lib/types'
   import Sidebar from './components/Sidebar.svelte'
   import ConfirmHost from './components/ConfirmHost.svelte'
   import CommandPalette from './components/CommandPalette.svelte'
@@ -17,6 +18,8 @@
   import Chat from './pages/Chat.svelte'
   import Runs from './pages/Runs.svelte'
   import Outputs from './pages/Outputs.svelte'
+  import Artifacts from './pages/Artifacts.svelte'
+  import Teammates from './pages/Teammates.svelte'
   import RunDetail from './pages/RunDetail.svelte'
   import Reader from './pages/Reader.svelte'
   import Agents from './pages/Agents.svelte'
@@ -39,21 +42,31 @@
     runners: null,
   })
   let fleetRuns = $state<RunRecord[]>([])
+  // The teammates, as the sidebar lists them (state and next due come with them).
+  let team = $state<Teammate[]>([])
   async function loadCounts() {
     try {
-      const [agents, projects, runners, runs] = await Promise.all([
+      const [agents, projects, runners, runs, totals] = await Promise.all([
         api.agents(),
         api.projects(),
         api.schedules(),
-        api.runs({ limit: 200, exclude_chats: true }),
+        // Sub-agent steps are part of the run that started them, not outputs
+        // or runs of their own, so they stay out of the badge and the count.
+        api.runs({ limit: 200, exclude_chats: true, exclude_subagents: true }),
+        api.runCounts().catch(() => null),
       ])
       counts.agents = agents.length
       counts.projects = projects.length
       counts.runners = runners.length
-      counts.runs = runs.length
+      counts.runs = totals ? totals.runs : runs.length
       fleetRuns = runs
     } catch {
       /* leave counts null */
+    }
+    try {
+      team = await api.teammates()
+    } catch {
+      /* the list simply keeps what it had */
     }
   }
   $effect(() => {
@@ -68,13 +81,27 @@
   // /outputs advances the seen marker and clears it reactively.
   const navCounts = $derived.by(() => {
     // Unread = a completed output you haven't opened yet (server read state).
+    // The same test the Outputs page lists by, so the badge can reach zero.
     const fresh = fleetRuns.filter(
-      (r) => r.status === 'completed' && (r.result ?? '').trim() && !r.read_at,
+      (r) =>
+        r.status === 'completed' &&
+        (r.result ?? '').trim() &&
+        !r.read_at &&
+        !isSuperseded(r) &&
+        r.source !== 'subagent',
     ).length
     return { ...counts, outputs: fresh > 0 ? fresh : null }
   })
 
   const seg = $derived(router.route.segments)
+
+  // The sidebar's chat list follows a project only while you are in it (its
+  // page, or one of its chats — those pages set the scope themselves). Any
+  // other page shows every recent chat again, not the last project's.
+  $effect(() => {
+    const inProject = seg[0] === 'chat' || (seg[0] === 'projects' && !!seg[1])
+    if (!inProject) setScope(null)
+  })
 
   // Off-canvas sidebar on small screens; navigation closes the drawer.
   let sidebarOpen = $state(false)
@@ -201,6 +228,7 @@
 <div class="app-shell flex" class:sidebar-collapsed={sidebarCollapsed}>
   <Sidebar
     counts={navCounts}
+    teammates={team}
     version="v0.1.0"
     open={sidebarOpen}
     collapsed={sidebarCollapsed}
@@ -213,6 +241,8 @@
       <Chat sessionId={seg[1] ?? null} />
     {:else if seg[0] === 'outputs'}
       <Outputs />
+    {:else if seg[0] === 'artifacts'}
+      <Artifacts />
     {:else if seg[0] === 'runs' && seg[1]}
       <RunDetail runId={seg[1]} />
     {:else if seg[0] === 'read' && seg[1]}
@@ -227,6 +257,8 @@
       <RunnerDetail runnerName={decodeURIComponent(seg[1])} />
     {:else if seg[0] === 'runners'}
       <Runners />
+    {:else if seg[0] === 'teammates'}
+      <Teammates />
     {:else if seg[0] === 'projects' && seg[1]}
       <ProjectDetail projectId={seg[1]} />
     {:else if seg[0] === 'projects'}

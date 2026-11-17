@@ -33,8 +33,10 @@
   const NAV: [string, string][] = [
     ['Today', '/'],
     ['Projects', '/projects'],
-    ['Runners', '/runners'],
+    ['Teammates', '/teammates'],
+    ['Automations', '/runners'],
     ['Outputs', '/outputs'],
+    ['Artifacts', '/artifacts'],
     ['Runs', '/runs'],
     ['Agent library', '/agents'],
     ['Settings', '/settings'],
@@ -60,7 +62,7 @@
     for (const r of runners) {
       cmds.push({
         label: r.name,
-        meta: 'runner',
+        meta: 'automation',
         run: () => navigate('/runners/' + encodeURIComponent(r.name)),
       })
       cmds.push({

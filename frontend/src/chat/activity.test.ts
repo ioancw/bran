@@ -108,7 +108,7 @@ describe('turnStats / turnSummary', () => {
   })
   it('writes the closing line', () => {
     expect(turnSummary({ durationMs: 42_000, agents: 3 }, 6, 0.0123)).toBe(
-      'Worked for 42s · 6 sources · 3 agents · $0.0123',
+      'Worked for 42s · 6 sources · 3 agents · $0.01',
     )
     expect(turnSummary({ durationMs: null, agents: 0 }, 1, null)).toBe('Done · 1 source')
   })

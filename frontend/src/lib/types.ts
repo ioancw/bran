@@ -88,6 +88,32 @@ export interface ScheduleRecord {
   verify?: boolean // evaluator reviews each output; failed verdicts re-run once
   delta?: boolean // each run sees the previous report and reports only changes
   alert?: string // natural-language significance bar; '' / absent = off
+  teammate_id?: string | null // the teammate this automation works for
+}
+
+// An agent with a name, a standing brief, one chat and its own automations.
+export interface Teammate {
+  id: string
+  name: string
+  agent: string
+  brief: string
+  chat_id: string | null // its one chat; null until the first message
+  project_id: string | null
+  created_at: string
+  automations: ScheduleRecord[]
+  state: 'working' | 'failed' | 'paused' | 'ready'
+  next_run: string | null // soonest fire among its automations
+}
+
+export interface TeammateDetail extends Teammate {
+  // What its automations finished, newest first.
+  deliveries: {
+    id: string
+    schedule_id: string | null
+    started_at: string
+    ended_at: string | null
+    excerpt: string
+  }[]
 }
 
 export interface ChatSummary {
@@ -96,6 +122,7 @@ export interface ChatSummary {
   agent: string
   project_id: string | null // null = loose chat (no project)
   archived_at?: string | null // set = archived: out of Recents, kept whole
+  teammate?: { id: string; name: string } | null // set = this is that teammate's chat
   updated_at: string
   created_at: string
 }
@@ -143,6 +170,20 @@ export interface ProjectFile {
   size_human: string
   modified: number
   path: string
+}
+
+// One entry on the Artifacts page: a project file, or a document saved
+// outside any project (project_id null). `title` is a saved document's own
+// title ('' for other files); `url` serves the file.
+export interface LibraryItem {
+  name: string
+  title: string
+  size: number
+  size_human: string
+  modified: number
+  project_id: string | null
+  project_name: string | null
+  url: string
 }
 
 // The project "workspace hub": a project plus everything that flows through it.

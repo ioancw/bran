@@ -98,11 +98,11 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 11.5px;
+    font-size: 12px;
     color: var(--muted);
   }
   .src-n {
-    font-size: 10.5px;
+    font-size: 11px;
     color: var(--muted);
     font-variant-numeric: tabular-nums;
   }
@@ -112,7 +112,7 @@
     line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
-    font-size: 12.5px;
+    font-size: 13px;
     font-weight: 500;
     line-height: 1.35;
     color: var(--fg);

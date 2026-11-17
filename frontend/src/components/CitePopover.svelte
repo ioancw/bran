@@ -138,7 +138,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 12.5px;
+    font-size: 13px;
     font-weight: 600;
     color: var(--fg-bright);
   }
@@ -155,7 +155,7 @@
     overflow-wrap: anywhere;
   }
   .pop-url {
-    font-size: 11.5px;
+    font-size: 12px;
     color: var(--muted);
     overflow-wrap: anywhere;
   }

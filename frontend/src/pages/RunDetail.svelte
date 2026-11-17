@@ -4,8 +4,9 @@
   import { confirmDialog } from '../lib/confirm.svelte'
   import { errorText } from '../lib/errors'
   import { navigate, href, link } from '../lib/router.svelte'
-  import { fmtBytes, fmtCost, fmtDuration, localDateTime } from '../lib/time'
+  import { fmtBytes, fmtDuration, localDateTime } from '../lib/time'
   import { sourceHint, sourceLabel } from '../lib/labels'
+  import { projectName } from '../lib/workspace.svelte'
   import Page from '../components/Page.svelte'
   import Skeleton from '../components/Skeleton.svelte'
   import ErrorBanner from '../components/ErrorBanner.svelte'
@@ -279,7 +280,7 @@
             <dt>Turns</dt>
             <dd>{run.num_turns ?? '—'}</dd>
             <dt>Cost</dt>
-            <dd class="mono">{fmtCost(run.total_cost_usd)}</dd>
+            <dd class="mono">{run.total_cost_usd != null ? '$' + run.total_cost_usd.toFixed(4) : '—'}</dd>
             <dt>Duration</dt>
             <dd class="mono">{fmtDuration(run.duration_ms)}</dd>
             <dt>Started</dt>
@@ -360,7 +361,7 @@
           <div class="space-y-1">
             {#if run.project_id}
               <a href={href('/projects/' + run.project_id)} use:link class="origin-link">
-                <Icon name="folder" size={14} />Project
+                <Icon name="folder" size={14} />{projectName(run.project_id)}
               </a>
             {:else}
               <div class="text-muted" style="font-size: 13px;">Standalone run</div>
@@ -424,7 +425,7 @@
               <h2 class="card-title">
                 Timeline <span class="title-count">{transcript.length} steps</span>
               </h2>
-              <Timeline items={transcript} />
+              <Timeline items={transcript} {children} />
             </div>
             <!-- The transcript repeats the final answer at its tail; it's the
                  long form, collapsed by default once the result is on top. -->
@@ -445,7 +446,7 @@
             <h2 class="card-title">
               Timeline <span class="title-count">{transcript.length} steps</span>
             </h2>
-            <Timeline items={transcript} />
+            <Timeline items={transcript} {children} />
           </div>
           <button
             class="transcript-toggle"
@@ -481,13 +482,22 @@
     color: var(--muted);
     margin-left: 6px;
   }
-  .child-row {
+  /* `.origin-link` (below) is inline-flex and would otherwise win, letting a
+     long agent name push the status badge out of the card. */
+  .origin-link.child-row {
     display: flex;
     align-items: center;
     gap: 8px;
+    min-width: 0;
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+  .child-row :global(.src),
+  .child-row :global(.status-badge) {
+    flex-shrink: 0;
   }
   .child-agent {
-    flex: 1;
+    flex: 1 1 130px; /* keeps room for the name; the badge wraps below when tight */
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -523,10 +533,10 @@
     color: var(--fg);
   }
   .defs .mono {
-    font-size: 12.5px;
+    font-size: 13px;
   }
   .defs .session {
-    font-size: 11.5px;
+    font-size: 12px;
     color: var(--fg-dim);
     word-break: break-all;
   }
@@ -537,7 +547,7 @@
   }
   .reading-col :global(.prose-md) {
     font-family: var(--font-prose);
-    font-size: 16.5px;
+    font-size: 17px;
     line-height: 1.7;
   }
   .wrong-title {
@@ -598,7 +608,7 @@
     margin: 6px 0 0;
     padding-left: 18px;
     color: var(--fg-dim);
-    font-size: 12.5px;
+    font-size: 13px;
     line-height: 1.6;
   }
   .verif-link {

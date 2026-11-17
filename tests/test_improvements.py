@@ -450,7 +450,7 @@ def _verify_fire(monkeypatch, verdicts):
 
     queue = list(verdicts)
 
-    async def fake_verify(task, output):
+    async def fake_verify(task, output, context=None):
         return queue.pop(0)
 
     async def fake_notify(record):
@@ -554,3 +554,30 @@ def test_fetch_connects_to_the_vetted_address_not_a_second_lookup(monkeypatch):
     body, resp = asyncio.run(go())
     assert body == b"<rss/>" and resp.status_code == 200
     assert seen == [("https://93.184.216.34/feed", "rebind.example", "rebind.example")]
+
+
+def test_reviewer_sees_the_whole_report_and_knows_the_date():
+    # A full brief (~16k chars) used to reach the reviewer cut at 12k with a
+    # "truncated" marker, and it failed every brief as incomplete.
+    from bran.scheduler import _REVIEW_CAP, _verification_prompt
+
+    report = "# Brief\n" + ("A sentence about rates and FX. " * 600) + "\n## Verification note\nTHE-END"
+    assert 15_000 < len(report) < _REVIEW_CAP
+    prompt = _verification_prompt("Write the brief", report, today="Tuesday 17 November 2026")
+    assert report in prompt
+    assert "truncated" not in prompt and "left out" not in prompt
+    assert "Today is Tuesday 17 November 2026" in prompt
+    assert "<background>" not in prompt
+
+    # The run's own context reaches the reviewer, so a mention of the user's
+    # project is not judged an invented assumption.
+    with_bg = _verification_prompt("t", "report", today="x", context="Project: FX Volatility")
+    assert "<background>\nProject: FX Volatility\n</background>" in with_bg
+
+    # A runaway output is still bounded, keeps its ending, and the reviewer is
+    # told the gap is the review's doing, not the agent's.
+    huge = "START " + ("x" * (_REVIEW_CAP * 2)) + " THE-END"
+    prompt = _verification_prompt("t", huge, today="Tuesday 17 November 2026")
+    assert len(prompt) < _REVIEW_CAP + 3_000
+    assert "START " in prompt and "THE-END" in prompt
+    assert "do not count it as missing" in prompt

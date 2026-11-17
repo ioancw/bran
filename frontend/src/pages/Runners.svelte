@@ -179,7 +179,7 @@
     const text = draftText.trim()
     if (drafting) return
     if (text.length < 8) {
-      draftError = 'Say what the runner should do and when.'
+      draftError = 'Say what the automation should do and when.'
       return
     }
     draftError = null
@@ -268,7 +268,7 @@
     e?.preventDefault()
     if (creating) return
     if (!fName.trim()) {
-      formError = 'Give the runner a name.'
+      formError = 'Give the automation a name.'
       return
     }
     if (!fTask.trim()) {
@@ -310,7 +310,7 @@
     creating = true
     try {
       await api.newSchedule(fields)
-      toast(`Created runner ${fields.name}`, 'ok')
+      toast(`Created ${fields.name}`, 'ok')
     } catch (err) {
       formError = errorText(err)
       return
@@ -331,14 +331,14 @@
   async function remove(name: string) {
     if (
       !(await confirmDialog(
-        `Delete runner "${name}"? Its schedule stops. Past runs and outputs are kept.`,
-        'Delete runner',
+        `Delete the automation "${name}"? Its schedule stops. Past runs and outputs are kept.`,
+        'Delete automation',
       ))
     )
       return
     try {
       await api.deleteSchedule(name)
-      toast(`Deleted runner ${name}`, 'ok')
+      toast(`Deleted ${name}`, 'ok')
     } catch (e) {
       toast(errorText(e), 'err')
     }
@@ -360,12 +360,12 @@
   }
 </script>
 
-<Page title="Runners">
+<Page title="Automations">
   {#snippet subtitle()}{runners.length} scheduled {runners.length === 1 ? 'agent' : 'agents'}{/snippet}
   {#snippet actions()}
     {#if runners.length}
       <button class="btn-primary" onclick={() => (showForm ? closePanel() : (showForm = true))}>
-        <Icon name="plus" size={14} stroke={2.2} />New runner
+        <Icon name="plus" size={14} stroke={2.2} />New automation
       </button>
     {/if}
   {/snippet}
@@ -379,9 +379,9 @@
       <section class="new-runner" class:first={!runners.length}>
         {#if stage === 'describe'}
           <div class="nr-intro">
-            <h2 class="nr-title">{runners.length ? 'New runner' : 'Put an agent on a schedule'}</h2>
+            <h2 class="nr-title">{runners.length ? 'New automation' : 'Put an agent on a schedule'}</h2>
             <p class="nr-hint">
-              Say what should happen and when. bran drafts the runner from your sentence; you check it and
+              Say what should happen and when. bran drafts the automation from your sentence; you check it and
               create it.
             </p>
           </div>
@@ -391,7 +391,7 @@
               bind:value={draftText}
               rows="2"
               placeholder="Every weekday at 7, brief me on FX and fact-check it"
-              aria-label="Describe the runner"
+              aria-label="Describe the automation"
               onkeydown={onDraftKeydown}
               disabled={drafting}></textarea>
             <div class="describe-foot">
@@ -400,7 +400,7 @@
                 {#if drafting}<Icon name="loader" size={14} class="spin" />Drafting…{:else}<Icon
                     name="wand"
                     size={14}
-                  />Draft runner{/if}
+                  />Draft it{/if}
               </button>
             </div>
           </form>
@@ -426,11 +426,11 @@
         {:else}
           <form class="runner-form" onsubmit={create}>
             <div class="nr-intro">
-              <h2 class="nr-title">New runner</h2>
+              <h2 class="nr-title">New automation</h2>
               {#if draftNote}
                 <p class="draft-note"><Icon name="wand" size={13} />{draftNote}</p>
               {:else}
-                <p class="nr-hint">An agent on a schedule. Runners fire inside the server.</p>
+                <p class="nr-hint">An agent on a schedule. Automations run inside the server.</p>
               {/if}
             </div>
             <div class="grid grid-cols-2 gap-4">
@@ -527,7 +527,7 @@
                 <button type="button" class="btn-ghost" onclick={closePanel}>Cancel</button>
               {/if}
               <button type="submit" class="btn-primary" disabled={creating}
-                >{creating ? 'Creating…' : 'Create runner'}</button
+                >{creating ? 'Creating…' : 'Create automation'}</button
               >
             </div>
           </form>
@@ -536,13 +536,19 @@
     {/if}
 
     {#if loaded && runners.length}
-      <div style="overflow-x: auto;">
-        <table class="bran-table" style="min-width: 960px;">
+      <!-- The table always fits its container, outline and all: the Task
+           column takes whatever room is left (and truncates), and as the
+           container narrows the least important columns drop out. Every
+           dropped field is still on the runner's own page. -->
+      <div class="runners-wrap">
+        <table class="bran-table">
           <thead>
             <tr>
-              <th>Name</th><th>Agent</th><th>Trigger</th><th>Next run</th><th class="num">30-day cost</th><th
-                class="num">Runs</th
-              ><th>Project</th><th>State</th><th>Task</th><th></th>
+              <th>Name</th><th class="c-agent">Agent</th><th class="c-trigger">Trigger</th><th class="c-next"
+                >Next run</th
+              ><th class="num c-cost">30-day cost</th><th class="num c-runs">Runs</th><th class="c-project"
+                >Project</th
+              ><th>State</th><th class="c-task">Task</th><th class="c-del"></th>
             </tr>
           </thead>
           <tbody>
@@ -558,8 +564,12 @@
                       >{r.name}</a
                     >
                   </span>
+                  <div class="name-sub">
+                    {r.run_at ? 'Once' : describeCron(r.cron ?? '')}{#if r.enabled && r.next_run}
+                      · next {localDateTime(r.next_run)}{/if}
+                  </div>
                 </td>
-                <td>
+                <td class="c-agent">
                   <span class="agent-cell">
                     <span>{r.agent}</span>
                     {#if r.verify}<span class="pill mute" title="Outputs are reviewed by an evaluator"
@@ -574,7 +584,7 @@
                       >{/if}
                   </span>
                 </td>
-                <td class="text-dim">
+                <td class="text-dim c-trigger">
                   {#if r.run_at}
                     <span title={r.run_at}>Once · {localDateTime(r.run_at)}</span>
                   {:else}
@@ -582,12 +592,12 @@
                     >
                   {/if}
                 </td>
-                <td class="text-dim" style="white-space: nowrap;"
+                <td class="text-dim c-next" style="white-space: nowrap;"
                   >{r.enabled && r.next_run ? localDateTime(r.next_run) : '—'}</td
                 >
-                <td class="num mono">{health ? fmtCost(spend30(r.id)?.cost ?? 0) : '—'}</td>
-                <td class="num mono">{health ? (spend30(r.id)?.runs ?? 0) : '—'}</td>
-                <td class="text-dim">{projName(r.project_id) ?? '—'}</td>
+                <td class="num mono c-cost">{health ? fmtCost(spend30(r.id)?.cost ?? 0) : '—'}</td>
+                <td class="num mono c-runs">{health ? (spend30(r.id)?.runs ?? 0) : '—'}</td>
+                <td class="text-dim c-project">{projName(r.project_id) ?? '—'}</td>
                 <td>
                   <span class="state-cell">
                     <span class="state-word"
@@ -601,13 +611,13 @@
                     </button>
                   </span>
                 </td>
-                <td class="text-dim task-cell" title={r.task}>{r.task}</td>
-                <td>
+                <td class="text-dim task-cell c-task" title={r.task}>{r.task}</td>
+                <td class="c-del">
                   <button
                     class="btn-icon danger"
                     onclick={() => remove(r.name)}
-                    aria-label="Delete runner {r.name}"
-                    title="Delete runner"
+                    aria-label="Delete the automation {r.name}"
+                    title="Delete automation"
                   >
                     <Icon name="x" size={14} />
                   </button>
@@ -705,7 +715,7 @@
     margin-top: 6px;
   }
   .describe-help {
-    font-size: 11.5px;
+    font-size: 12px;
     color: var(--muted);
   }
 
@@ -742,7 +752,7 @@
     margin-bottom: 2px;
   }
   .tpl-title {
-    font-size: 13.5px;
+    font-size: 14px;
     font-weight: 500;
     color: var(--fg-bright);
   }
@@ -789,7 +799,7 @@
   }
   .form-error {
     color: var(--red);
-    font-size: 12.5px;
+    font-size: 13px;
     margin-top: 10px;
   }
   .form-actions {
@@ -838,7 +848,15 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    flex-wrap: wrap;
+    white-space: nowrap; /* badges sit beside the agent; rows stay one line tall */
+  }
+  /* On a narrow screen the schedule columns are gone, so the schedule and the
+     next run move under the name: the two things worth checking on a phone. */
+  .name-sub {
+    display: none;
+    margin-top: 2px;
+    font-size: 12px;
+    color: var(--muted);
   }
   .state-cell {
     display: inline-flex;
@@ -849,16 +867,62 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    font-size: 12.5px;
+    font-size: 13px;
     font-weight: 500;
     color: var(--fg-dim);
     white-space: nowrap;
   }
+  .runners-wrap {
+    container-type: inline-size;
+    overflow-x: auto; /* a last resort; the rules below keep the table inside */
+  }
+  /* The one elastic column: `max-width: 0` + `width: 100%` makes the cell take
+     the room the other columns leave and truncate its text to it, instead of
+     forcing the table wider than its container. */
   .task-cell {
-    max-width: 280px;
+    width: 100%;
+    max-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .c-del {
+    width: 1%;
+  }
+  .c-project {
+    white-space: nowrap;
+  }
+  /* Narrower containers: drop columns, least important first. Once Task is
+     gone the Name column becomes the elastic one. */
+  @container (max-width: 1280px) {
+    .c-task {
+      display: none;
+    }
+  }
+  @container (max-width: 980px) {
+    .c-runs,
+    .c-cost {
+      display: none;
+    }
+  }
+  @container (max-width: 830px) {
+    .c-project {
+      display: none;
+    }
+  }
+  @container (max-width: 740px) {
+    .c-next,
+    .c-trigger {
+      display: none;
+    }
+    .name-sub {
+      display: block;
+    }
+  }
+  @container (max-width: 600px) {
+    .c-agent {
+      display: none;
+    }
   }
   @media (max-width: 768px) {
     .fld.span2,

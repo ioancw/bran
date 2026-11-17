@@ -299,7 +299,7 @@
     border: 1px solid var(--border);
     border-radius: 999px;
     background: var(--surface);
-    font-size: 12.5px;
+    font-size: 13px;
     color: var(--fg-dim);
   }
   .site.more {
@@ -316,7 +316,7 @@
     align-items: center;
     gap: 4px;
     align-self: flex-start;
-    font-size: 12.5px;
+    font-size: 13px;
     font-weight: 500;
     color: var(--muted);
   }
@@ -339,7 +339,7 @@
     gap: 4px;
     padding: 2px 8px;
     border-radius: 999px;
-    font-size: 11.5px;
+    font-size: 12px;
     font-weight: 600;
   }
   .badge.ok {
@@ -359,7 +359,7 @@
     padding: 10px 14px;
     border-radius: var(--radius-md);
     background: var(--amber-soft);
-    font-size: 13.5px;
+    font-size: 14px;
     line-height: 1.55;
     color: var(--fg);
   }
@@ -377,7 +377,7 @@
   }
   .body :global(.prose-md) {
     font-family: var(--font-prose);
-    font-size: 17.5px;
+    font-size: 17px;
     line-height: 1.72;
   }
   .state {

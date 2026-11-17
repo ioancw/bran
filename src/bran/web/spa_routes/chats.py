@@ -84,7 +84,10 @@ def _chat_turns(session_id: str, limit: int = 1000) -> list[Any]:
 @router.get("/chats")
 def chats(project_id: str | None = None, archived: bool = False) -> list[dict[str, Any]]:
     """Live chats by default; `archived=true` lists the archived ones instead."""
-    return [_chat_dict(c) for c in list_chats(limit=100, project_id=project_id, archived=archived)]
+    return [
+        _chat_dict(c)
+        for c in list_chats(limit=100, project_id=project_id, archived=archived, exclude_teammates=True)
+    ]
 
 
 @router.post("/chats/{chat_id}/move")
@@ -152,7 +155,11 @@ def chat_detail(chat_id: str) -> dict[str, Any]:
     """
     c = get_chat(chat_id)
     if c is not None:
-        return _chat_dict(c)
+        from bran.persistence import get_teammate_by_chat
+
+        mate = get_teammate_by_chat(chat_id)
+        # A teammate's chat says so, so the view can show whose it is.
+        return {**_chat_dict(c), "teammate": {"id": mate.id, "name": mate.name} if mate else None}
     from bran.persistence import get_run_by_session
 
     run = get_run_by_session(chat_id)
@@ -196,6 +203,7 @@ async def chat_stream(
     chat_agent: Annotated[str | None, Form()] = None,
     project_id: Annotated[str | None, Form()] = None,
     model: Annotated[str | None, Form()] = None,
+    teammate_id: Annotated[str | None, Form()] = None,
 ):
     """Stream an agent reply as SSE using the unified event schema.
 
@@ -203,12 +211,27 @@ async def chat_stream(
     A chat's project is authoritative once it exists; otherwise the form param,
     else Inbox. The project's instructions are layered onto the system prompt.
     """
+    from bran.persistence import get_teammate, get_teammate_by_chat, set_teammate_chat
+
     sid = session_id or None
+    # A teammate's chat: named outright (its first message, before a session
+    # exists) or recognised by the session. It has ONE chat, so a message
+    # addressed to the teammate always lands in it.
+    mate = get_teammate(teammate_id) if teammate_id else None
+    if mate is None and sid:
+        mate = get_teammate_by_chat(sid)
+    if mate is not None and mate.chat_id:
+        sid = mate.chat_id
     mentioned_agent, actual_prompt = parse_agent_prefix(prompt)
+    if mate is not None:
+        # The teammate answers as its role; an @mention is just text to it.
+        mentioned_agent, actual_prompt = "orchestrator", prompt
     locked_agent = chat_agent if chat_agent in {a.name for a in list_agents()} else None
     existing_chat = get_chat(sid) if sid else None
     if existing_chat is not None:
         locked_agent = existing_chat.agent
+    if mate is not None and mate.agent in {a.name for a in list_agents()}:
+        locked_agent = mate.agent
     delegated = False
     if mentioned_agent != "orchestrator":
         orchestrator = get_agent("orchestrator")
@@ -231,7 +254,7 @@ async def chat_stream(
         existing = get_chat(sid)
         target_project_id = existing.project_id if existing else (project_id or None)
     else:
-        target_project_id = project_id or None
+        target_project_id = (mate.project_id if mate is not None else None) or project_id or None
 
     project_record = get_project(target_project_id) if target_project_id else None
     if target_project_id and project_record is None:
@@ -240,6 +263,11 @@ async def chat_stream(
     if delegated:
         note = delegation_prompt(mentioned_agent)
         append_system = (append_system + "\n\n" + note) if append_system else note
+    if mate is not None:
+        from bran.teammates import chat_context
+
+        about = chat_context(mate)
+        append_system = (about + "\n\n" + append_system) if append_system else about
 
     # Resuming needs the SDK's transcript file. When Claude Code has pruned it
     # (it keeps sessions ~30 days) `--resume` exits with "No conversation
@@ -263,6 +291,8 @@ async def chat_stream(
 
     first_prompt = actual_prompt.strip()
     title_seed = (first_prompt[:80].rstrip() + ("…" if len(first_prompt) > 80 else "")) or "(new chat)"
+    if mate is not None:
+        title_seed = mate.name
 
     def sse(ev: dict[str, Any]) -> str:
         return f"data: {json.dumps(ev, default=str)}\n\n"
@@ -297,6 +327,8 @@ async def chat_stream(
                             ))
                         else:
                             touch_chat(sid_now)
+                        if mate is not None and mate.chat_id != sid_now:
+                            set_teammate_chat(mate.id, sid_now)
                         chat_initialised = True
                     yield sse(attach_child_run(ev))
         except Exception as exc:  # noqa: BLE001 — surface any failure to the client
