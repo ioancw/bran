@@ -5,6 +5,9 @@ import {
   groupRows,
   isDelegation,
   toolDisplayName,
+  unseenFeed,
+  askedRequestId,
+  ASK_TOOL,
   type ChatItem,
   type ToolItem,
 } from './events'
@@ -214,5 +217,59 @@ describe('replayed timestamps', () => {
     expect(tool.at).toBe('2026-07-01T10:00:00.000Z')
     expect(tool.endedAt).toBe('2026-07-01T10:00:02.500Z')
     expect(tool.durationMs).toBe(2500)
+  })
+})
+
+describe('a teammate chat feed', () => {
+  const delivery = {
+    type: 'delivery' as const,
+    run_id: 'r1',
+    title: 'FX brief',
+    excerpt: 'EURUSD fell.',
+    schedule: 'fx-desk',
+    ts: '2026-11-17T07:03:00Z',
+  }
+  const request = { type: 'request' as const, request_id: 'q1', ts: '2026-11-17T07:04:00Z' }
+
+  it('shows a delivery and a question as their own rows, closing the bubble before them', () => {
+    const items: ChatItem[] = []
+    const st = freshState()
+    applyEvent(items, st, { type: 'text', text: 'Earlier answer.' })
+    applyEvent(items, st, delivery)
+    applyEvent(items, st, request)
+    applyEvent(items, st, { type: 'text', text: 'Later.' })
+    expect(items.map((i) => i.kind)).toEqual(['assistant', 'delivery', 'request', 'assistant'])
+    expect(items[1]).toMatchObject({ runId: 'r1', title: 'FX brief', schedule: 'fx-desk' })
+    // Cards of their own: never folded into an activity row.
+    expect(groupRows(items).every((r) => !r.group)).toBe(true)
+  })
+
+  it('adds only what the conversation does not have yet', () => {
+    const items: ChatItem[] = []
+    const st = freshState()
+    applyEvent(items, st, delivery)
+    const later = { ...delivery, run_id: 'r2' }
+    expect(unseenFeed(items, [delivery, request, later])).toEqual([request, later])
+    expect(unseenFeed(items, [delivery])).toEqual([])
+  })
+
+  it('shows an ask as a card and finds the request it made', () => {
+    const items: ChatItem[] = []
+    const st = freshState()
+    applyEvent(items, st, {
+      type: 'tool_use',
+      name: ASK_TOOL,
+      input: { title: 'Add a wrap-up?' },
+      tool_id: 'a1',
+    })
+    applyEvent(items, st, {
+      type: 'tool_result',
+      tool_id: 'a1',
+      text: 'Asked (request_id=0b1c2d3e-aaaa-bbbb-cccc-000000000001). It is waiting in your chat.',
+      is_error: false,
+    })
+    const tool = items[0] as ToolItem
+    expect(askedRequestId(tool)).toBe('0b1c2d3e-aaaa-bbbb-cccc-000000000001')
+    expect(groupRows(items)[0].group).toBe(false)
   })
 })

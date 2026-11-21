@@ -17,6 +17,7 @@ import type {
   ScheduleRecord,
   Teammate,
   TeammateDetail,
+  TeammateRequest,
   HealthSnapshot,
   SourceRef,
 } from './types'
@@ -137,6 +138,17 @@ export const api = {
     form<Teammate>('/spa/teammates', fields),
   updateTeammate: (id: string, fields: { name: string; agent: string; brief: string }) =>
     form<Teammate>(`/spa/teammates/${encodeURIComponent(id)}`, fields),
+  // What belongs in its chat besides the conversation: reports and questions.
+  teammateFeed: (id: string) =>
+    getJSON<{ events: ChatEvent[] }>(`/spa/teammates/${encodeURIComponent(id)}/feed`),
+  answerRequest: (id: string, requestId: string, decision: 'approve' | 'decline', note: string) =>
+    form<TeammateRequest>(
+      `/spa/teammates/${encodeURIComponent(id)}/requests/${encodeURIComponent(requestId)}`,
+      {
+        decision,
+        note,
+      },
+    ),
   teammateAutomation: (id: string, name: string, attach: boolean) =>
     form<Teammate>(`/spa/teammates/${encodeURIComponent(id)}/automations`, {
       name,

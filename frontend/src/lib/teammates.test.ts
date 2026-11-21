@@ -10,6 +10,11 @@ describe('teammates', () => {
     expect(teammateHint({ state: 'paused', next_run: null }, NOW)).toBe('Paused')
     expect(teammateHint({ state: 'ready', next_run: '2026-11-16T07:00:00Z' }, NOW)).toBe('in 10h 0m')
     expect(teammateHint({ state: 'ready', next_run: null }, NOW)).toBe('') // on demand only
+    // A question waiting for the user comes before when it is next due.
+    expect(teammateHint({ state: 'ready', next_run: '2026-11-16T07:00:00Z', waiting: 1 }, NOW)).toBe(
+      'Asked you',
+    )
+    expect(teammateHint({ state: 'working', next_run: null, waiting: 1 }, NOW)).toBe('Working now')
   })
   it('opens the chat it has, or a new one addressed to it', () => {
     expect(teammateHref({ id: 't1', chat_id: 'abc' })).toBe('/chat/abc')

@@ -13,6 +13,7 @@
     setLive,
   } from '../lib/workspace.svelte'
   import { errorText } from '../lib/errors'
+  import { onReturn } from '../lib/refresh'
   import Page from '../components/Page.svelte'
   import Composer from '../components/Composer.svelte'
   import ProjectRail from '../components/ProjectRail.svelte'
@@ -30,6 +31,7 @@
     applyEvent,
     freshState,
     isWork,
+    unseenFeed,
     toolDisplayName,
     DOC_TOOL,
     type ChatItem,
@@ -47,7 +49,15 @@
     takeRetry,
     writeDraft,
   } from '../chat/turn'
-  import type { Attachment, Catalog, ChatSummary, RunRecord, ScheduleRecord, SourceRef } from '../lib/types'
+  import type {
+    Attachment,
+    Catalog,
+    ChatSummary,
+    RunRecord,
+    ScheduleRecord,
+    SourceRef,
+    TeammateRequest,
+  } from '../lib/types'
   import { relativeTime } from '../lib/time'
   import { sourceLabel } from '../lib/labels'
   import { isSuperseded } from '../lib/verification'
@@ -63,6 +73,9 @@
   // Set when this is a teammate's chat (its one chat): the header, the rail
   // and every message sent follow from it.
   let mate = $state<{ id: string; name: string } | null>(null)
+  // What the teammate asked before acting, by request id (the cards in the
+  // log look their request up here).
+  let requests = $state<Record<string, TeammateRequest>>({})
   let input = $state('')
   // Model override for this chat ('' = the agent's own), remembered per chat.
   let model = $state('')
@@ -446,6 +459,55 @@
       live = false
     }
   })
+
+  // A teammate's chat also carries what its automations delivered and what
+  // it asked. History has them in place; this keeps them current: answers,
+  // and anything that landed since (added at the end, between turns only).
+  let mateSeq = 0
+  async function loadMateExtras() {
+    const who = mate?.id
+    if (!who) {
+      requests = {}
+      return
+    }
+    const mine = ++mateSeq
+    try {
+      const [detail, feed] = await Promise.all([api.teammate(who), api.teammateFeed(who)])
+      if (mine !== mateSeq || mate?.id !== who) return
+      requests = Object.fromEntries(detail.requests.map((q) => [q.id, q]))
+      if (streaming || historyLoading) return // a turn or a load owns `items` now
+      const fresh = unseenFeed(items, feed.events)
+      if (!fresh.length) return
+      for (const ev of fresh) applyEvent(items, rstate, ev)
+      scrollSoon(false)
+    } catch {
+      /* a refresh nobody asked for: the next one will do */
+    }
+  }
+  $effect(() => {
+    void mate?.id
+    void workspace.activityTick // a turn finished, or a run landed
+    void historyLoading // once history is in, add what it does not have
+    void loadMateExtras()
+  })
+  $effect(() => onReturn(() => void loadMateExtras()))
+  $effect(() => {
+    if (!mate) return
+    // Scheduled work lands without anyone touching the page.
+    const timer = setInterval(() => void loadMateExtras(), 60_000)
+    return () => clearInterval(timer)
+  })
+  async function answerRequest(id: string, decision: 'approve' | 'decline', note: string) {
+    if (!mate) return
+    try {
+      const done = await api.answerRequest(mate.id, id, decision, note)
+      requests = { ...requests, [id]: done }
+      bumpActivity() // the rail: a new automation, a new brief
+    } catch (e) {
+      toast(errorText(e), 'err')
+      void loadMateExtras()
+    }
+  }
 
   function reloadChat() {
     if (sessionId && loadedId === sessionId) void openChat(sessionId)
@@ -897,6 +959,8 @@
             onregenerate={askAgain}
             onrunner={makeRunner}
             onopendoc={openDoc}
+            {requests}
+            onanswer={mate ? answerRequest : undefined}
           />
           {#if followups.length && !streaming}
             <div class="followups">

@@ -73,6 +73,10 @@ def _server_for_prefix(prefix: str) -> tuple[str, Any] | None:
     if prefix == "tavily":
         cfg = _tavily_server()
         return ("tavily", cfg) if cfg else None
+    if prefix == "bran_team":
+        from bran.tools.team import team_server
+
+        return "bran_team", team_server
     return None
 
 
@@ -306,6 +310,7 @@ def build_options_for(
     max_turns: int | None = None,
     append_system: str | None = None,
     model: str | None = None,
+    extra_tools: list[str] | None = None,
 ) -> ClaudeAgentOptions:
     """Translate an Agent into the SDK's ClaudeAgentOptions.
 
@@ -327,6 +332,13 @@ def build_options_for(
     if append_system:
         system_prompt = f"{system_prompt}\n\n{append_system}"
     allowed = session_tools(agent)
+    mcp_servers = dict(agent.mcp_servers) if agent.mcp_servers else {}
+    if extra_tools:
+        # Tools this run gets on top of the agent's own (a teammate's, see
+        # bran.teammates.TEAM_TOOLS), with the servers they come from.
+        allowed = allowed + [t for t in extra_tools if t not in allowed]
+        for name, server in servers_for(extra_tools).items():
+            mcp_servers.setdefault(name, server)
     return ClaudeAgentOptions(
         system_prompt=system_prompt,
         # Pre-approve the agent's tools AND its subagents' (rules are
@@ -338,7 +350,7 @@ def build_options_for(
         model=model or agent.model,
         permission_mode=agent.permission_mode,
         agents=dict(agent.subagents) if agent.subagents else None,
-        mcp_servers=dict(agent.mcp_servers) if agent.mcp_servers else {},
+        mcp_servers=mcp_servers,
         skills=list(agent.skills) if agent.skills else None,
         resume=resume,
         # A fresh session under a chosen id (used when a chat's SDK transcript

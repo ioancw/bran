@@ -367,9 +367,8 @@
                     class="pill accent"
                     title="Delta report: only what changed since the last run">Delta</span
                   >{/if}
-                {#if badge}<span
-                    class="pill {badge.tone === 'ok' ? 'ok' : 'warn'}"
-                    title="Reviewed by the verification evaluator">{badge.label}</span
+                {#if badge}<span class="pill {badge.tone === 'ok' ? 'ok' : 'warn'}" title={badge.hint}
+                    >{badge.label}</span
                   >{/if}
                 <span class="text-muted out-task" title={r.task}
                   >{runner ? `${r.agent} · ${r.task}` : r.task}</span

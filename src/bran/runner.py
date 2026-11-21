@@ -312,8 +312,11 @@ async def run_agent(
     schedule_id: str | None = None,
     actor: str | None = None,
     notify: bool = True,
+    extra_tools: list[str] | None = None,
 ) -> RunRecord:
     """Execute an agent run end-to-end, returning the persisted record.
+
+    `extra_tools`: tools this run gets on top of the agent's own.
 
     `notify=False`: a completed run is not announced — the caller does that
     itself (see `_drive`).
@@ -348,22 +351,22 @@ async def run_agent(
         async with run_slots():
             return await _execute(
                 agent_def, agent, task, record, resume_session, max_turns,
-                extra_options, append_system, on_message, notify,
+                extra_options, append_system, on_message, notify, extra_tools,
             )
     return await _execute(
         agent_def, agent, task, record, resume_session, max_turns,
-        extra_options, append_system, on_message, notify,
+        extra_options, append_system, on_message, notify, extra_tools,
     )
 
 
 async def _execute(
     agent_def, agent, task, record, resume_session, max_turns,
-    extra_options, append_system, on_message, notify=True,
+    extra_options, append_system, on_message, notify=True, extra_tools=None,
 ) -> RunRecord:
     record = _begin_run(agent, task, record.parent_run_id, record)
     options = build_options_for(
         agent_def, resume=resume_session, max_turns=max_turns,
-        append_system=append_system,
+        append_system=append_system, extra_tools=extra_tools,
     )
     if extra_options:
         for k, v in extra_options.items():
@@ -414,6 +417,8 @@ async def stream_agent(
     project_id: str | None = None,
     source: str = "chat",
     model: str | None = None,
+    teammate_id: str | None = None,
+    extra_tools: list[str] | None = None,
 ) -> AsyncIterator[Any]:
     """Async generator that yields SDK messages while persisting the run.
 
@@ -430,10 +435,14 @@ async def stream_agent(
     record = _begin_run(agent, task, parent_run_id, None, project_id, source)
     options = build_options_for(
         agent_def, resume=resume_session, session_id=session_id, max_turns=max_turns,
-        append_system=append_system, model=model,
+        append_system=append_system, model=model, extra_tools=extra_tools,
     )
     if model:
         record.metadata["model"] = model  # the override asked for; models used land at the end
+    if teammate_id:
+        # The teammate this turn is working as (its tools look it up here).
+        record.metadata["teammate_id"] = teammate_id
+    if model or teammate_id:
         update_run(record)
     gen = _drive(record, task, options, on_message)
     try:

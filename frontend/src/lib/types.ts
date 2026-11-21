@@ -85,6 +85,7 @@ export interface ScheduleRecord {
   project_id: string | null // null = standalone Runner
   run_at?: string | null // one-shot fire time; null/absent = recurring (cron)
   next_run?: string | null // computed next fire time (null when paused/invalid)
+  missed_at?: string | null // last time it was due and did not run; clears when it next runs
   verify?: boolean // evaluator reviews each output; failed verdicts re-run once
   delta?: boolean // each run sees the previous report and reports only changes
   alert?: string // natural-language significance bar; '' / absent = off
@@ -103,6 +104,24 @@ export interface Teammate {
   automations: ScheduleRecord[]
   state: 'working' | 'failed' | 'paused' | 'ready'
   next_run: string | null // soonest fire among its automations
+  waiting: number // how many of its questions are waiting for an answer
+}
+
+// Something a teammate asked before acting. Approving makes the change it
+// describes (`summary` says what, '' for a plain question).
+export interface TeammateRequest {
+  id: string
+  teammate_id: string
+  run_id: string | null
+  title: string
+  detail: string
+  action: { kind: string; cron?: string; task?: string; brief?: string; automation?: string }
+  status: 'pending' | 'approved' | 'declined'
+  note: string // what the user said with the answer
+  outcome: string // what bran did on approval
+  summary: string
+  created_at: string
+  decided_at: string | null
 }
 
 export interface TeammateDetail extends Teammate {
@@ -114,6 +133,8 @@ export interface TeammateDetail extends Teammate {
     ended_at: string | null
     excerpt: string
   }[]
+  // What it asked before acting, newest first.
+  requests: TeammateRequest[]
 }
 
 export interface ChatSummary {
@@ -224,6 +245,10 @@ export type ChatEvent =
     }
   | { type: 'error'; message: string }
   | { type: 'done' }
+  // A teammate's chat only: a report one of its automations delivered, and
+  // something it asked from a scheduled run.
+  | { type: 'delivery'; run_id: string; title: string; excerpt: string; schedule: string | null; ts: string }
+  | { type: 'request'; request_id: string; ts: string }
 
 // --- Sources (bran.sources): where an answer came from ---
 export interface SourceRef {

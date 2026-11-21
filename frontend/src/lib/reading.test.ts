@@ -1,5 +1,47 @@
 import { describe, it, expect } from 'vitest'
-import { dateline, readMinutes, splitHeadline } from './reading'
+import { backLink, dateline, excerpt, originOf, readMinutes, splitHeadline } from './reading'
+
+describe('backLink', () => {
+  it('goes back to where the reader came from, and says where', () => {
+    expect(backLink('/runs/abc')).toEqual({ to: '/runs/abc', label: 'Back to the run' })
+    expect(backLink('/')).toEqual({ to: '/', label: 'Back to Today' })
+    expect(backLink('/chat/c1', 'News agents')).toEqual({ to: '/chat/c1', label: 'Back to News agents' })
+    expect(backLink('/chat/c1').label).toBe('Back to the chat')
+    expect(backLink('/runs?status=failed')).toEqual({ to: '/runs?status=failed', label: 'Back to Runs' })
+    expect(backLink('/somewhere-new').label).toBe('Back')
+  })
+  it('falls back to Outputs when the report was opened directly', () => {
+    expect(backLink(null)).toEqual({ to: '/outputs', label: 'Outputs' })
+    expect(backLink('/outputs')).toEqual({ to: '/outputs', label: 'Outputs' })
+    expect(backLink('/read/older')).toEqual({ to: '/outputs', label: 'Outputs' })
+  })
+  it('keeps the starting page while stepping between editions', () => {
+    expect(originOf('/runs/abc', '/', '/read/abc')).toBe('/runs/abc')
+    expect(originOf('/read/abc', '/runs/abc', '/read/older')).toBe('/runs/abc')
+    expect(originOf('/read/abc', '/runs/abc', '/runs/abc')).toBe('/read/abc')
+  })
+})
+
+describe('excerpt', () => {
+  it('opens with the report, not the note above its title', () => {
+    const md =
+      'Fact-check done: 10 of 12 claims held. Saved at `/home/x/b.md`.\n\n' +
+      '# Finance Briefing\n**Lens:** FX volatility\n\n> **Delta note:** only changes.\n\n' +
+      '## What changed\n- **NEW: Nvidia reported.** It beat on [sales](https://x.test).\n- Sterling slipped.'
+    expect(excerpt(md)).toBe('NEW: Nvidia reported. It beat on sales. Sterling slipped.')
+  })
+  it('reads plain prose as it is, and cuts at a word', () => {
+    expect(excerpt('Rates were steady.\n\n| a | b |\n\n```\ncode\n```\nNothing moved.')).toBe(
+      'Rates were steady. Nothing moved.',
+    )
+    const long = excerpt('word '.repeat(200), 50)
+    expect(long.length).toBeLessThanOrEqual(50)
+    expect(long.endsWith('…')).toBe(true)
+  })
+  it('falls back to the raw start when nothing reads as prose', () => {
+    expect(excerpt('# Only a title')).toBe('# Only a title')
+  })
+})
 
 describe('splitHeadline', () => {
   it('lifts a leading top-level heading out of the body', () => {

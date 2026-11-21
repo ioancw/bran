@@ -24,6 +24,65 @@ export function splitHeadline(markdown: string): { headline: string | null; body
   return { headline, body: preamble ? `${preamble}\n\n${after}` : after }
 }
 
+/** The first words of a report, for a card: its own opening, as a sentence.
+ * Not the agent's covering note above the title ("Fact-check done, saved at
+ * …"), and not headings, label lines ("**Lens:** FX"), quoted notes, tables or
+ * code. List items count, without their markers. */
+export function excerpt(markdown: string, limit = 220): string {
+  const text = markdown.replace(/^\s+/, '')
+  const m = /^#[ \t]+.+$/m.exec(text)
+  const body = m && m.index <= HEADLINE_WITHIN ? text.slice(m.index + m[0].length) : text
+  const parts: string[] = []
+  let fenced = false
+  for (const raw of body.split('\n')) {
+    const line = raw.trim()
+    if (/^(```|~~~)/.test(line)) fenced = !fenced
+    if (fenced || !line || /^([#|>`~]|-{3,}|\*{3,}|_{3,})/.test(line) || /^\*\*[^*]+:\*\*/.test(line))
+      continue
+    parts.push(line.replace(/^([-*+]|\d+[.)])\s+/, ''))
+    if (parts.join(' ').length > limit + 20) break
+  }
+  let s = parts
+    .join(' ')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+  if (s.length > limit) s = s.slice(0, limit - 1).replace(/\s+\S*$/, '') + '…'
+  return s || text.slice(0, limit)
+}
+
+/** Where a move from `current` to `to` came from. Stepping between editions of
+ * a report in the reading view is still the same visit: it keeps the page the
+ * reading began from. */
+export function originOf(current: string, currentFrom: string | null, to: string): string | null {
+  const reading = (p: string) => p.startsWith('/read/')
+  return reading(current) && reading(to) ? currentFrom : current
+}
+
+/** Where the reading view's back link goes and what it says: the page the
+ * reader came from, or Outputs when the report was opened directly (from a
+ * notification, say). `chatName` names the chat when that is known. */
+export function backLink(from: string | null, chatName = ''): { to: string; label: string } {
+  const path = (from ?? '').split('?')[0]
+  const seg = path.split('/').filter(Boolean)
+  const named: Record<string, [string, string]> = {
+    runs: ['Back to Runs', 'Back to the run'],
+    chat: ['Back to the chat', `Back to ${chatName || 'the chat'}`],
+    runners: ['Back to Automations', 'Back to the automation'],
+    projects: ['Back to Projects', 'Back to the project'],
+    agents: ['Back to the agent library', 'Back to the agent'],
+    teammates: ['Back to Teammates', 'Back to Teammates'],
+    artifacts: ['Back to Artifacts', 'Back to Artifacts'],
+    settings: ['Back to Settings', 'Back to Settings'],
+  }
+  if (!from || seg[0] === 'outputs' || seg[0] === 'read') return { to: '/outputs', label: 'Outputs' }
+  if (!seg.length) return { to: from, label: 'Back to Today' }
+  const hit = named[seg[0]]
+  return { to: from, label: hit ? hit[seg.length > 1 ? 1 : 0] : 'Back' }
+}
+
 /** Minutes to read, at an unhurried 220 words a minute (never less than 1). */
 export function readMinutes(markdown: string): number {
   const words = markdown.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length

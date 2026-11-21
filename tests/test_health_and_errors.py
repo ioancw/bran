@@ -100,6 +100,32 @@ def test_health_flags_a_recent_auth_failure(monkeypatch, tmp_path):
     assert health_snapshot()["login"]["ok"] is True
 
 
+def test_health_says_when_the_sign_in_has_run_out(monkeypatch, tmp_path):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    path = _creds(tmp_path, 3600)
+    monkeypatch.setattr(health_mod, "credentials_path", lambda: path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+
+    # Still valid for a while: fine, and the UI can see when it ends.
+    data["claudeAiOauth"]["refreshTokenExpiresAt"] = int((time.time() + 86400) * 1000)
+    path.write_text(json.dumps(data), encoding="utf-8")
+    login = health_snapshot()["login"]
+    assert login["ok"] is True and login["login_ends_at"]
+
+    # Run out, though the access token has not been used since.
+    data["claudeAiOauth"]["refreshTokenExpiresAt"] = int((time.time() - 60) * 1000)
+    path.write_text(json.dumps(data), encoding="utf-8")
+    login = health_snapshot()["login"]
+    assert login["ok"] is False and "ran out" in login["detail"]
+
+    # What the CLI leaves behind once it has noticed: no tokens at all.
+    data["claudeAiOauth"].update(accessToken="", refreshToken="", expiresAt=0)
+    path.write_text(json.dumps(data), encoding="utf-8")
+    login = health_snapshot()["login"]
+    assert login["ok"] is False and "Signed out" in login["detail"]
+    assert "secret" not in json.dumps(health_snapshot())
+
+
 def test_health_with_api_key_and_with_nothing(monkeypatch, tmp_path):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     assert health_snapshot()["login"]["method"] == "api_key"

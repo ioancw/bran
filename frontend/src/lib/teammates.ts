@@ -7,9 +7,14 @@ import { countdown } from './time'
 
 /** One short line beside the name: what it is doing, or when it is next due.
  *  Short enough for a narrow rail — the dot says the rest. */
-export function teammateHint(t: Pick<Teammate, 'state' | 'next_run'>, nowMs: number = Date.now()): string {
+export function teammateHint(
+  t: Pick<Teammate, 'state' | 'next_run'> & { waiting?: number },
+  nowMs: number = Date.now(),
+): string {
   if (t.state === 'working') return 'Working now'
   if (t.state === 'failed') return 'failed'
+  // It asked something and nothing moves on that until the user answers.
+  if (t.waiting) return 'Asked you'
   if (t.state === 'paused') return 'Paused'
   return t.next_run ? countdown(t.next_run, nowMs) : ''
 }

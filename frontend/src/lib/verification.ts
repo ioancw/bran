@@ -25,10 +25,21 @@ export function isSuperseded(r: RunRecord): boolean {
 }
 
 /** Badge for reading surfaces: Verified / Revised (passed after a retry) /
- * Unverified (failed review with no successful retry). Null = not reviewed. */
-export function verifyBadge(r: RunRecord): { label: string; tone: 'ok' | 'warn' } | null {
+ * Unverified (failed review with no successful retry) / Not reviewed (the
+ * review was due but could not run). Null = this run is not one that gets
+ * reviewed. `hint` says what the label means, for a tooltip. */
+export function verifyBadge(r: RunRecord): { label: string; tone: 'ok' | 'warn'; hint: string } | null {
   const v = verificationOf(r)
-  if (!v || v.status !== 'done') return null
-  if (v.pass) return { label: v.retry_of ? 'Revised' : 'Verified', tone: 'ok' }
-  return { label: 'Unverified', tone: 'warn' }
+  if (!v) return null
+  if (v.status !== 'done')
+    return {
+      label: 'Not reviewed',
+      tone: 'warn',
+      hint: 'The review could not run, so nobody checked this report',
+    }
+  if (v.pass)
+    return v.retry_of
+      ? { label: 'Revised', tone: 'ok', hint: 'Rewritten after a reviewer found problems, then passed' }
+      : { label: 'Verified', tone: 'ok', hint: 'A reviewer agent checked this report' }
+  return { label: 'Unverified', tone: 'warn', hint: 'A reviewer agent found problems with this report' }
 }

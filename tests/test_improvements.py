@@ -581,3 +581,87 @@ def test_reviewer_sees_the_whole_report_and_knows_the_date():
     assert len(prompt) < _REVIEW_CAP + 3_000
     assert "START " in prompt and "THE-END" in prompt
     assert "do not count it as missing" in prompt
+
+
+def test_waking_from_sleep_catches_up_what_the_scheduler_dropped(monkeypatch):
+    import bran.scheduler as sched
+
+    now = datetime.now(timezone.utc)
+    calls = []
+    monkeypatch.setattr(sched, "_scheduler", object())
+    monkeypatch.setattr(sched, "_queue_catch_up", lambda s, after_sleep=False: calls.append(after_sleep))
+
+    # A beat a minute ago: the machine has been awake.
+    set_setting(sched._ALIVE_KEY, (now - timedelta(seconds=61)).isoformat())
+    sched._heartbeat()
+    assert calls == []
+    # Nothing for six hours: it slept. Look for missed fires, then beat.
+    set_setting(sched._ALIVE_KEY, (now - timedelta(hours=6)).isoformat())
+    sched._heartbeat()
+    assert calls == [True]
+    from bran.persistence import get_setting
+
+    assert datetime.fromisoformat(get_setting(sched._ALIVE_KEY)) >= now
+    # The beats at startup and shutdown never trigger it.
+    set_setting(sched._ALIVE_KEY, (now - timedelta(hours=6)).isoformat())
+    sched._heartbeat(check_gap=False)
+    assert calls == [True]
+    set_setting(sched._ALIVE_KEY, "")
+
+
+def test_after_sleep_recent_slots_are_left_to_the_scheduler(monkeypatch):
+    import bran.scheduler as sched
+
+    now = datetime.now(timezone.utc)
+    old = (now - timedelta(hours=5)).isoformat()
+    fresh = (now - timedelta(minutes=10)).isoformat()
+    monkeypatch.setattr(sched, "plan_catch_up", lambda: {
+        "caught_up": [{"name": "old-one", "due": old}, {"name": "fresh-one", "due": fresh}],
+        "skipped": [],
+    })
+    monkeypatch.setattr("bran.persistence.get_schedule", lambda name: None)
+    sched._queue_catch_up(object(), after_sleep=True)
+    assert [e["name"] for e in sched._startup_report["caught_up"]] == ["old-one"]
+    sched._queue_catch_up(object())
+    assert len(sched._startup_report["caught_up"]) == 2
+    sched._startup_report = {"caught_up": [], "skipped": []}
+
+
+def test_missed_slot_is_the_last_fire_that_never_ran(client):
+    import bran.scheduler as sched
+
+    now = datetime.now(timezone.utc)
+    then = (now - timedelta(days=2)).astimezone()
+    daily = f"{then.minute} {then.hour} * * *"  # due at this time of day, every day
+
+    never = _runner(daily)
+    due = sched.missed_slot(never, now)
+    assert due and timedelta(hours=1) < now - datetime.fromisoformat(due) <= timedelta(hours=25)
+    listed = {s["name"]: s for s in client.get("/spa/schedules").json()}
+    assert listed[never.name]["missed_at"] == sched.missed_slot(never)
+
+    # It ran since (on time, late, or by hand): nothing is missed.
+    ran = _runner(daily)
+    done = RunRecord.new(agent="research", task="t", source="manual", schedule_id=ran.id)
+    done.started_at = (now - timedelta(minutes=30)).isoformat()
+    insert_run(done)
+    assert sched.missed_slot(ran, now) is None
+    # A run from before the slot does not count.
+    stale = _runner(daily)
+    before = RunRecord.new(agent="research", task="t", source="runner", schedule_id=stale.id)
+    before.started_at = (now - timedelta(days=3)).isoformat()
+    insert_run(before)
+    assert sched.missed_slot(stale, now) is not None
+
+    # Not missed: created after the slot, paused, a one-off, or due any minute now.
+    assert sched.missed_slot(_runner(daily, created_hours_ago=0.5), now) is None
+    from bran.persistence import set_schedule_enabled
+
+    paused = _runner(daily)
+    set_schedule_enabled(paused.name, False)
+    paused.enabled = False
+    assert sched.missed_slot(paused, now) is None
+    soon = (now - timedelta(minutes=20)).astimezone()
+    assert sched.missed_slot(
+        _runner(f"{soon.minute} {soon.hour} * * *", created_hours_ago=3), now
+    ) is None

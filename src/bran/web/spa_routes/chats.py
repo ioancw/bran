@@ -189,11 +189,22 @@ def chat_history(chat_id: str) -> dict[str, Any]:
         # that was continued after its file was pruned stays on this path:
         # its new file holds only the turns since, the database holds all.
         turns = _chat_turns(chat_id)
-        return {"session_id": chat_id, "events": [attach_child_run(e) for e in events_from_runs(turns)]}
-    events: list[dict[str, Any]] = []
-    for entry in parse_transcript(path):
-        events.extend(events_from_transcript_entry(entry))
-    return {"session_id": chat_id, "events": [attach_child_run(e) for e in events]}
+        events = events_from_runs(turns)
+    else:
+        events = []
+        for entry in parse_transcript(path):
+            events.extend(events_from_transcript_entry(entry))
+    events = [attach_child_run(e) for e in events]
+    from bran.persistence import get_teammate_by_chat
+
+    mate = get_teammate_by_chat(chat_id)
+    if mate is not None:
+        # A teammate's chat also shows what its automations delivered and
+        # what it asked, each where it happened.
+        from bran.teammates import feed, merge_feed
+
+        events = merge_feed(events, feed(mate))
+    return {"session_id": chat_id, "events": events}
 
 
 @router.post("/chat/stream")
@@ -260,12 +271,14 @@ async def chat_stream(
     if target_project_id and project_record is None:
         target_project_id = None  # stale/unknown id → loose
     append_system = build_project_context(project_record) if project_record else None
+    team_tools: list[str] | None = None
     if delegated:
         note = delegation_prompt(mentioned_agent)
         append_system = (append_system + "\n\n" + note) if append_system else note
     if mate is not None:
-        from bran.teammates import chat_context
+        from bran.teammates import TEAM_TOOLS, chat_context
 
+        team_tools = list(TEAM_TOOLS)
         about = chat_context(mate)
         append_system = (about + "\n\n" + append_system) if append_system else about
 
@@ -311,6 +324,8 @@ async def chat_stream(
                 target_agent, actual_prompt, resume_session=resume_sid, session_id=fresh_sid,
                 append_system=append_system, project_id=target_project_id,
                 model=model_override or None,
+                teammate_id=mate.id if mate is not None else None,
+                extra_tools=team_tools,
             ):
                 # Inside-subagent messages belong to the child run (see
                 # runner._child_run_for) — the chat shows the Agent tool call

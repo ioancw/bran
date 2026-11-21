@@ -60,6 +60,14 @@ def schedule_dict(s: ScheduleRecord) -> dict[str, Any]:
             except Exception:  # noqa: BLE001 — a bad stored cron simply has no next run
                 next_run = None
     d["next_run"] = next_run
+    # The last time it should have run and did not (the computer was off or
+    # asleep), until it next runs.
+    try:
+        from bran.scheduler import missed_slot
+
+        d["missed_at"] = missed_slot(s)
+    except Exception:  # noqa: BLE001 — a bad stored cron simply has nothing missed
+        d["missed_at"] = None
     return d
 
 

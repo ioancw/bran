@@ -104,6 +104,7 @@
       toast(errorText(e), 'err')
     }
   }
+  const waiting = $derived((mate?.requests ?? []).filter((q) => q.status === 'pending'))
   const when = (s: ScheduleRecord) => (s.run_at ? `Once · ${localDateTime(s.run_at)}` : describeCron(s.cron))
 </script>
 
@@ -202,6 +203,17 @@
     {/if}
   </Section>
 
+  {#if waiting.length}
+    <Section label="Waiting for your answer">
+      <ul class="mate-list">
+        {#each waiting as q (q.id)}
+          <li class="mate-asked">{q.title}</li>
+        {/each}
+      </ul>
+      <p class="text-muted rail-note">Answer in the chat. Nothing changes until you do.</p>
+    </Section>
+  {/if}
+
   <Section label="Delivered">
     {#if mate.deliveries.length}
       <ul class="mate-list">
@@ -223,6 +235,11 @@
 {/if}
 
 <style>
+  .mate-asked {
+    font-size: 13px;
+    padding: 4px 0 4px 8px;
+    border-left: 2px solid var(--accent);
+  }
   .mate-head {
     display: flex;
     align-items: center;

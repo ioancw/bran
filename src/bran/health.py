@@ -46,6 +46,21 @@ def _claude_login() -> dict[str, Any]:
     )
     out = {"method": "claude.ai", "ok": True, "expires_at": expires_at,
            "subscription": oauth.get("subscriptionType"), "detail": ""}
+    # The sign-in itself can run out. The CLI then empties the tokens on its
+    # next start, but until something runs the file still looks like a login:
+    # say so now, rather than when the morning's run fails.
+    if not oauth.get("accessToken") or not oauth.get("refreshToken"):
+        out["ok"] = False
+        out["detail"] = "Signed out: the Claude sign-in has run out."
+        return out
+    ends_ms = oauth.get("refreshTokenExpiresAt")
+    if isinstance(ends_ms, (int, float)) and ends_ms > 0:
+        ends = datetime.fromtimestamp(ends_ms / 1000, tz=timezone.utc)
+        out["login_ends_at"] = ends.isoformat()
+        if ends <= datetime.now(timezone.utc):
+            out["ok"] = False
+            out["detail"] = f"The Claude sign-in ran out on {ends:%d %b at %H:%M} UTC."
+            return out
     # A past access-token expiry is normal (the CLI refreshes); a run that
     # failed with a 401 AFTER the last success is not.
     failure = _recent_auth_failure()

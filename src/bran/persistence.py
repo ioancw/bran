@@ -83,6 +83,24 @@ CREATE TABLE IF NOT EXISTS teammates (
     updated_at  TEXT NOT NULL
 );
 
+-- What a teammate asked the user before acting: a question with, optionally,
+-- a change bran makes itself once it is approved (`action`, JSON). `status`
+-- is pending, approved or declined; `note` is what the user said with the
+-- answer; `outcome` is what bran did on approval.
+CREATE TABLE IF NOT EXISTS teammate_requests (
+    id          TEXT PRIMARY KEY,
+    teammate_id TEXT NOT NULL,
+    run_id      TEXT,
+    title       TEXT NOT NULL,
+    detail      TEXT NOT NULL DEFAULT '',
+    action      TEXT NOT NULL DEFAULT '{}',
+    status      TEXT NOT NULL DEFAULT 'pending',
+    note        TEXT NOT NULL DEFAULT '',
+    outcome     TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL,
+    decided_at  TEXT
+);
+
 -- Files a run produced (captured from its Write/Edit tool calls). First-class
 -- rows rather than a list inside runs.metadata, so the schema is explicit and
 -- queryable. (run_id, path) is naturally unique — re-recording is a no-op.
@@ -193,6 +211,7 @@ CREATE INDEX IF NOT EXISTS idx_chats_updated   ON chats(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chats_project   ON chats(project_id);
 CREATE INDEX IF NOT EXISTS idx_projects_updated ON projects(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_project_memories ON project_memories(project_id);
+CREATE INDEX IF NOT EXISTS idx_teammate_requests ON teammate_requests(teammate_id, created_at);
 """
 
 # Reentrant: store functions call each other while holding it (insert_run ->
@@ -1154,6 +1173,7 @@ def delete_teammate(teammate_id: str) -> bool:
         if cur.rowcount == 0:
             return False
         conn.execute("UPDATE schedules SET teammate_id = NULL WHERE teammate_id = ?", (teammate_id,))
+        conn.execute("DELETE FROM teammate_requests WHERE teammate_id = ?", (teammate_id,))
     return True
 
 
@@ -1166,6 +1186,92 @@ def set_schedule_teammate(name: str, teammate_id: str | None) -> ScheduleRecord 
         if cur.rowcount == 0:
             return None
     return get_schedule(name)
+
+
+@dataclass
+class TeammateRequest:
+    """Something a teammate asked the user before acting (see
+    `bran.teammates.ask`)."""
+
+    id: str
+    teammate_id: str
+    title: str
+    detail: str = ""
+    action: dict[str, Any] = field(default_factory=dict)  # {"kind": ..., ...}
+    status: str = "pending"       # pending | approved | declined
+    note: str = ""                # what the user said with the answer
+    outcome: str = ""             # what bran did on approval
+    run_id: str | None = None     # the run that asked
+    created_at: str = field(default_factory=utcnow_iso)
+    decided_at: str | None = None
+
+
+def _row_to_request(r: sqlite3.Row) -> TeammateRequest:
+    try:
+        action = json.loads(r["action"] or "{}")
+    except ValueError:
+        action = {}
+    return TeammateRequest(
+        id=r["id"], teammate_id=r["teammate_id"], title=r["title"], detail=r["detail"] or "",
+        action=action if isinstance(action, dict) else {}, status=r["status"],
+        note=r["note"] or "", outcome=r["outcome"] or "", run_id=r["run_id"],
+        created_at=r["created_at"], decided_at=r["decided_at"],
+    )
+
+
+def insert_teammate_request(record: TeammateRequest) -> None:
+    with _lock, _conn() as conn:
+        conn.execute(
+            """INSERT INTO teammate_requests
+               (id, teammate_id, run_id, title, detail, action, status, note, outcome,
+                created_at, decided_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (record.id, record.teammate_id, record.run_id, record.title, record.detail,
+             json.dumps(record.action), record.status, record.note, record.outcome,
+             record.created_at, record.decided_at),
+        )
+
+
+def get_teammate_request(request_id: str) -> TeammateRequest | None:
+    with _lock, _conn() as conn:
+        row = conn.execute("SELECT * FROM teammate_requests WHERE id = ?", (request_id,)).fetchone()
+    return _row_to_request(row) if row else None
+
+
+def list_teammate_requests(
+    teammate_id: str | None = None, status: str | None = None, limit: int = 100,
+) -> list[TeammateRequest]:
+    """Newest first. `teammate_id` None = every teammate's."""
+    where, params = [], []
+    if teammate_id:
+        where.append("teammate_id = ?")
+        params.append(teammate_id)
+    if status:
+        where.append("status = ?")
+        params.append(status)
+    sql = "SELECT * FROM teammate_requests"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY created_at DESC LIMIT ?"
+    with _lock, _conn() as conn:
+        rows = conn.execute(sql, (*params, limit)).fetchall()
+    return [_row_to_request(r) for r in rows]
+
+
+def decide_teammate_request(
+    request_id: str, *, status: str, note: str = "", outcome: str = "",
+) -> TeammateRequest | None:
+    """Record the user's answer. Only a pending request can be answered: None
+    when there is no such request or it was answered already."""
+    with _lock, _conn() as conn:
+        cur = conn.execute(
+            "UPDATE teammate_requests SET status = ?, note = ?, outcome = ?, decided_at = ?"
+            " WHERE id = ? AND status = 'pending'",
+            (status, note, outcome, utcnow_iso(), request_id),
+        )
+        if cur.rowcount == 0:
+            return None
+    return get_teammate_request(request_id)
 
 
 @dataclass
@@ -1506,9 +1612,17 @@ def _m4_teammates(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "schedules", "teammate_id", "TEXT")
 
 
+def _m5_teammate_requests(conn: sqlite3.Connection) -> None:
+    """What teammates ask before acting: `_TABLES` creates the table; this
+    step only marks the version at which an existing database gained it."""
+
+
 # Append only. A migration never changes once released: a database that has
 # already run it will not run it again.
-_MIGRATIONS = (_m1_legacy_catch_up, _m2_events_to_table, _m3_answer_feedback, _m4_teammates)
+_MIGRATIONS = (
+    _m1_legacy_catch_up, _m2_events_to_table, _m3_answer_feedback, _m4_teammates,
+    _m5_teammate_requests,
+)
 
 
 def _bring_up_to_date(conn: sqlite3.Connection) -> None:

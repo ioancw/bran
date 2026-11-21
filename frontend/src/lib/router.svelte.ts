@@ -3,6 +3,7 @@
 // drives the outlet in App.svelte.
 
 import { tick } from 'svelte'
+import { originOf } from './reading'
 
 const BASE = '/app'
 
@@ -29,9 +30,17 @@ function toRoute(full: string): Route {
   }
 }
 
-export const router = $state<{ route: Route; full: string }>({
+/** The page this history entry was reached from, kept on the entry itself so
+ * it survives Back, Forward and a reload. Null when it was opened directly. */
+function storedFrom(): string | null {
+  const from = (window.history.state as { from?: unknown } | null)?.from
+  return typeof from === 'string' ? from : null
+}
+
+export const router = $state<{ route: Route; full: string; from: string | null }>({
   route: toRoute(currentFull()),
   full: currentFull(),
+  from: storedFrom(),
 })
 
 /** True when moving between these two routes should cross-fade. Not within
@@ -51,9 +60,11 @@ export function navigate(to: string): void {
   if (to === router.full) return
   const next = toRoute(to)
   const apply = () => {
-    window.history.pushState({}, '', BASE + to)
+    const from = originOf(router.full, router.from, to)
+    window.history.pushState({ from }, '', BASE + to)
     router.route = next
     router.full = to
+    router.from = from
     window.scrollTo(0, 0)
   }
   const doc = document as ViewTransitionDocument
@@ -76,7 +87,7 @@ export function navigate(to: string): void {
  * or a reload cannot replay it. */
 export function replace(to: string): void {
   if (to === router.full) return
-  window.history.replaceState({}, '', BASE + to)
+  window.history.replaceState(window.history.state ?? {}, '', BASE + to)
   router.route = toRoute(to)
   router.full = to
 }
@@ -85,6 +96,7 @@ if (typeof window !== 'undefined') {
   window.addEventListener('popstate', () => {
     router.route = toRoute(currentFull())
     router.full = currentFull()
+    router.from = storedFrom()
   })
 }
 

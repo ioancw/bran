@@ -7,13 +7,23 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Form, HTTPException, status
 
-from bran.persistence import delete_teammate, get_teammate, list_teammates
+from bran.persistence import (
+    delete_teammate,
+    get_teammate,
+    get_teammate_request,
+    list_teammate_requests,
+    list_teammates,
+)
 from bran.teammates import (
     TeammateError,
     assign_automation,
     create_teammate,
+    decide,
     deliveries,
+    delivery_title,
     edit_teammate,
+    feed,
+    request_dict,
     teammate_dict,
 )
 from bran.web.spa_routes.common import form_flag
@@ -50,11 +60,43 @@ def teammate(teammate_id: str) -> dict[str, Any]:
     done = [
         {
             "id": r.id, "schedule_id": r.schedule_id, "started_at": r.started_at,
-            "ended_at": r.ended_at, "excerpt": " ".join((r.result or "").split())[:220],
+            # Its heading, then how it opens: never the raw markdown.
+            "ended_at": r.ended_at, "excerpt": ": ".join(p for p in delivery_title(r, "") if p)[:220],
         }
         for r in deliveries(t)
     ]
-    return {**teammate_dict(t), "deliveries": done}
+    return {
+        **teammate_dict(t), "deliveries": done,
+        # What it asked before acting, newest first: waiting ones and answers.
+        "requests": [request_dict(q) for q in list_teammate_requests(t.id, limit=40)],
+    }
+
+
+@router.get("/teammates/{teammate_id}/feed")
+def teammate_feed(teammate_id: str) -> dict[str, Any]:
+    """What belongs in its chat besides the conversation: the reports its
+    automations delivered and what it asked from them, oldest first."""
+    return {"events": feed(_or_404(teammate_id))}
+
+
+@router.post("/teammates/{teammate_id}/requests/{request_id}")
+def answer_request(
+    teammate_id: str,
+    request_id: str,
+    decision: Annotated[str, Form()],
+    note: Annotated[str, Form()] = "",
+) -> dict[str, Any]:
+    """The user's answer to something the teammate asked. `decision` is
+    "approve" or "decline"; approving makes the change it described."""
+    q = get_teammate_request(request_id)
+    if q is None or q.teammate_id != teammate_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No such request.")
+    if decision not in ("approve", "decline"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "decision must be approve or decline.")
+    try:
+        return request_dict(decide(request_id, approve=decision == "approve", note=note))
+    except TeammateError as e:
+        raise _http(e)
 
 
 @router.post("/teammates")

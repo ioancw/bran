@@ -199,4 +199,183 @@ def test_an_existing_database_gains_the_teammate_column():
     _m4_teammates(conn)
     _m4_teammates(conn)  # harmless twice
     assert "teammate_id" in [c["name"] for c in conn.execute("PRAGMA table_info(schedules)")]
-    assert _MIGRATIONS[-1] is _m4_teammates
+    assert _m4_teammates in _MIGRATIONS
+
+
+# --- deliveries in the chat, and asking before acting ---------------------------
+
+def _mate_with_auto(schedule: str = "every day at 6am"):
+    from bran.teammates import automations_of
+
+    t = create_teammate(name=_name(), agent="orchestrator", brief="Brief me on FX.", schedule=schedule)
+    return t, automations_of(t.id)[0]
+
+
+def test_deliveries_land_in_the_chat_between_turns(client):
+    from bran.persistence import update_run
+    from bran.teammates import feed, merge_feed
+
+    t, auto = _mate_with_auto()
+    sent_back = _run(schedule_id=auto.id, result="# Draft\nWrong.")
+    sent_back.metadata["verification"] = {"pass": False, "retried_run_id": "x"}
+    update_run(sent_back)
+    good = _run(schedule_id=auto.id, result="# FX brief\nEURUSD fell through 1.05.")
+
+    events = feed(get_teammate(t.id))
+    # The report the reviewer sent back is not a delivery; its replacement is.
+    assert [e["run_id"] for e in events if e["type"] == "delivery"] == [good.id]
+    assert events[0]["title"] == "FX brief" and "EURUSD" in events[0]["excerpt"]
+    assert events[0]["schedule"] == auto.name
+
+    # Placed by time, and never inside a turn.
+    talk = [
+        {"type": "user", "text": "before", "ts": "2000-01-01T00:00:00"},
+        {"type": "text", "text": "ok", "ts": "2000-01-01T00:00:05"},
+        {"type": "user", "text": "after", "ts": "2999-01-01T00:00:00"},
+        {"type": "text", "text": "ok", "ts": "2999-01-01T00:00:05"},
+    ]
+    merged = merge_feed(talk, events)
+    assert [e["type"] for e in merged] == ["user", "text", "delivery", "user", "text"]
+    assert merge_feed([], events) == events
+
+    assert client.get(f"/spa/teammates/{t.id}/feed", headers=SAME).json()["events"] == events
+
+
+def test_a_teammate_asks_and_a_yes_makes_the_change(client):
+    from bran.teammates import ask, automations_of
+
+    t, auto = _mate_with_auto()
+    run = _run(schedule_id=auto.id, result="report")
+    q = ask(t.id, title="Add a Friday wrap-up?", detail="A weekly view would help.",
+            kind="new_automation", schedule="every Friday at 4pm", task="Write the weekly wrap-up.",
+            run_id=run.id)
+    assert q.status == "pending" and q.action["cron"] == "0 16 * * fri"
+    assert len(automations_of(t.id)) == 1  # nothing changes on asking
+
+    # It is told what is waiting, in a run and in the chat; the chat shows it.
+    assert "Add a Friday wrap-up?" in run_context(t.id)
+    assert "mcp__bran_team__ask_approval" in chat_context(get_teammate(t.id))
+    listed = client.get(f"/spa/teammates/{t.id}", headers=SAME).json()
+    assert listed["waiting"] == 1 and listed["requests"][0]["id"] == q.id
+    assert {"type": "request", "request_id": q.id, "ts": q.created_at} in client.get(
+        f"/spa/teammates/{t.id}/feed", headers=SAME).json()["events"]
+
+    # The same question again, or a fourth open one, is refused.
+    with pytest.raises(TeammateError):
+        ask(t.id, title="add a friday wrap-up?")
+    ask(t.id, title="Second?")
+    ask(t.id, title="Third?")
+    with pytest.raises(TeammateError):
+        ask(t.id, title="Fourth?")
+
+    done = client.post(f"/spa/teammates/{t.id}/requests/{q.id}", headers=SAME,
+                       data={"decision": "approve", "note": "Keep it short."}).json()
+    assert done["status"] == "approved" and "added the automation" in done["outcome"]
+    autos = automations_of(t.id)
+    assert len(autos) == 2
+    new = next(s for s in autos if s.id != auto.id)
+    assert new.cron == "0 16 * * fri" and new.task == "Write the weekly wrap-up." and new.agent == "orchestrator"
+    told = run_context(t.id)
+    assert "approved" in told and "Keep it short." in told
+
+    # Answered once: a second answer is a conflict, and another teammate's id is not found.
+    again = client.post(f"/spa/teammates/{t.id}/requests/{q.id}", headers=SAME, data={"decision": "decline"})
+    assert again.status_code == 409
+    other, _ = _mate_with_auto()
+    assert client.post(f"/spa/teammates/{other.id}/requests/{q.id}", headers=SAME,
+                       data={"decision": "approve"}).status_code == 404
+
+
+def test_declining_changes_nothing_and_other_kinds_do_what_they_say(client):
+    from bran.teammates import ask, decide
+
+    t, auto = _mate_with_auto()
+    no = ask(t.id, title="Rewrite my brief?", kind="change_brief", brief="Cover rates only.")
+    assert decide(no.id, approve=False, note="No, keep FX.").status == "declined"
+    assert get_teammate(t.id).brief == "Brief me on FX."
+    assert "declined" in run_context(t.id) and "No, keep FX." in run_context(t.id)
+
+    yes = ask(t.id, title="Rewrite my brief, with FX?", kind="change_brief", brief="Cover FX and rates.")
+    assert decide(yes.id, approve=True).outcome == "replaced the standing brief"
+    assert get_teammate(t.id).brief == "Cover FX and rates."
+
+    move = ask(t.id, title="Run earlier?", kind="change_schedule", schedule="every day at 5am")
+    assert move.action["automation"] == auto.name
+    decide(move.id, approve=True)
+    assert get_schedule(auto.name).cron == "0 5 * * *"
+
+    plain = ask(t.id, title="Lead with the dollar from now on?")
+    assert decide(plain.id, approve=True).outcome == ""
+
+    # What a yes would need is checked when asking, not when answering.
+    for bad in (
+        dict(kind="new_automation", schedule="whenever", task="x"),
+        dict(kind="new_automation", schedule="every day at 6am"),
+        dict(kind="change_brief"),
+        dict(kind="change_schedule", schedule="every day at 6am", automation="not-mine"),
+        dict(kind="delete_everything"),
+    ):
+        with pytest.raises(TeammateError):
+            ask(t.id, title="Bad?", **bad)
+
+
+def test_the_teammate_tools_know_whose_run_they_are_in():
+    import asyncio
+
+    from bran.background import current_run_id
+    from bran.persistence import list_teammate_requests
+    from bran.tools.team import ask_approval, read_delivery
+
+    t, auto = _mate_with_auto()
+    report = _run(schedule_id=auto.id, result="# FX brief\nThe whole report.")
+    stranger = _run(result="not this teammate")
+
+    async def call(tool, args, run_id):
+        token = current_run_id.set(run_id)
+        try:
+            return await tool.handler(args)
+        finally:
+            current_run_id.reset(token)
+
+    out = asyncio.run(call(ask_approval, {"title": "Lead with the dollar?"}, report.id))
+    assert "request_id=" in out["content"][0]["text"]
+    assert [q.title for q in list_teammate_requests(t.id)] == ["Lead with the dollar?"]
+
+    text = asyncio.run(call(read_delivery, {"run_id": report.id}, report.id))["content"][0]["text"]
+    assert "The whole report." in text
+    # Not its own run: refused. Outside a teammate run: refused.
+    assert asyncio.run(call(read_delivery, {"run_id": stranger.id}, report.id)).get("is_error")
+    assert asyncio.run(call(ask_approval, {"title": "x"}, stranger.id)).get("is_error")
+
+
+def test_a_teammate_run_gets_its_tools_and_others_do_not():
+    from bran.agents import build_options_for, get_agent
+    from bran.teammates import TEAM_TOOLS
+
+    agent = get_agent("finance-news")
+    plain = build_options_for(agent)
+    assert "bran_team" not in plain.mcp_servers
+    assert not set(TEAM_TOOLS) & set(plain.allowed_tools)
+    mine = build_options_for(agent, extra_tools=list(TEAM_TOOLS))
+    assert "bran_team" in mine.mcp_servers and set(TEAM_TOOLS) <= set(mine.allowed_tools)
+    assert set(plain.allowed_tools) <= set(mine.allowed_tools)
+    assert plain.disallowed_tools == mine.disallowed_tools
+
+
+def test_a_delivery_excerpt_is_the_report_not_the_covering_note():
+    from bran.teammates import delivery_title
+
+    run = RunRecord.new(agent="research", task="t", source="runner")
+    run.result = (
+        "Fact-check done: 10 of 12 claims held. Saved at `/home/x/briefings/b.md`.\n\n"
+        "# Finance Briefing: Wednesday\n**Lens:** FX volatility\n\n"
+        "> **Delta note:** only what changed.\n\n## What changed\n"
+        "- **NEW: Nvidia reported.** It beat on sales.\n- Sterling slipped.\n"
+    )
+    title, text = delivery_title(run, "morning-brief")
+    assert title == "Finance Briefing: Wednesday"
+    assert text.startswith("NEW: Nvidia reported. It beat on sales. Sterling slipped.")
+    assert "Fact-check" not in text and "Lens" not in text and "Delta note" not in text
+
+    run.result = "Rates were steady.\nNothing else moved."
+    assert delivery_title(run, "morning-brief") == ("morning-brief", "Rates were steady. Nothing else moved.")

@@ -6,7 +6,8 @@
   // /spa/runs + /spa/schedules data; no dedicated backend endpoint.
   import { onReturn } from '../lib/refresh'
   import { api } from '../lib/api'
-  import { href, link } from '../lib/router.svelte'
+  import { href, link, navigate } from '../lib/router.svelte'
+  import { excerpt } from '../lib/reading'
   import { relativeTime, localDateTime, localClock, countdown, fmtCost } from '../lib/time'
   import { isAlertResult, isSuperseded, verifyBadge } from '../lib/verification'
   import { sourceLabel, sourceHint } from '../lib/labels'
@@ -83,26 +84,22 @@
     }
   })
 
-  // First lines of real prose for the delivery cards — skip markdown chrome
-  // (headers, lists, tables) and strip inline markup so the snippet reads
-  // like a sentence, not raw source.
-  function snippet(text: string, limit = 220): string {
-    const parts: string[] = []
-    for (const raw of text.split('\n')) {
-      const line = raw.trim()
-      if (!line || /^[#\-*|>`]/.test(line)) continue
-      parts.push(line)
-      if (parts.join(' ').length > limit + 20) break
+  // Automations that were due and did not run: the computer was off or
+  // asleep. Each stays here until it next runs.
+  const missed = $derived(schedules.filter((s) => s.enabled && s.missed_at))
+
+  let starting = $state<string | null>(null)
+  async function runMissed(s: ScheduleRecord) {
+    if (starting) return
+    starting = s.id
+    try {
+      const r = await api.newRun(s.agent, s.task || `Run ${s.agent}`, { schedule_id: s.id })
+      navigate('/runs/' + r.id)
+    } catch (e) {
+      toast(errorText(e), 'err')
+    } finally {
+      starting = null
     }
-    let s = parts
-      .join(' ')
-      .replace(/\*\*([^*]+)\*\*/g, '$1')
-      .replace(/\*([^*]+)\*/g, '$1')
-      .replace(/`([^`]+)`/g, '$1')
-      .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-      .replace(/__([^_]+)__/g, '$1')
-    if (s.length > limit) s = s.slice(0, limit - 1).replace(/\s+\S*$/, '') + '…'
-    return s || text.slice(0, limit)
   }
 
   const dateLabel = $derived(
@@ -179,15 +176,36 @@
     <div class="grid grid-cols-3 gap-6">
       <!-- Main column: attention + deliveries -->
       <div class="col-span-2 space-y-6">
-        {#if attention.length}
+        {#if attention.length || missed.length}
           <section>
             <div class="sec-head">
               <span class="label-cap sec-alert"><Icon name="alert-circle" size={13} />Needs attention</span>
-              <button class="btn-ghost btn-sm ml-auto" disabled={clearing} onclick={clearFailures}>
-                <Icon name="trash" size={13} />{clearing ? 'Clearing…' : 'Clear'}
-              </button>
+              {#if attention.length}
+                <button class="btn-ghost btn-sm ml-auto" disabled={clearing} onclick={clearFailures}>
+                  <Icon name="trash" size={13} />{clearing ? 'Clearing…' : 'Clear'}
+                </button>
+              {/if}
             </div>
             <div class="space-y-2">
+              {#each missed as s (s.id)}
+                <div class="att missed card">
+                  <a href={href('/runners/' + encodeURIComponent(s.name))} use:link class="att-title"
+                    >{s.name}</a
+                  >
+                  <span class="pill warn">Did not run</span>
+                  <button
+                    class="btn-outline btn-sm ml-auto"
+                    disabled={!!starting}
+                    onclick={() => runMissed(s)}
+                  >
+                    <Icon name="play" size={12} />{starting === s.id ? 'Starting…' : 'Run now'}
+                  </button>
+                  <span class="att-note"
+                    >It was due {localDateTime(s.missed_at!)}, when this computer was off or asleep. Nothing
+                    has run since.</span
+                  >
+                </div>
+              {/each}
               {#each attention as r (r.id)}
                 <a href={href('/runs/' + r.id)} use:link class="att card">
                   <span class="att-title">{titleFor(r)}</span>
@@ -227,15 +245,14 @@
                         class="pill accent"
                         title="Delta report: only what changed since the last run">Delta</span
                       >{/if}
-                    {#if badge}<span
-                        class="pill {badge.tone === 'ok' ? 'ok' : 'warn'}"
-                        title="Reviewed by the verification evaluator">{badge.label}</span
+                    {#if badge}<span class="pill {badge.tone === 'ok' ? 'ok' : 'warn'}" title={badge.hint}
+                        >{badge.label}</span
                       >{/if}
                     <span class="ml-auto meta" title={localDateTime(r.started_at)}
                       >{relativeTime(r.started_at)}</span
                     >
                   </header>
-                  <p class="dlv-snippet">{snippet(r.result ?? '')}</p>
+                  <p class="dlv-snippet">{excerpt(r.result ?? '')}</p>
                 </a>
               {/each}
             </div>
@@ -359,6 +376,14 @@
     font-size: 13px;
     font-weight: 500;
     color: var(--fg-bright);
+  }
+  .att.missed {
+    border-color: color-mix(in srgb, var(--amber) 35%, var(--border));
+  }
+  .att-note {
+    flex-basis: 100%;
+    color: var(--fg-dim);
+    font-size: 12px;
   }
   .att-err {
     flex-basis: 100%;

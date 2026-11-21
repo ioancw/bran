@@ -6,9 +6,9 @@
   // the run page, one link away). Older and newer editions of the same runner
   // are a tap either side.
   import { api } from '../lib/api'
-  import { navigate, href, link } from '../lib/router.svelte'
+  import { navigate, href, link, router } from '../lib/router.svelte'
   import { bumpActivity } from '../lib/workspace.svelte'
-  import { dateline, readMinutes, splitHeadline } from '../lib/reading'
+  import { backLink, dateline, readMinutes, splitHeadline } from '../lib/reading'
   import { isAlertResult, isSuperseded, verificationOf, verifyBadge } from '../lib/verification'
   import Page from '../components/Page.svelte'
   import Skeleton from '../components/Skeleton.svelte'
@@ -105,6 +105,25 @@
   })
   const readable = $derived(run?.status === 'completed' && !!(run.result ?? '').trim())
 
+  // Back goes to the page the reader came from. A teammate's chat is named.
+  let chatName = $state('')
+  $effect(() => {
+    const m = /^\/chat\/([^/?]+)/.exec(router.from ?? '')
+    chatName = ''
+    if (!m) return
+    let live = true
+    api
+      .teammates()
+      .then((all) => {
+        if (live) chatName = all.find((t) => t.chat_id === m[1])?.name ?? ''
+      })
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  })
+  const back = $derived(backLink(router.from, chatName))
+
   function discuss() {
     if (!run) return
     navigate('/chat?draft=' + encodeURIComponent(`Let's discuss the output of run ${run.id} (${headline}). `))
@@ -113,7 +132,7 @@
 
 <Page>
   {#snippet head()}
-    <a href={href('/outputs')} use:link class="back"><Icon name="arrow-left" size={14} />Outputs</a>
+    <a href={href(back.to)} use:link class="back"><Icon name="arrow-left" size={14} />{back.label}</a>
     <div class="ml-auto editions">
       {#if older}
         <a
@@ -166,12 +185,7 @@
         <span>·</span>
         <span>{readMinutes(parts.body)} min read</span>
         {#if badge}
-          <span
-            class="badge {badge.tone}"
-            title={badge.tone === 'ok'
-              ? 'A reviewer agent checked this report'
-              : 'A reviewer agent found problems with this report'}
-          >
+          <span class="badge {badge.tone}" title={badge.hint}>
             <Icon name={badge.tone === 'ok' ? 'shield-check' : 'alert-triangle'} size={12} />{badge.label}
           </span>
         {/if}

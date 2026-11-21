@@ -30,6 +30,10 @@ export type ChatItem =
   | { kind: 'routed'; agent: string }
   | { kind: 'footer'; numTurns: number | null; cost: number | null; stopped?: boolean; at?: string }
   | { kind: 'error'; message: string }
+  // A teammate's chat: a report it delivered on schedule, and a question it
+  // asked from a scheduled run (the request itself is looked up by id).
+  | { kind: 'delivery'; runId: string; title: string; excerpt: string; schedule: string | null; at: string }
+  | { kind: 'request'; requestId: string; at: string }
   | ToolItem
 
 export interface ReducerState {
@@ -184,7 +188,44 @@ export function applyEvent(items: ChatItem[], st: ReducerState, ev: ChatEvent): 
       close(st)
       settleTools(items, st)
       return {}
+
+    case 'delivery':
+      close(st)
+      items.push({
+        kind: 'delivery',
+        runId: ev.run_id,
+        title: ev.title,
+        excerpt: ev.excerpt,
+        schedule: ev.schedule,
+        at: ev.ts,
+      })
+      return {}
+
+    case 'request':
+      close(st)
+      items.push({ kind: 'request', requestId: ev.request_id, at: ev.ts })
+      return {}
   }
+}
+
+/** The feed events (a teammate's deliveries and questions) not in `items`
+ * yet: what a refresh adds at the end of the conversation. */
+export function unseenFeed(items: ChatItem[], feed: ChatEvent[]): ChatEvent[] {
+  const have = new Set<string>()
+  for (const it of items) {
+    if (it.kind === 'delivery') have.add('d:' + it.runId)
+    else if (it.kind === 'request') have.add('r:' + it.requestId)
+  }
+  return feed.filter(
+    (ev) =>
+      (ev.type === 'delivery' && !have.has('d:' + ev.run_id)) ||
+      (ev.type === 'request' && !have.has('r:' + ev.request_id)),
+  )
+}
+
+/** The id of the request an ask_approval call made, from its result. */
+export function askedRequestId(tool: ToolItem): string | null {
+  return tool.resultText.match(/request_id=([0-9a-f-]{8,})/i)?.[1] ?? null
 }
 
 // --- Row grouping ------------------------------------------------------------
@@ -205,11 +246,13 @@ export const SPAWN_TOOL = 'mcp__bran__spawn_agent'
 export const PLAN_TOOL = 'mcp__bran__propose_plan'
 // Writes a document into the project's files — shown as a card that opens it.
 export const DOC_TOOL = 'mcp__bran_docs__save_document'
+// A teammate asking before it changes its job — shown as the question itself.
+export const ASK_TOOL = 'mcp__bran_team__ask_approval'
 // The SDK's delegation tool ("Task" before Claude Code 2.1.63). Each call is
 // its own card, never folded into a tool burst.
 export const DELEGATION_TOOLS = new Set(['Agent', 'Task', 'Workflow'])
 export const isDelegation = (name: string) => DELEGATION_TOOLS.has(name)
-const NEVER_GROUP = new Set([SPAWN_TOOL, PLAN_TOOL, DOC_TOOL, ...DELEGATION_TOOLS])
+const NEVER_GROUP = new Set([SPAWN_TOOL, PLAN_TOOL, DOC_TOOL, ASK_TOOL, ...DELEGATION_TOOLS])
 
 /** Thinking, or a tool call without a card of its own: what an activity
  * row is made of. */

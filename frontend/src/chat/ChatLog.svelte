@@ -2,7 +2,17 @@
   // Renders a list of ChatItems — the one render path for both live chat and
   // transcript replay. `streamingIndex` marks the assistant bubble that should
   // show a blinking cursor (live only).
-  import { groupRows, type ChatItem, type Row, SPAWN_TOOL, PLAN_TOOL, DOC_TOOL, isDelegation } from './events'
+  import {
+    groupRows,
+    askedRequestId,
+    type ChatItem,
+    type Row,
+    SPAWN_TOOL,
+    PLAN_TOOL,
+    DOC_TOOL,
+    ASK_TOOL,
+    isDelegation,
+  } from './events'
   import { clock, fullStamp, dayKey, dayLabel } from './format'
   import { sourcesInRange, turnRanges } from './sources'
   import { turnStats, turnSummary } from './activity'
@@ -16,8 +26,10 @@
   import SubagentCard from './SubagentCard.svelte'
   import PlanCard from './PlanCard.svelte'
   import DocCard from './DocCard.svelte'
+  import DeliveryCard from './DeliveryCard.svelte'
+  import RequestCard from './RequestCard.svelte'
   import { toast } from '../lib/toast.svelte'
-  import type { SourceRef } from '../lib/types'
+  import type { SourceRef, TeammateRequest } from '../lib/types'
 
   let {
     items,
@@ -32,6 +44,8 @@
     onregenerate,
     onrunner,
     onopendoc,
+    requests = {},
+    onanswer,
   }: {
     items: ChatItem[]
     streamingIndex?: number
@@ -59,6 +73,10 @@
     onrunner?: (prompt: string) => void
     // Open a document the agent saved, beside the chat.
     onopendoc?: (name: string, title: string) => void
+    // A teammate's chat: what it asked before acting (by request id), and the
+    // handler that records the user's answer.
+    requests?: Record<string, TeammateRequest>
+    onanswer?: (id: string, decision: 'approve' | 'decline', note: string) => Promise<void>
   } = $props()
 
   // Copy a turn's text; brief "Copied" feedback inline.
@@ -90,7 +108,9 @@
   function stampOf(row: Row): string | undefined {
     if (row.group) return undefined
     const it = row.item
-    return it.kind === 'user' || it.kind === 'assistant' ? it.at : undefined
+    return it.kind === 'user' || it.kind === 'assistant' || it.kind === 'delivery' || it.kind === 'request'
+      ? it.at
+      : undefined
   }
   const dividers = $derived.by(() => {
     const out: Record<number, true> = {}
@@ -283,11 +303,28 @@
           <PlanCard tool={item} {onaction} answered={items.slice(i + 1).some((x) => x.kind === 'user')} />
         {:else if item.name === DOC_TOOL && onopendoc}
           <DocCard tool={item} onopen={onopendoc} />
+        {:else if item.name === ASK_TOOL && !item.isError && item.status !== 'running'}
+          <RequestCard
+            request={requests[askedRequestId(item) ?? '']}
+            fallbackTitle={String(item.input?.title ?? '')}
+            {onanswer}
+          />
         {:else if isDelegation(item.name)}
           <SubagentCard tool={item} />
         {:else}
           <ToolBlock tool={item} />
         {/if}
+      {:else if item.kind === 'delivery'}
+        <DeliveryCard
+          runId={item.runId}
+          title={item.title}
+          excerpt={item.excerpt}
+          schedule={item.schedule}
+          at={item.at}
+          onreply={onaction ? (text) => onaction?.(text, false) : undefined}
+        />
+      {:else if item.kind === 'request'}
+        <RequestCard request={requests[item.requestId]} {onanswer} />
       {:else if item.kind === 'routed'}
         <div class="meta-row">Routed to <span class="meta-strong">{item.agent}</span></div>
       {:else if item.kind === 'footer'}

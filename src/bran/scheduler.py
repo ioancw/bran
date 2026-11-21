@@ -277,6 +277,7 @@ async def _verify_output(task: str, output: str, context: str | None = None) -> 
 async def _run_verification(
     record, agent: str, task: str, project_id: str | None,
     schedule_id: str | None, append_system: str | None,
+    extra_tools: list[str] | None = None,
 ) -> None:
     """Verify a completed scheduled run; on a failed verdict, re-run ONCE with
     the reviewer's feedback and verify that attempt too. Verdicts are stored in
@@ -309,6 +310,7 @@ async def _run_verification(
             agent, task, project_id=project_id, source="runner",
             schedule_id=schedule_id,
             append_system=(append_system + "\n\n" + fix_suffix) if append_system else fix_suffix,
+            extra_tools=extra_tools,
         )
         record.metadata["verification"]["retried_run_id"] = retry.id
         update_run(record)
@@ -344,7 +346,10 @@ async def _fire(
         "scheduler firing: %s (%s)%s", schedule_name, agent,
         f" [retry {attempt}/{SETTINGS.runner_retries}]" if attempt else "",
     )
-    from bran.teammates import run_context
+    from bran.teammates import TEAM_TOOLS, run_context
+
+    # A teammate's run can ask before changing its job, and read its reports.
+    extra_tools = list(TEAM_TOOLS) if (rec is not None and rec.teammate_id) else None
 
     append_parts = [
         p for p in (
@@ -367,7 +372,7 @@ async def _fire(
         record = await run_agent(
             agent, task, project_id=project_id, source="runner",
             schedule_id=schedule_id, append_system=append_system,
-            notify=not verifying,
+            notify=not verifying, extra_tools=extra_tools,
         )
         failed = record.status != "completed"
         if catch_up_for:
@@ -377,7 +382,7 @@ async def _fire(
             update_run(record)
         if not failed and verifying:
             await _run_verification(
-                record, agent, task, project_id, schedule_id, append_system
+                record, agent, task, project_id, schedule_id, append_system, extra_tools
             )
             # Passed, or the critic itself failed (fails open): deliver this
             # report. Rejected: the corrective re-run announced itself, and its
@@ -453,10 +458,20 @@ def _schedule_retry(
 # look for it. A heartbeat records when the scheduler was last alive; at
 # startup each recurring runner that had a slot between then and now (within
 # BRAN_CATCHUP_HOURS) and has not run since is fired once.
+#
+# The same happens when the machine sleeps with the server still up: on waking,
+# APScheduler drops every cron fire that is more than its grace period late.
+# The heartbeat notices the gap in its own beats and looks for those slots.
 # ---------------------------------------------------------------------------
 
 _ALIVE_KEY = "scheduler_alive_at"
 _HEARTBEAT_S = 60
+# A gap this long between beats means the machine was asleep, not busy.
+_WAKE_GAP_S = 300
+# How late a cron fire may start and still be run by APScheduler itself.
+_CRON_GRACE_S = 3600
+# How far back "this automation did not run when it should have" looks.
+_MISSED_LOOKBACK_DAYS = 7
 # What the last startup did about missed slots (shown by /spa/health).
 _startup_report: dict[str, list[dict[str, str]]] = {"caught_up": [], "skipped": []}
 
@@ -527,7 +542,10 @@ def last_due_exists(cron: str, since, until) -> bool:
     return due is not None and due <= until
 
 
-def _queue_catch_up(scheduler: AsyncIOScheduler) -> None:
+def _queue_catch_up(scheduler: AsyncIOScheduler, after_sleep: bool = False) -> None:
+    """Fire once each recurring runner that missed a slot. `after_sleep`: the
+    server stayed up but the machine slept, so APScheduler is itself running
+    the fires that are still within its grace period — leave those to it."""
     from datetime import datetime, timedelta, timezone
 
     from apscheduler.triggers.date import DateTrigger
@@ -536,21 +554,28 @@ def _queue_catch_up(scheduler: AsyncIOScheduler) -> None:
 
     global _startup_report
     try:
-        _startup_report = plan_catch_up()
+        report = plan_catch_up()
     except Exception:
         log.exception("catch-up planning failed")
         return
+    if after_sleep:
+        recent = datetime.now(timezone.utc) - timedelta(seconds=_CRON_GRACE_S)
+        report["caught_up"] = [
+            e for e in report["caught_up"] if datetime.fromisoformat(e["due"]) < recent
+        ]
+    _startup_report = report
+    why = "the computer was asleep" if after_sleep else "the server was down"
     for entry in _startup_report["skipped"]:
         log.warning(
-            "runner %s missed a fire more than %dh ago while the server was down — not catching up",
-            entry["name"], SETTINGS.catchup_hours,
+            "runner %s missed a fire more than %dh ago while %s — not catching up",
+            entry["name"], SETTINGS.catchup_hours, why,
         )
     for i, entry in enumerate(_startup_report["caught_up"]):
         rec = get_schedule(entry["name"])
         if rec is None:
             continue
-        log.warning("runner %s missed its %s fire while the server was down — running it now",
-                    rec.name, entry["due"])
+        log.warning("runner %s missed its %s fire while %s — running it now",
+                    rec.name, entry["due"], why)
         scheduler.add_job(
             _fire,
             # Staggered a little so a long outage doesn't start everything in
@@ -564,13 +589,59 @@ def _queue_catch_up(scheduler: AsyncIOScheduler) -> None:
         )
 
 
-def _heartbeat() -> None:
-    from bran.persistence import set_setting, utcnow_iso
+def _heartbeat(check_gap: bool = True) -> None:
+    """Record that the scheduler is alive. With `check_gap` (the minute-by-
+    minute job), a long silence since the last beat means the machine slept:
+    look for the fires that fell in it before recording the new beat."""
+    from datetime import datetime, timezone
+
+    from bran.persistence import get_setting, set_setting, utcnow_iso
 
     try:
+        last = get_setting(_ALIVE_KEY) if check_gap else None
+        if last and _scheduler is not None:
+            gap = (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds()
+            if gap > _WAKE_GAP_S:
+                log.warning("no heartbeat for %d min: the computer was asleep — checking for missed fires",
+                            gap // 60)
+                _queue_catch_up(_scheduler, after_sleep=True)
         set_setting(_ALIVE_KEY, utcnow_iso())
     except Exception:
         log.exception("scheduler heartbeat failed")
+
+
+def missed_slot(rec: ScheduleRecord, now=None) -> str | None:
+    """The latest moment (UTC ISO-8601) in the last week at which this
+    recurring runner was due and has not run since, or None. It clears as soon
+    as the runner next runs, on schedule or by hand. A slot so recent that it
+    may still be about to start does not count."""
+    from datetime import datetime, timedelta, timezone
+
+    from bran.persistence import list_runs
+
+    if not rec.enabled or rec.run_at:
+        return None
+    now = now or datetime.now(timezone.utc)
+    try:
+        created = datetime.fromisoformat(rec.created_at)
+        until = now - timedelta(seconds=_CRON_GRACE_S + _WAKE_GAP_S)
+        due = None
+        # Nearest window first: a frequent cron is answered in a few steps.
+        for hours in (2, 26, 24 * _MISSED_LOOKBACK_DAYS):
+            since = max(until - timedelta(hours=hours), created)
+            if since >= until:
+                return None
+            due = last_due(rec.cron, since, until)
+            if due is not None:
+                break
+        if due is None:
+            return None
+        prior = list_runs(schedule_id=rec.id, limit=1)
+        if prior and datetime.fromisoformat(prior[0].started_at) >= due:
+            return None
+    except (ValueError, TypeError):
+        return None
+    return due.astimezone(timezone.utc).isoformat()
 
 
 async def _nightly_prune() -> None:
@@ -619,8 +690,8 @@ def start_scheduler() -> None:
     for rec in list_schedules():
         if rec.enabled:
             _add_job(_scheduler, rec)
-    _queue_catch_up(_scheduler)  # reads the previous process's heartbeat…
-    _heartbeat()                 # …before this one overwrites it
+    _queue_catch_up(_scheduler)       # reads the previous process's heartbeat…
+    _heartbeat(check_gap=False)       # …before this one overwrites it
     _scheduler.add_job(
         _heartbeat, trigger=IntervalTrigger(seconds=_HEARTBEAT_S),
         id="bran-internal:heartbeat", replace_existing=True, coalesce=True, max_instances=1,
@@ -637,7 +708,7 @@ def stop_scheduler() -> None:
     global _scheduler
     if _scheduler is None:
         return
-    _heartbeat()  # a clean stop is "alive until now"
+    _heartbeat(check_gap=False)  # a clean stop is "alive until now"
     _scheduler.shutdown(wait=False)
     _scheduler = None
 
@@ -692,7 +763,7 @@ def _add_job(scheduler: AsyncIOScheduler, rec: ScheduleRecord) -> None:
         replace_existing=True,
         coalesce=True,
         max_instances=1,
-        misfire_grace_time=None if once else 3600,
+        misfire_grace_time=None if once else _CRON_GRACE_S,
     )
 
 
