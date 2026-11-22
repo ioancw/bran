@@ -98,6 +98,29 @@ export function answerKey(text: string): string {
   return h.toString(16).padStart(8, '0') + '-' + text.length.toString(36)
 }
 
+/**
+ * Get ready to show a turn that is still running on the server from its
+ * start: the page was left mid-reply and has come back. Loaded history may
+ * hold part of that turn already, and its events are about to be replayed in
+ * full, so everything after the message being answered goes; the message is
+ * added when history does not have it yet.
+ */
+export function resumeTurn(items: ChatItem[], st: ReducerState, prompt: string): void {
+  const same = (a: string, b: string) => a.replace(/\s+/g, ' ').trim() === b.replace(/\s+/g, ' ').trim()
+  let last = -1
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (items[i].kind === 'user') {
+      last = i
+      break
+    }
+  }
+  const asked = last >= 0 ? (items[last] as Extract<ChatItem, { kind: 'user' }>) : null
+  if (asked && same(asked.text, prompt)) items.splice(last + 1)
+  else items.push({ kind: 'user', text: prompt })
+  st.openAssistant = -1
+  st.tools = {}
+}
+
 /** The text of the last user message, or null. */
 export function lastPrompt(items: ChatItem[]): string | null {
   for (let i = items.length - 1; i >= 0; i--) {

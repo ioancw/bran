@@ -193,7 +193,7 @@ async def run_stream(run_id: str) -> StreamingResponse:
 
         if rec.status in LIVE and is_live(run_id):
             async for ev in subscribe(run_id):
-                yield sse(ev)
+                yield sse(attach_child_run(ev))
         yield sse({"type": "done"})
 
     return StreamingResponse(gen(), media_type="text/event-stream")

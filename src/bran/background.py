@@ -96,6 +96,13 @@ def spawn_background(
     return task
 
 
+def is_running(run_id: str) -> bool:
+    """True while a background task for `run_id` is alive in this process."""
+    return any(
+        not t.done() and (t.get_name() or "").endswith(f":{run_id}") for t in _background_tasks
+    )
+
+
 def cancel_background(run_id: str) -> int:
     """Cancel any in-flight background task(s) for `run_id`. Returns the count.
 

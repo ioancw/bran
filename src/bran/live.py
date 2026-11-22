@@ -52,6 +52,13 @@ def publish(run_id: str, events: list[dict[str, Any]]) -> None:
         q.put_nowait(events)
 
 
+def open(run_id: str) -> None:  # noqa: A001 — reads as live.open(run)
+    """Start the run's stream before it has said anything, so a subscriber
+    that attaches in its first seconds waits for it instead of being told it
+    is over."""
+    _streams.setdefault(run_id, _Stream())
+
+
 def close(run_id: str) -> None:
     """End the run's stream: wake every subscriber with the end sentinel and
     drop the buffer. Idempotent."""

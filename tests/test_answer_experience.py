@@ -112,8 +112,32 @@ def test_followups_endpoint_returns_the_models_suggestions(client, monkeypatch):
     monkeypatch.setattr(followups, "_ask", fake_ask)
     r = client.post("/spa/followups", data={"prompt": "markets today?", "answer": "Oil fell 2%."}, headers=SAME)
     assert r.status_code == 200
-    assert r.json() == {"suggestions": ["Why did oil fall?", "What about gas?"]}
+    assert r.json() == {"kind": "questions", "suggestions": ["Why did oil fall?", "What about gas?"]}
     assert "markets today?" in seen[0] and "Oil fell 2%." in seen[0]
+
+
+def test_an_answer_that_ends_on_a_question_gets_replies_to_it(client, monkeypatch):
+    reply = '{"kind": "replies", "items": ["Yes, build it now", "Yes, and include the 11th", "Not yet"]}'
+
+    async def fake_ask(prompt: str) -> str:
+        return "Here you go:\n" + reply
+
+    monkeypatch.setattr(followups, "_ask", fake_ask)
+    asked = "Three themes stand out.\n\nDo you want me to build the worksheet now?"
+    r = client.post("/spa/followups", data={"prompt": "how did she do?", "answer": asked}, headers=SAME)
+    assert r.json() == {
+        "kind": "replies",
+        "suggestions": ["Yes, build it now", "Yes, and include the 11th", "Not yet"],
+    }
+    # The model said "replies" but the answer asks nothing: offer nothing.
+    r = client.post("/spa/followups", data={"prompt": "q", "answer": "Oil fell 2%."}, headers=SAME)
+    assert r.json() == {"kind": "questions", "suggestions": []}
+
+    assert followups.parse_reply('{"kind": "questions", "items": ["Why did oil fall?"]}') == (
+        "questions", ["Why did oil fall?"],
+    )
+    assert followups.parse_reply('{"kind": "something else", "items": ["a b c"]}')[0] == "questions"
+    assert followups.parse_reply("{broken") == ("questions", [])
 
 
 def test_followups_are_empty_when_off_or_when_the_model_fails(client, monkeypatch):
@@ -122,7 +146,7 @@ def test_followups_are_empty_when_off_or_when_the_model_fails(client, monkeypatc
 
     monkeypatch.setattr(followups, "_ask", broken)
     r = client.post("/spa/followups", data={"prompt": "q", "answer": "a"}, headers=SAME)
-    assert r.status_code == 200 and r.json() == {"suggestions": []}
+    assert r.status_code == 200 and r.json() == {"kind": "questions", "suggestions": []}
 
     async def never(prompt: str) -> str:
         raise AssertionError("no model call when switched off")
@@ -130,7 +154,7 @@ def test_followups_are_empty_when_off_or_when_the_model_fails(client, monkeypatc
     monkeypatch.setattr(followups, "_ask", never)
     monkeypatch.setenv("BRAN_FOLLOWUPS", "0")
     r = client.post("/spa/followups", data={"prompt": "q", "answer": "a"}, headers=SAME)
-    assert r.json() == {"suggestions": []}
+    assert r.json() == {"kind": "questions", "suggestions": []}
 
 
 # --- feedback -----------------------------------------------------------------

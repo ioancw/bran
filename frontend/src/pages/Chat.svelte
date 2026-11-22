@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, tick } from 'svelte'
   import { fly } from 'svelte/transition'
-  import { api, streamChat } from '../lib/api'
+  import { api, streamChat, streamRunEvents } from '../lib/api'
   import { router, navigate, replace, href, link } from '../lib/router.svelte'
   import {
     workspace,
@@ -45,6 +45,7 @@
     lastAnswer,
     lastPrompt,
     readDraft,
+    resumeTurn,
     spawnRunIds,
     takeRetry,
     writeDraft,
@@ -118,6 +119,8 @@
   // Suggested next questions under the newest answer (one small model call
   // after each completed turn; [] when the server has them switched off).
   let followups = $state<string[]>([])
+  // 'replies': the answer ended by asking something, and these answer it.
+  let followKind = $state<'replies' | 'questions'>('questions')
   let followSeq = 0
   // Thumbs up/down given in this chat: answer key -> 1 / -1.
   let feedback = $state<Record<string, number>>({})
@@ -204,8 +207,11 @@
   // like an empty new chat then — sending would silently start a different
   // conversation.
   let loadError = $state<unknown>(null)
-  // Abort handle for the in-flight stream — the "stop" button's lever.
+  // Abort handle for the in-flight stream. Aborting only stops the reading:
+  // the turn itself runs at the server and is stopped by cancelling its run.
   let streamAbort: AbortController | null = null
+  // The run answering the message in flight, once the server has named it.
+  let turnRunId: string | null = null
 
   // Scope = the project whose conversations the rail + sidebar show (null =
   // loose). It lives in the shared workspace store now; a chat is viewed inside
@@ -356,7 +362,7 @@
   onDestroy(() => {
     mounted = false
     clearFanoutWatchers()
-    streamAbort?.abort() // stop the in-flight turn; the server sees the disconnect
+    streamAbort?.abort() // stop reading; the turn finishes and is here on return
   })
 
   $effect(() => {
@@ -372,10 +378,8 @@
   $effect(() => {
     const sid = sessionId
     if (sid === loadedId) return
-    // Navigating to another chat mid-reply stops the turn (the same lever as
-    // the stop button — the server sees the disconnect) and switches. The old
-    // behavior silently kept the previous conversation on screen under the
-    // new URL until the stream ended.
+    // Navigating to another chat mid-reply switches at once. The turn left
+    // behind keeps running at the server; coming back rejoins it (attachLive).
     if (streaming) streamAbort?.abort()
     viewEpoch++
     loadedId = sid
@@ -421,6 +425,62 @@
       return
     }
     await loadHistory(sid)
+    if (loadedId === sid) void attachLive(sid)
+  }
+
+  // A turn still running at the server — the page was left, reloaded, or lost
+  // its connection mid-reply. Show it from its start and follow it to the
+  // end. Resolves false when the server could not be asked.
+  async function attachLive(sid: string): Promise<boolean> {
+    let live: { run_id: string | null; task: string }
+    try {
+      live = await api.chatLive(sid)
+    } catch {
+      return false
+    }
+    if (!live.run_id || loadedId !== sid || streaming || historyLoading) return true
+    const runId = live.run_id
+    resumeTurn(items, rstate, live.task)
+    streaming = true
+    turnRunId = runId
+    setLive(true, 'working…')
+    scrollSoon(true)
+    streamAbort = new AbortController()
+    const epoch = viewEpoch
+    let completed = false
+    try {
+      for await (const ev of streamRunEvents(runId, streamAbort.signal)) {
+        if (epoch !== viewEpoch) break
+        if (ev.type === 'done') break
+        if (ev.type === 'session') continue
+        if (ev.type === 'tool_use') setLive(true, `using ${toolDisplayName(ev.name)}`)
+        else if (ev.type === 'thinking') setLive(true, 'thinking…')
+        else if (ev.type === 'text') setLive(true, 'responding…')
+        applyEvent(items, rstate, ev.type === 'result' ? { ...ev, ts: new Date().toISOString() } : ev)
+        if (ev.type === 'result') completed = true
+        streamingIndex = rstate.openAssistant
+        scrollSoon()
+      }
+    } catch {
+      // Stop pressed: a quiet note. A dropped connection: the reload below
+      // shows how far the turn got.
+      if (epoch === viewEpoch && streamAbort?.signal.aborted) endTurnStopped(items, rstate)
+    } finally {
+      const stoppedHere = streamAbort?.signal.aborted ?? false
+      streamAbort = null
+      streaming = false
+      streamingIndex = -1
+      turnRunId = null
+      setLive(false)
+      if (mounted && epoch === viewEpoch) {
+        void loadChats()
+        bumpActivity()
+        // The stored conversation is the record: take it over the replay.
+        if (!stoppedHere) await loadHistory(sid, true)
+        if (completed && epoch === viewEpoch && !streaming) void loadFollowups()
+      }
+    }
+    return true
   }
 
   // A new chat's scope follows ?project= — also when only the query changes
@@ -687,7 +747,8 @@
       const next = await api.followups(question, answer)
       // Not for a conversation, or a turn, that has since moved on.
       if (seq !== followSeq || loadedId !== chat.id || streaming) return
-      followups = next
+      followKind = next.kind === 'replies' ? 'replies' : 'questions'
+      followups = next.suggestions
       scrollSoon()
     } catch {
       /* suggestions are a nicety */
@@ -717,6 +778,9 @@
     followups = []
     followSeq++
     let completed = false
+    // The connection dropped after the server took the message: the turn is
+    // still running there, so rejoin it instead of reporting a failure.
+    let rejoin: unknown = undefined
     beginTurn(items, rstate, text)
     streaming = true
     setLive(true, 'thinking…')
@@ -743,6 +807,10 @@
         // still deliver one event — it belongs to the abandoned conversation.
         if (epoch !== viewEpoch) break
         if (ev.type === 'done') break
+        if (ev.type === 'run') {
+          turnRunId = ev.run_id
+          continue
+        }
         // Reflect what the agent is doing into the rail's live Progress row.
         if (ev.type === 'tool_use') setLive(true, `using ${toolDisplayName(ev.name)}`)
         else if (ev.type === 'thinking') setLive(true, 'thinking…')
@@ -788,6 +856,8 @@
       } else if (streamAbort?.signal.aborted) {
         // User pressed stop — a quiet note, not an error.
         endTurnStopped(items, rstate)
+      } else if (turnRunId && activeChat) {
+        rejoin = e
       } else {
         failTurn(items, rstate, errorText(e))
         // Send failed before reaching the server — give the text back so it can
@@ -802,7 +872,15 @@
       streamAbort = null
       streaming = false
       streamingIndex = -1
+      turnRunId = null
       setLive(false) // global indicator — clear it even if we've unmounted
+      if (mounted && rejoin !== undefined && activeChat && epoch === viewEpoch) {
+        const lost = rejoin
+        void attachLive(activeChat.id).then((asked) => {
+          // The server cannot be reached at all: say so.
+          if (!asked && epoch === viewEpoch && !streaming) failTurn(items, rstate, errorText(lost))
+        })
+      }
       if (mounted) {
         void loadChats() // refresh the sidebar Recents
         bumpActivity() // refresh the rail's Progress (new run recorded)
@@ -818,9 +896,11 @@
     }
   }
 
-  // Stop generating: abort the SSE fetch — the server sees the disconnect and
-  // cancels the agent turn. What already streamed in stays in the transcript.
+  // Stop generating: cancel the turn's run at the server, then stop reading.
+  // (Closing the connection alone no longer stops anything — a turn outlives
+  // the page.) What already streamed in stays in the transcript.
   function stop() {
+    if (turnRunId) void api.cancelRun(turnRunId).catch(() => {})
     streamAbort?.abort()
   }
 </script>
@@ -963,15 +1043,24 @@
             onanswer={mate ? answerRequest : undefined}
           />
           {#if followups.length && !streaming}
-            <div class="followups">
-              <div class="label-cap followups-label">Related</div>
-              {#each followups as f (f)}
-                <button class="followup" onclick={() => send(f)}>
-                  <span>{f}</span>
-                  <Icon name="arrow-right" size={14} />
-                </button>
-              {/each}
-            </div>
+            {#if followKind === 'replies'}
+              <!-- The answer asked something: one click answers it. -->
+              <div class="replies" role="group" aria-label="Quick replies">
+                {#each followups as f (f)}
+                  <button class="reply" onclick={() => send(f)}>{f}</button>
+                {/each}
+              </div>
+            {:else}
+              <div class="followups">
+                <div class="label-cap followups-label">Related</div>
+                {#each followups as f (f)}
+                  <button class="followup" onclick={() => send(f)}>
+                    <span>{f}</span>
+                    <Icon name="arrow-right" size={14} />
+                  </button>
+                {/each}
+              </div>
+            {/if}
           {/if}
           {#if showPending}
             <div class="pending-turn" aria-label="working on a reply">
@@ -1179,6 +1268,33 @@
   }
   .followups-label {
     margin-bottom: 4px;
+  }
+  /* Ready-made answers to the question the reply ended on. */
+  .replies {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 2px 4px;
+    animation: followups-in var(--dur-3) var(--transition) both;
+  }
+  .reply {
+    max-width: 100%;
+    padding: 7px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: 999px;
+    color: var(--fg);
+    font: inherit;
+    font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+    transition:
+      border-color var(--dur-1) var(--transition),
+      color var(--dur-1) var(--transition);
+  }
+  .reply:hover {
+    border-color: var(--accent);
+    color: var(--fg-bright);
   }
   .followup {
     display: flex;

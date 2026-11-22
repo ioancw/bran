@@ -309,6 +309,9 @@ export const api = {
     form<{ chat_id: string; project_id: string | null }>(`/spa/chats/${encodeURIComponent(id)}/move`, {
       project_id: projectId ?? '',
     }),
+  // The turn still being answered in a chat (the page was left mid-reply).
+  chatLive: (id: string) =>
+    getJSON<{ run_id: string | null; task: string }>(`/spa/chats/${encodeURIComponent(id)}/live`),
   chatSources: (id: string) => getJSON<SourceRef[]>(`/spa/chats/${encodeURIComponent(id)}/sources`),
   runSources: (id: string) => getJSON<SourceRef[]>(`/spa/runs/${encodeURIComponent(id)}/sources`),
   deleteChat: async (id: string): Promise<void> => {
@@ -316,9 +319,10 @@ export const api = {
     const r = await fetch(url, { method: 'DELETE' })
     if (!r.ok) await raiseFor(r, url)
   },
-  // Suggested next questions for the answer just given ([] when off).
+  // What to offer under the answer just given: replies to the question it
+  // ends on, else suggested next questions ([] when off).
   followups: (prompt: string, answer: string) =>
-    form<{ suggestions: string[] }>('/spa/followups', { prompt, answer }).then((r) => r.suggestions),
+    form<{ kind?: 'replies' | 'questions'; suggestions: string[] }>('/spa/followups', { prompt, answer }),
   chatFeedback: (id: string) =>
     getJSON<Record<string, number>>(`/spa/chats/${encodeURIComponent(id)}/feedback`),
   rateAnswer: (
@@ -339,8 +343,8 @@ export const api = {
 /**
  * POST a prompt and yield unified ChatEvents as they stream in over SSE.
  * Parses the `data: {...}\n\n` frames; the terminal `{type:'done'}` ends it.
- * Aborting the signal is the "stop generating" path — the server sees the
- * disconnect and cancels the agent turn.
+ * The first event names the run. Aborting the signal only stops the reading:
+ * the turn carries on at the server (stopping it is `api.cancelRun`).
  */
 export async function* streamChat(
   fields: Record<string, string>,

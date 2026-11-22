@@ -38,10 +38,11 @@ async def favicon(domain: str) -> Response:
 async def followups(
     prompt: Annotated[str, Form()] = "", answer: Annotated[str, Form()] = "",
 ) -> dict[str, Any]:
-    """Up to three suggested next questions for the answer just given."""
-    from bran.followups import suggest_followups
+    """What to offer under the answer just given: replies to the question it
+    ends on (kind "replies"), else up to three next questions ("questions")."""
+    from bran.followups import suggest
 
-    return {"suggestions": await suggest_followups(prompt, answer)}
+    return await suggest(prompt, answer)
 
 
 @router.get("/chats/{chat_id}/feedback")

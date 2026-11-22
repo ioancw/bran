@@ -35,6 +35,7 @@ from bran.agents import build_options_for, get_agent
 from bran.background import current_project_id, current_run_id, run_slots
 from bran.config import SETTINGS
 from bran.live import close as live_close
+from bran.live import open as live_open
 from bran.live import publish as live_publish
 from bran.notify import notify_completion
 from bran.persistence import (
@@ -197,6 +198,7 @@ async def _drive(
     # max_instances=1, every subsequent fire of that runner backs up behind it.
     timeout_s = SETTINGS.run_timeout_s
     deadline = (time.monotonic() + timeout_s) if timeout_s > 0 else None
+    live_open(record.id)
     try:
         stream = query(prompt=task, options=options).__aiter__()
         while True:
@@ -419,8 +421,12 @@ async def stream_agent(
     model: str | None = None,
     teammate_id: str | None = None,
     extra_tools: list[str] | None = None,
+    on_start=None,
 ) -> AsyncIterator[Any]:
     """Async generator that yields SDK messages while persisting the run.
+
+    `on_start(record)` is called once the run row exists, before the first
+    message — the chat uses it to learn the run's id.
 
     Use when you want to consume the message stream directly (e.g. in a REPL or
     websocket handler) rather than just receive the final RunRecord. Shares the
@@ -442,8 +448,15 @@ async def stream_agent(
     if teammate_id:
         # The teammate this turn is working as (its tools look it up here).
         record.metadata["teammate_id"] = teammate_id
-    if model or teammate_id:
+    known_session = resume_session or session_id
+    if known_session:
+        # The conversation is known up front: say so now rather than at the
+        # first message, so the chat can find its turn while it is starting.
+        record.session_id = known_session
+    if model or teammate_id or known_session:
         update_run(record)
+    if on_start is not None:
+        on_start(record)
     gen = _drive(record, task, options, on_message)
     try:
         async for message in gen:

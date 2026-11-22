@@ -88,6 +88,9 @@ export function applyEvent(items: ChatItem[], st: ReducerState, ev: ChatEvent): 
     case 'session':
       return { session: ev.session_id }
 
+    case 'run':
+      return {}
+
     case 'text':
       if (st.openAssistant >= 0) {
         const cur = items[st.openAssistant] as Extract<ChatItem, { kind: 'assistant' }>

@@ -3,6 +3,7 @@ chat stream."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Annotated, Any
@@ -11,7 +12,7 @@ from fastapi import APIRouter, Form, HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from bran.agents import get_agent, list_agents
-from bran.background import session_lock
+from bran.background import is_running, session_lock, spawn_background
 from bran.persistence import (
     ChatRecord,
     delete_chat,
@@ -207,6 +208,17 @@ def chat_history(chat_id: str) -> dict[str, Any]:
     return {"session_id": chat_id, "events": events}
 
 
+@router.get("/chats/{chat_id}/live")
+def chat_live(chat_id: str) -> dict[str, Any]:
+    """The turn still being answered in this chat, if there is one: the page
+    was left or reloaded mid-reply and the turn carried on. Its events are at
+    /spa/runs/{run_id}/stream; `task` is the message it is answering."""
+    for turn in _chat_turns(chat_id, limit=5):
+        if turn.source == "chat" and turn.status in ("running", "pending") and is_running(turn.id):
+            return {"run_id": turn.id, "task": turn.task}
+    return {"run_id": None, "task": ""}
+
+
 @router.post("/chat/stream")
 async def chat_stream(
     prompt: Annotated[str, Form()],
@@ -217,6 +229,12 @@ async def chat_stream(
     teammate_id: Annotated[str | None, Form()] = None,
 ):
     """Stream an agent reply as SSE using the unified event schema.
+
+    The turn runs as its own task, not as part of this response: closing the
+    page (or moving to another one) only stops the reading. The turn finishes
+    and is in the chat's history; `/chats/{id}/live` finds it meanwhile. The
+    first event names the run (`{"type": "run"}`) — stopping a turn is an
+    explicit `POST /runs/{id}/cancel`.
 
     Routing precedence: `@agent` mention > the chat's locked agent > orchestrator.
     A chat's project is authoritative once it exists; otherwise the form param,
@@ -310,22 +328,35 @@ async def chat_stream(
     def sse(ev: dict[str, Any]) -> str:
         return f"data: {json.dumps(ev, default=str)}\n\n"
 
-    async def event_gen():
+    # What the turn has to say, in order; None ends it. Unbounded on purpose:
+    # with nobody reading it simply fills until the turn is over.
+    outbox: asyncio.Queue[str | None] = asyncio.Queue()
+    run_ids: list[str] = []
+
+    def on_start(record: Any) -> None:
+        run_ids.append(record.id)
+        me = asyncio.current_task()
+        if me is not None:
+            me.set_name(f"chat:{record.id}")  # what cancel_background looks for
+        outbox.put_nowait(sse({"type": "run", "run_id": record.id}))
+
+    async def turn() -> None:
         chat_initialised = False
-        if mentioned_agent != "orchestrator":
-            yield sse({"type": "routed", "agent": mentioned_agent if delegated else target_agent})
         # Resuming a session must be exclusive (see background.session_lock):
         # a headless synthesis turn for this chat may be running right now.
         lock = session_lock(sid) if sid else None
-        if lock is not None:
-            await lock.acquire()
+        held = False
         try:
+            if lock is not None:
+                await lock.acquire()
+                held = True
             async for msg in stream_agent(
                 target_agent, actual_prompt, resume_session=resume_sid, session_id=fresh_sid,
                 append_system=append_system, project_id=target_project_id,
                 model=model_override or None,
                 teammate_id=mate.id if mate is not None else None,
                 extra_tools=team_tools,
+                on_start=on_start,
             ):
                 # Inside-subagent messages belong to the child run (see
                 # runner._child_run_for) — the chat shows the Agent tool call
@@ -345,13 +376,30 @@ async def chat_stream(
                         if mate is not None and mate.chat_id != sid_now:
                             set_teammate_chat(mate.id, sid_now)
                         chat_initialised = True
-                    yield sse(attach_child_run(ev))
+                    outbox.put_nowait(sse(attach_child_run(ev)))
         except Exception as exc:  # noqa: BLE001 — surface any failure to the client
-            yield sse({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
+            outbox.put_nowait(sse({"type": "error", "message": f"{type(exc).__name__}: {exc}"}))
         finally:
-            if lock is not None and lock.locked():
+            if lock is not None and held:
                 lock.release()
-        yield sse({"type": "done"})
+            outbox.put_nowait(None)
+
+    async def event_gen():
+        if mentioned_agent != "orchestrator":
+            yield sse({"type": "routed", "agent": mentioned_agent if delegated else target_agent})
+        task = spawn_background(turn(), name="chat:starting")
+        try:
+            while True:
+                frame = await outbox.get()
+                if frame is None:
+                    break
+                yield frame
+            yield sse({"type": "done"})
+        finally:
+            # The reader went away. A turn that has begun carries on without
+            # it; one still waiting its turn has nothing to lose, so drop it.
+            if not task.done() and not run_ids:
+                task.cancel()
 
     return StreamingResponse(
         event_gen(),

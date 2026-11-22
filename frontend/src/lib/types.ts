@@ -223,6 +223,8 @@ export interface ProjectDetail {
 // the live stream and replayed history. ---
 export type ChatEvent =
   | { type: 'session'; session_id: string }
+  // The run answering this message: what Stop cancels.
+  | { type: 'run'; run_id: string }
   | { type: 'routed'; agent: string }
   | { type: 'user'; text: string; ts?: string } // ts: ISO-8601, present when known
   | { type: 'text'; text: string; ts?: string }

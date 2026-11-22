@@ -8,6 +8,7 @@ import {
   failTurn,
   itemsFromHistory,
   readDraft,
+  resumeTurn,
   spawnRunIds,
   takeRetry,
   writeDraft,
@@ -104,6 +105,36 @@ describe('takeRetry', () => {
     const orphan: ChatItem[] = [{ kind: 'error', message: 'x' }]
     expect(takeRetry(orphan)).toBeNull()
     expect(orphan).toHaveLength(1)
+  })
+})
+
+describe('resumeTurn', () => {
+  it('drops the part of the running turn that history already showed', () => {
+    const items: ChatItem[] = [
+      { kind: 'user', text: 'first' },
+      { kind: 'assistant', text: 'answer one' },
+      { kind: 'user', text: 'Yes,  build it\n' },
+      { kind: 'thinking', text: '' },
+      { kind: 'assistant', text: 'Working on' },
+    ]
+    const st = freshState()
+    st.openAssistant = 4
+    resumeTurn(items, st, 'Yes, build it')
+    expect(items.map((i) => i.kind)).toEqual(['user', 'assistant', 'user'])
+    expect(st.openAssistant).toBe(-1)
+    // The replay then rebuilds the turn under its message.
+    applyEvent(items, st, { type: 'text', text: 'Working on it' })
+    expect(items[3]).toMatchObject({ kind: 'assistant', text: 'Working on it' })
+  })
+
+  it('adds the message when history does not have it yet', () => {
+    const items: ChatItem[] = [
+      { kind: 'user', text: 'first' },
+      { kind: 'assistant', text: 'answer one' },
+    ]
+    resumeTurn(items, freshState(), 'second')
+    expect(items[2]).toEqual({ kind: 'user', text: 'second' })
+    expect(items).toHaveLength(3)
   })
 })
 
