@@ -517,7 +517,31 @@ def ask(
         detail=(detail or "").strip()[:_DETAIL_MAX], action=action, run_id=run_id,
     )
     insert_teammate_request(rec)
+    _announce_question(mate, rec)
     return rec
+
+
+def _announce_question(mate: TeammateRecord, q: TeammateRequest) -> None:
+    """Tell the user's phone a teammate is waiting on them. A nicety: with no
+    event loop to send from (the CLI, a test) or no push target, nothing
+    happens, and it never raises."""
+    import asyncio
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    try:
+        from bran.background import spawn_background
+        from bran.notify import app_link, push
+
+        link = app_link(f"/app/chat/{mate.chat_id}") if mate.chat_id else app_link("/app/teammates")
+        spawn_background(
+            push("questions", f"{mate.name} is asking", q.title, tags="question", click=link),
+            name="push:question",
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _carry_out(mate: TeammateRecord, q: TeammateRequest) -> str:

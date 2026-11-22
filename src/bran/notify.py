@@ -12,6 +12,11 @@ The webhook skips chat-turn runs (the user is watching those live); it fires
 for runner/spawn/manual background work, and escalates alert-mode runs that
 crossed their significance bar.
 
+What reaches the phone is the user's choice (`rules()`, edited in Settings):
+which kinds of event notify, and quiet hours during which everything but an
+alert arrives silently. `push()` sends the notifications that are not about a
+run finishing: a teammate waiting on an answer, the Claude sign-in running out.
+
 The runner calls `notify_completion(record)` in a `finally` block, so a
 notifier failure can't break the run. Failed notifiers are logged and
 swallowed.
@@ -19,9 +24,12 @@ swallowed.
 
 from __future__ import annotations
 
+import base64
 import inspect
+import json
 import logging
 import os
+import re
 import sys
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -39,6 +47,95 @@ Notifier = Callable[[RunRecord], None | Awaitable[None]]
 ALERT_MARKER = "🚨 ALERT"
 
 _notifiers: list[Notifier] = []
+
+# --- what notifies, and when (app_settings: notify_rules) ---------------------
+RULES_KEY = "notify_rules"
+# reports: an automation delivered. background: a run you started finished.
+# failures: something did not finish. questions: a teammate is waiting on you.
+# signin: the Claude sign-in ran out.
+RULE_KINDS = ("reports", "background", "failures", "questions", "signin")
+_CLOCK = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
+
+
+def rules() -> dict[str, Any]:
+    """The user's notification rules; everything on, no quiet hours, until
+    they say otherwise."""
+    from bran.persistence import get_setting
+
+    out: dict[str, Any] = {k: True for k in RULE_KINDS}
+    out.update(quiet_from="", quiet_to="")
+    try:
+        saved = json.loads(get_setting(RULES_KEY) or "{}")
+    except ValueError:
+        saved = {}
+    if isinstance(saved, dict):
+        for k in RULE_KINDS:
+            if isinstance(saved.get(k), bool):
+                out[k] = saved[k]
+        for k in ("quiet_from", "quiet_to"):
+            v = saved.get(k)
+            if isinstance(v, str) and (v == "" or _CLOCK.fullmatch(v)):
+                out[k] = v
+    return out
+
+
+def save_rules(changes: dict[str, Any]) -> dict[str, Any]:
+    """Merge `changes` into the stored rules (unknown or malformed entries are
+    dropped by `rules()` on the way back out)."""
+    from bran.persistence import set_setting
+
+    merged = {**rules(), **{k: v for k, v in changes.items() if k in (*RULE_KINDS, "quiet_from", "quiet_to")}}
+    set_setting(RULES_KEY, json.dumps(merged))
+    return rules()
+
+
+def in_quiet_hours(r: dict[str, Any] | None = None, now: Any = None) -> bool:
+    """True inside the user's quiet hours (server-local clock; the window may
+    run over midnight)."""
+    from datetime import datetime
+
+    r = r or rules()
+    start, end = r.get("quiet_from") or "", r.get("quiet_to") or ""
+    if not start or not end or start == end:
+        return False
+    t = (now or datetime.now()).strftime("%H:%M")
+    return (start <= t < end) if start < end else (t >= start or t < end)
+
+
+def kind_of(record: RunRecord) -> str | None:
+    """Which rule a finished run falls under; None for one nobody needs
+    telling about (a run the user cancelled)."""
+    if record.status == "cancelled":
+        return None
+    if record.status != "completed":
+        return "failures"
+    return "reports" if record.schedule_id else "background"
+
+
+def _header_text(s: str) -> str:
+    """A header value that survives the trip: plain when it is ASCII, RFC 2047
+    otherwise (ntfy decodes it; a raw "£" or "—" would not encode at all)."""
+    s = " ".join(s.split())
+    try:
+        s.encode("ascii")
+        return s
+    except UnicodeEncodeError:
+        return "=?UTF-8?B?" + base64.b64encode(s.encode("utf-8")).decode("ascii") + "?="
+
+
+def _run_name(record: RunRecord) -> str:
+    """What the user calls the thing that ran: the automation's name, else
+    the agent."""
+    if record.schedule_id:
+        try:
+            from bran.persistence import list_schedules
+
+            for s in list_schedules():
+                if s.id == record.schedule_id:
+                    return s.name
+        except Exception:  # noqa: BLE001 — a name is a nicety
+            pass
+    return record.agent
 
 
 def is_alert(record: RunRecord) -> bool:
@@ -128,24 +225,44 @@ async def webhook_notifier(record: RunRecord) -> None:
 
     if suppresses_notification(record):
         return
+    # The user's rules: is this kind of event wanted at all, and is it a
+    # time to be quiet (an alert is never quiet).
+    alert = is_alert(record)
+    wanted = rules()
+    kind = kind_of(record)
+    if kind is None or not wanted[kind]:
+        return
+    quiet = in_quiet_hours(wanted) and not alert
     # Lazy import keeps httpx off the hot path until a notifier actually fires.
     import httpx
 
-    alert = is_alert(record)
+    name = _run_name(record)
+    excerpt = ""
     # ntfy.sh-friendly headers; harmless for other targets. Alert-mode runs
     # that crossed their significance bar outrank everything — that's the
     # whole point of a sensing runner.
     if alert:
         headers = {
-            "Title": f"bran ALERT: {record.agent}",
+            "Title": _header_text(f"bran ALERT: {name}"),
             "Priority": "urgent",
             "Tags": "rotating_light",
         }
+    elif record.status == "completed":
+        # The lock screen shows the report itself: its headline, then how it
+        # opens (not "agent completed" and a line of markdown).
+        from bran.teammates import delivery_title
+
+        title, excerpt = delivery_title(record, fallback=name)
+        headers = {
+            "Title": _header_text(title),
+            "Priority": "low" if quiet else "default",
+            "Tags": "newspaper" if record.schedule_id else "white_check_mark",
+        }
     else:
         headers = {
-            "Title": f"bran: {record.agent} {record.status}",
-            "Priority": "default" if record.status == "completed" else "high",
-            "Tags": "white_check_mark" if record.status == "completed" else "x",
+            "Title": _header_text(f"{name} {record.status}"),
+            "Priority": "low" if quiet else "high",
+            "Tags": "x",
         }
     # Tapping the notification opens the report's reading view — when bran
     # has been told the address it is reachable at from the phone.
@@ -155,7 +272,7 @@ async def webhook_notifier(record: RunRecord) -> None:
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             if _webhook_format(url) == "ntfy":
-                body = _result_snippet(record, limit=600)
+                body = _result_snippet(record, limit=600) if alert else (excerpt or _result_snippet(record, limit=600))
                 if record.status != "completed":
                     body = (record.error or "").strip()[:600]
                 body = body or f"{record.agent} {record.status}"
@@ -201,14 +318,97 @@ def webhook_payload(record: RunRecord, alert: bool) -> dict[str, Any]:
     return payload
 
 
-def read_link(record: RunRecord) -> str | None:
-    """The reading-view URL of a run, when BRAN_PUBLIC_URL says where this
-    server can be reached from outside (e.g. a Tailscale name). Unset — the
-    default, since bran listens on localhost — notifications carry no link."""
+def app_link(path: str) -> str | None:
+    """Where `path` of the app is from the user's phone, when BRAN_PUBLIC_URL
+    says where this server can be reached from outside (e.g. a Tailscale
+    name). Unset — the default, since bran listens on localhost — there is no
+    link to give."""
     base = (os.getenv("BRAN_PUBLIC_URL") or "").strip().rstrip("/")
     if not base.startswith(("http://", "https://")):
         return None
-    return f"{base}/app/read/{record.id}"
+    return base + path
+
+
+def read_link(record: RunRecord) -> str | None:
+    """The reading-view URL of a run (see `app_link`)."""
+    return app_link(f"/app/read/{record.id}")
+
+
+def _push_request(
+    kind: str, title: str, body: str, priority: str, tags: str, click: str | None,
+) -> tuple[str, dict[str, Any]] | None:
+    """(url, httpx post arguments) for a notification that is not about a run
+    finishing, or None when it should not be sent: no target, or the user
+    switched this kind off. "test" always goes."""
+    url = os.getenv("BRAN_NOTIFY_WEBHOOK_URL")
+    if not url:
+        return None
+    if kind != "test":
+        wanted = rules()
+        if not wanted.get(kind, True):
+            return None
+        if in_quiet_hours(wanted):
+            priority = "low"
+    headers = {"Title": _header_text(title), "Priority": priority}
+    if tags:
+        headers["Tags"] = tags
+    if click:
+        headers["Click"] = click
+    if _webhook_format(url) == "ntfy":
+        return url, {"content": body.encode("utf-8"), "headers": headers}
+    payload: dict[str, Any] = {"event": kind, "title": title, "message": body}
+    if click:
+        payload["url"] = click
+    return url, {"json": payload, "headers": headers}
+
+
+def _delivered(resp: Any, url: str, kind: str) -> bool:
+    code = getattr(resp, "status_code", None)
+    if isinstance(code, int) and code >= 400:
+        log.warning("push (%s): %s answered HTTP %s — not delivered", kind, _safe_target(url), code)
+        return False
+    return True
+
+
+async def push(
+    kind: str, title: str, body: str, *,
+    priority: str = "default", tags: str = "", click: str | None = None,
+) -> bool:
+    """Send a notification about something other than a finished run (`kind`
+    is one of RULE_KINDS, or "test"). True when it was handed over. Never
+    raises."""
+    req = _push_request(kind, title, body, priority, tags, click)
+    if req is None:
+        return False
+    import httpx
+
+    url, kwargs = req
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            return _delivered(await client.post(url, **kwargs), url, kind)
+    except Exception:
+        log.exception("push (%s) failed", kind)
+        return False
+
+
+def push_sync(
+    kind: str, title: str, body: str, *,
+    priority: str = "default", tags: str = "", click: str | None = None,
+) -> bool:
+    """`push` for code that runs outside the event loop (the scheduler's
+    heartbeat thread)."""
+    req = _push_request(kind, title, body, priority, tags, click)
+    if req is None:
+        return False
+    import httpx
+
+    url, kwargs = req
+    try:
+        with httpx.Client(timeout=10) as client:
+            return _delivered(client.post(url, **kwargs), url, kind)
+    except Exception:
+        log.exception("push (%s) failed", kind)
+        return False
 
 
 def _safe_target(url: str) -> str:

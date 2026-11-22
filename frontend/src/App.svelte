@@ -225,8 +225,7 @@
   <div class="auth-banner" role="alert">
     <span>{health.login.detail || 'Claude login expired.'}</span>
     <span class="auth-hint"
-      >In a WSL terminal run <code>claude auth login</code>, then retry. bran's agents use WSL's login, not
-      Windows'.</span
+      >On the machine bran runs on, run <code>claude auth login</code> as the user it runs as, then check again.</span
     >
     <button class="btn-outline btn-sm" onclick={loadHealth}>Check again</button>
   </div>

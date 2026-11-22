@@ -608,6 +608,44 @@ def _heartbeat(check_gap: bool = True) -> None:
         set_setting(_ALIVE_KEY, utcnow_iso())
     except Exception:
         log.exception("scheduler heartbeat failed")
+    if check_gap:
+        _watch_signin()
+
+
+# app_settings: when the phone was last told the Claude sign-in had run out.
+_SIGNIN_ALERT_KEY = "signin_alert_at"
+_SIGNIN_REPEAT_S = 12 * 3600
+
+
+def _watch_signin() -> None:
+    """Agents cannot run without the Claude sign-in, and nothing says so until
+    one tries. Tell the phone when it has run out: once, then again every 12
+    hours until it is fixed."""
+    from datetime import datetime, timezone
+
+    from bran.persistence import get_setting, set_setting, utcnow_iso
+
+    try:
+        from bran.health import _claude_login
+
+        last = get_setting(_SIGNIN_ALERT_KEY)
+        if _claude_login()["ok"]:
+            if last:
+                set_setting(_SIGNIN_ALERT_KEY, "")
+            return
+        if last and (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds() < _SIGNIN_REPEAT_S:
+            return
+        from bran.notify import app_link, push_sync
+
+        if push_sync(
+            "signin", "bran is signed out of Claude",
+            "Agents cannot run until you sign in again: on the machine bran runs on, run "
+            "`claude auth login` as the user it runs as.",
+            priority="high", tags="warning", click=app_link("/app/"),
+        ):
+            set_setting(_SIGNIN_ALERT_KEY, utcnow_iso())
+    except Exception:
+        log.exception("sign-in watch failed")
 
 
 # app_settings key prefix: the missed slot the user said not to run.

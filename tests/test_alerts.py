@@ -199,3 +199,105 @@ def test_webhook_format_detection(monkeypatch):
     assert _webhook_format("https://hooks.slack.com/services/x") == "json"
     monkeypatch.setenv("BRAN_NOTIFY_FORMAT", "ntfy")
     assert _webhook_format("https://hooks.slack.com/services/x") == "ntfy"
+
+
+# --- what reaches the phone -----------------------------------------------------
+
+def test_a_delivered_report_is_announced_by_its_headline(monkeypatch):
+    import asyncio
+
+    import bran.notify as notify
+
+    captured = _patch_webhook(monkeypatch, "https://ntfy.sh/some-topic")
+    monkeypatch.setenv("BRAN_PUBLIC_URL", "http://bran:8765")
+    r = _run("completed", "Fact-check done.\n\n# Finance Briefing — Sunday\n\n**Lens:** finance\n\nSterling slipped 0.4%.")
+    asyncio.run(notify.webhook_notifier(r))
+    # A non-ASCII headline travels RFC 2047-encoded; the body is the report's
+    # own first words, and tapping opens the reading view.
+    title = captured["headers"]["Title"]
+    assert title.startswith("=?UTF-8?B?")
+    import base64
+
+    assert base64.b64decode(title[10:-2]).decode() == "Finance Briefing — Sunday"
+    assert captured["content"].decode() == "Sterling slipped 0.4%."
+    assert captured["headers"]["Click"] == f"http://bran:8765/app/read/{r.id}"
+    assert captured["headers"]["Priority"] == "default"
+
+
+def test_notification_rules_choose_what_is_sent_and_when(monkeypatch):
+    import asyncio
+    from datetime import datetime
+
+    import bran.notify as notify
+    from bran.persistence import set_setting
+
+    captured = _patch_webhook(monkeypatch, "https://ntfy.sh/some-topic")
+    try:
+        assert notify.rules()["failures"] is True and notify.rules()["quiet_from"] == ""
+        # Switched off: nothing is sent for that kind; other kinds still go.
+        notify.save_rules({"background": False, "bogus": True, "quiet_to": "25:00"})
+        assert notify.rules()["background"] is False and "bogus" not in notify.rules()
+        assert notify.rules()["quiet_to"] == ""
+        asyncio.run(notify.webhook_notifier(_run("completed", "calm seas")))
+        assert not captured
+        failed = _run("failed", "")
+        failed.error = "boom"
+        asyncio.run(notify.webhook_notifier(failed))
+        assert captured["headers"]["Priority"] == "high"
+        # A run the user cancelled is never announced.
+        captured.clear()
+        asyncio.run(notify.webhook_notifier(_run("cancelled", "")))
+        assert not captured
+
+        # Quiet hours (over midnight): delivered silently, except an alert.
+        notify.save_rules({"background": True, "quiet_from": "22:00", "quiet_to": "07:00"})
+        night, day = datetime(2026, 11, 22, 23, 30), datetime(2026, 11, 22, 12, 0)
+        assert notify.in_quiet_hours(now=night) and notify.in_quiet_hours(now=datetime(2026, 11, 23, 6, 59))
+        assert not notify.in_quiet_hours(now=day) and not notify.in_quiet_hours(now=datetime(2026, 11, 23, 7, 0))
+        monkeypatch.setattr(notify, "in_quiet_hours", lambda r=None, now=None: True)
+        asyncio.run(notify.webhook_notifier(_run("completed", "calm seas")))
+        assert captured["headers"]["Priority"] == "low"
+        asyncio.run(notify.webhook_notifier(failed))
+        assert captured["headers"]["Priority"] == "low"
+        asyncio.run(notify.webhook_notifier(_run("completed", f"{ALERT_MARKER}: it happened")))
+        assert captured["headers"]["Priority"] == "urgent"
+    finally:
+        set_setting(notify.RULES_KEY, "")
+
+
+def test_push_respects_rules_and_the_settings_endpoints_work(monkeypatch):
+    import asyncio
+
+    from fastapi.testclient import TestClient
+
+    import bran.notify as notify
+    from bran.api import build_app
+    from bran.persistence import set_setting
+
+    captured = _patch_webhook(monkeypatch, "https://ntfy.sh/some-topic")
+    try:
+        with TestClient(build_app(enable_scheduler=False)) as client:
+            state = client.get("/spa/notifications").json()
+            assert state["configured"] is True and state["target"] == "ntfy.sh"
+            assert state["opens_app"] is False and state["rules"]["questions"] is True
+            assert "some-topic" not in str(state)
+
+            assert asyncio.run(notify.push("questions", "Macro Desk is asking", "Move the brief to 06:30?"))
+            assert captured["headers"]["Title"] == "Macro Desk is asking"
+            assert captured["content"].decode() == "Move the brief to 06:30?"
+
+            r = client.post("/spa/notifications", data={"rules": '{"questions": false}'})
+            assert r.status_code == 200 and r.json()["rules"]["questions"] is False
+            captured.clear()
+            assert asyncio.run(notify.push("questions", "x", "y")) is False and not captured
+            assert client.post("/spa/notifications", data={"rules": "[1]"}).status_code == 400
+
+            # A test goes whatever the rules say.
+            assert client.post("/spa/notifications/test").json() == {"sent": True}
+            assert captured["headers"]["Title"] == "bran test notification"
+
+        monkeypatch.setenv("BRAN_NOTIFY_WEBHOOK_URL", "")
+        assert asyncio.run(notify.push("test", "x", "y")) is False
+    finally:
+        set_setting(notify.RULES_KEY, "")
+

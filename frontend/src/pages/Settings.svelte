@@ -9,7 +9,7 @@
   import Icon from '../components/Icon.svelte'
   import Page from '../components/Page.svelte'
   import Skeleton from '../components/Skeleton.svelte'
-  import type { HealthSnapshot } from '../lib/types'
+  import type { HealthSnapshot, NotifyRules, NotifyState } from '../lib/types'
 
   let instructions = $state('')
   let health = $state<HealthSnapshot | null>(null)
@@ -49,6 +49,46 @@
     tiles[next]?.focus()
   }
 
+  // --- Notifications: what reaches the phone, and when -----------------------
+  let notify = $state<NotifyState | null>(null)
+  let notifyError = $state('')
+  let testState = $state<'idle' | 'sending' | 'sent' | 'failed'>('idle')
+  const KINDS: { key: keyof NotifyRules; label: string; hint: string }[] = [
+    { key: 'reports', label: 'A report is ready', hint: 'An automation delivered, e.g. the morning brief.' },
+    { key: 'questions', label: 'A teammate is asking', hint: 'It wants a yes before it changes something.' },
+    { key: 'failures', label: 'Something failed', hint: 'A run stopped without finishing.' },
+    {
+      key: 'background',
+      label: 'A run you started finished',
+      hint: 'Background work begun from a chat or by hand.',
+    },
+    {
+      key: 'signin',
+      label: 'bran is signed out of Claude',
+      hint: 'Agents cannot run until you sign in again.',
+    },
+  ]
+  async function setRule(changes: Partial<NotifyRules>) {
+    if (!notify) return
+    const before = notify
+    notify = { ...notify, rules: { ...notify.rules, ...changes } } // optimistic
+    notifyError = ''
+    try {
+      notify = await api.saveNotifications(changes)
+    } catch (e) {
+      notify = before
+      notifyError = errorText(e)
+    }
+  }
+  async function sendTest() {
+    testState = 'sending'
+    try {
+      testState = (await api.testNotification()).sent ? 'sent' : 'failed'
+    } catch {
+      testState = 'failed'
+    }
+  }
+
   async function load() {
     error = null
     try {
@@ -66,6 +106,10 @@
       .health()
       .then((h) => (health = h))
       .catch(() => (healthFailed = true))
+    api
+      .notifications()
+      .then((n) => (notify = n))
+      .catch(() => {})
   })
 
   const loginText = $derived.by(() => {
@@ -126,6 +170,81 @@
           {#if saveError}<span role="alert" class="save-err">{saveError}</span>{/if}
         </div>
       </section>
+
+      {#if notify}
+        <section class="card">
+          <h2 class="card-title">Notifications</h2>
+          {#if !notify.configured}
+            <p class="card-desc" style="margin-bottom: 0;">
+              bran has nowhere to send notifications. Set <code>BRAN_NOTIFY_WEBHOOK_URL</code> in
+              <code>.env</code> (an ntfy topic works well) and restart it.
+            </p>
+          {:else}
+            <p class="card-desc">
+              What bran sends to your phone, through {notify.target}.
+              {notify.opens_app
+                ? 'Tapping a notification opens it in bran.'
+                : 'Set BRAN_PUBLIC_URL to make a tap open it in bran.'}
+            </p>
+            <div class="rules">
+              {#each KINDS as k (k.key)}
+                <label class="rule">
+                  <input
+                    type="checkbox"
+                    checked={notify.rules[k.key] as boolean}
+                    onchange={(e) => setRule({ [k.key]: e.currentTarget.checked })}
+                  />
+                  <span>
+                    <span class="rule-label">{k.label}</span>
+                    <span class="rule-hint">{k.hint}</span>
+                  </span>
+                </label>
+              {/each}
+            </div>
+            <div class="quiet">
+              <span class="rule-label">Quiet hours</span>
+              <span class="quiet-times">
+                <input
+                  class="field time"
+                  type="time"
+                  aria-label="Quiet hours start"
+                  value={notify.rules.quiet_from}
+                  onchange={(e) => setRule({ quiet_from: e.currentTarget.value })}
+                />
+                <span>to</span>
+                <input
+                  class="field time"
+                  type="time"
+                  aria-label="Quiet hours end"
+                  value={notify.rules.quiet_to}
+                  onchange={(e) => setRule({ quiet_to: e.currentTarget.value })}
+                />
+                {#if notify.rules.quiet_from || notify.rules.quiet_to}
+                  <button class="btn-ghost btn-sm" onclick={() => setRule({ quiet_from: '', quiet_to: '' })}
+                    >Clear</button
+                  >
+                {/if}
+              </span>
+              <span class="rule-hint"
+                >Between these times notifications arrive silently. An alert from a watching automation still
+                sounds.{notify.quiet_now ? ' It is quiet now.' : ''}</span
+              >
+            </div>
+            <div class="save-row">
+              <button class="btn-outline" disabled={testState === 'sending'} onclick={sendTest}>
+                <Icon name="bell" size={13} />{testState === 'sending' ? 'Sending…' : 'Send a test'}
+              </button>
+              {#if testState === 'sent'}<span class="saved" role="status"
+                  ><Icon name="check" size={14} />Sent. It should be on your phone.</span
+                >{/if}
+              {#if testState === 'failed'}<span role="alert" class="save-err"
+                  >It could not be sent. Check the server's log.</span
+                >{/if}
+              {#if notifyError}<span role="alert" class="save-err">{notifyError}</span>{/if}
+            </div>
+          {/if}
+        </section>
+      {/if}
 
       <section class="card">
         <h2 class="card-title">Limits and integrations</h2>
@@ -209,6 +328,56 @@
 </Page>
 
 <style>
+  .rules {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+  .rule {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    cursor: pointer;
+  }
+  .rule input {
+    width: 18px;
+    height: 18px;
+    margin-top: 2px;
+    accent-color: var(--accent);
+    flex-shrink: 0;
+  }
+  .rule-label {
+    display: block;
+    font-size: 14px;
+    color: var(--fg-bright);
+  }
+  .rule-hint {
+    display: block;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .quiet {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 14px;
+    margin-bottom: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .quiet-times {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 13px;
+    color: var(--fg-dim);
+  }
+  .time {
+    width: auto;
+    min-width: 108px;
+  }
+
   .card-title {
     font-size: 14px;
     font-weight: 600;

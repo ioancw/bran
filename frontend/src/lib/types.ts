@@ -219,6 +219,24 @@ export interface ProjectDetail {
   runs: RunRecord[]
 }
 
+// What reaches the phone (Settings → Notifications).
+export interface NotifyRules {
+  reports: boolean // an automation delivered
+  background: boolean // a run you started finished
+  failures: boolean // something did not finish
+  questions: boolean // a teammate is waiting on you
+  signin: boolean // the Claude sign-in ran out
+  quiet_from: string // "HH:MM", or "" for no quiet hours
+  quiet_to: string
+}
+export interface NotifyState {
+  rules: NotifyRules
+  configured: boolean // there is somewhere to send to
+  target: string // its host
+  opens_app: boolean // tapping a notification opens bran
+  quiet_now: boolean
+}
+
 // --- The unified chat event (mirror of bran.web.events). One shape for both
 // the live stream and replayed history. ---
 export type ChatEvent =

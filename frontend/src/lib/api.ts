@@ -19,6 +19,8 @@ import type {
   TeammateDetail,
   TeammateRequest,
   HealthSnapshot,
+  NotifyRules,
+  NotifyState,
   SourceRef,
 } from './types'
 
@@ -282,6 +284,10 @@ export const api = {
     return r.json() as Promise<Attachment[]>
   },
 
+  notifications: () => getJSON<NotifyState>('/spa/notifications'),
+  saveNotifications: (changes: Partial<NotifyRules>) =>
+    form<NotifyState>('/spa/notifications', { rules: JSON.stringify(changes) }),
+  testNotification: () => form<{ sent: boolean }>('/spa/notifications/test', {}),
   settings: () => getJSON<{ user_instructions: string }>('/spa/settings'),
   saveSettings: (fields: { user_instructions: string }) =>
     form<{ user_instructions: string }>('/spa/settings', fields),
