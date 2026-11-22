@@ -32,6 +32,7 @@ export const KATEX_MACROS: Record<string, string> = {
   '\\celsius': '^{\\circ}\\mathrm{C}',
 }
 import DOMPurify from 'dompurify'
+import { linkChip } from './cite'
 import Prism from 'prismjs'
 // Language grammars (dependency order: each registers on import). javascript +
 // markup/css live in Prism core; the rest are a focused set for bran's work.
@@ -117,6 +118,29 @@ function makeMd(): MarkdownIt {
   // column (see .md-table-wrap in global.css).
   md.renderer.rules.table_open = () => '<div class="md-table-wrap"><table>\n'
   md.renderer.rules.table_close = () => '</table></div>\n'
+  // A web address written out in full ("… https://www.ft.com/content/abc")
+  // is shown as a chip naming its site, with the site's icon; the address is
+  // still where it goes. A link the writer gave words to is left as written.
+  md.renderer.rules.link_open = (tokens, idx, options, _env, self) => {
+    const t = tokens[idx]
+    const label = tokens[idx + 1]
+    let icon = ''
+    if ((t.markup === 'linkify' || t.markup === 'autolink') && label?.type === 'text') {
+      const href = t.attrGet('href') ?? ''
+      const site = linkChip(href, label.content)
+      if (site) {
+        label.content = site
+        t.attrJoin('class', 'cite link-chip')
+        t.attrSet('title', href)
+        t.attrSet('target', '_blank')
+        t.attrSet('rel', 'noopener noreferrer')
+        t.attrSet('data-cite-domain', site)
+        t.attrSet('data-cite-url', href)
+        icon = `<img class="chip-ico" src="/spa/favicon/${encodeURIComponent(site)}" alt="" loading="lazy">`
+      }
+    }
+    return self.renderToken(tokens, idx, options) + icon
+  }
   return md
 }
 
@@ -186,5 +210,6 @@ export function renderMarkdown(src: string): string {
   // but this pipeline renders adversarial content (LLM output quoting fetched
   // web pages) — sanitize the assembled document rather than trusting the
   // assembly. Default profile keeps KaTeX's MathML/spans and Prism's markup.
-  return DOMPurify.sanitize(withMath)
+  // target: the chips above open in a new tab (they carry rel=noopener).
+  return DOMPurify.sanitize(withMath, { ADD_ATTR: ['target'] })
 }

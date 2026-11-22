@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { citeify } from './cite'
+import { citeify, linkChip } from './cite'
 import { renderMarkdown } from './markdown'
 
 const sources = [
@@ -74,5 +74,39 @@ describe('citeify', () => {
     expect(citeify(plain, sources)).toBe(plain)
     const withTag = '<p>(Source: <em>bbc.co.uk</em>)</p>'
     expect(citeify(withTag, sources)).toBe(withTag)
+  })
+})
+
+describe('a web address written out in full', () => {
+  it('is named by its site', () => {
+    expect(linkChip('https://www.ft.com/content/dd2a6594', 'https://www.ft.com/content/dd2a6594')).toBe(
+      'ft.com',
+    )
+    expect(linkChip('http://www.bbc.co.uk/news?x=1', 'www.bbc.co.uk/news?x=1')).toBe('bbc.co.uk')
+    // Already short, or not a plain web address: left as written.
+    expect(linkChip('http://investing.com', 'Investing.com')).toBeNull()
+    expect(linkChip('https://ft.com/', 'https://ft.com/')).toBeNull()
+    expect(linkChip('mailto:a@b.co', 'a@b.co')).toBeNull()
+    expect(linkChip('javascript:alert(1)', 'https://x.com/a')).toBeNull()
+  })
+
+  it('renders as a chip that still links to the address', () => {
+    const url = 'https://www.bloomberg.com/news/articles/2026-11-22/china-s-ai-rout'
+    const html = renderMarkdown(`- **China AI rout:** stocks fell. ${url}`)
+    expect(html).toContain(`href="${url}"`)
+    expect(html).toContain('class="cite link-chip"')
+    expect(html).toContain('target="_blank"')
+    expect(html).toContain('rel="noopener noreferrer"')
+    expect(html).toContain('src="/spa/favicon/bloomberg.com"')
+    expect(html).toContain('>bloomberg.com</a>')
+    expect(html).not.toContain('>https://')
+  })
+
+  it('leaves a link with its own words, and a bare site, alone', () => {
+    const html = renderMarkdown(
+      'See [the FT report](https://www.ft.com/content/abc) and Investing.com today.',
+    )
+    expect(html).toContain('>the FT report</a>')
+    expect(html).not.toContain('link-chip')
   })
 })

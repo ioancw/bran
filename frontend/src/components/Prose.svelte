@@ -26,9 +26,15 @@
   void loadMd().then((m) => (renderFn = m.renderMarkdown))
 
   const html = $derived(renderFn ? citeify(renderFn(text), sources) : null)
+
+  // A site with no icon: the chip is just its name.
+  function onImgError(e: Event) {
+    const img = e.target
+    if (img instanceof HTMLImageElement && img.classList.contains('chip-ico')) img.remove()
+  }
 </script>
 
-<div class="prose-md {klass}">
+<div class="prose-md {klass}" onerrorcapture={onImgError}>
   {#if html != null}
     <!-- eslint-disable-next-line svelte/no-at-html-tags -- renderMarkdown escapes by construction AND runs DOMPurify over the final document; citeify only inserts escaped text and vetted http(s) URLs -->
     {@html html}{#if streaming}<span class="stream-cursor"></span>{/if}

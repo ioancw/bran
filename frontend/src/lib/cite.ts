@@ -12,6 +12,24 @@ const TAGS = /<[^>]+>/g
 const esc = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
+/** The site a bare web address should be shown as, or null to leave it as
+ * written. "https://www.ft.com/content/abc" reads as "ft.com"; a bare
+ * site ("ft.com", which is already short) and anything that is not a plain
+ * http(s) address are left alone. `text` is what the report wrote. */
+export function linkChip(href: string, text: string): string | null {
+  if (!/^(https?:\/\/|www\.)/i.test(text.trim())) return null
+  let url: URL
+  try {
+    url = new URL(href)
+  } catch {
+    return null
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
+  if (url.pathname.length <= 1 && !url.search) return null
+  const host = url.hostname.toLowerCase().replace(/^www\./, '')
+  return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(host) ? host : null
+}
+
 export interface CiteSource {
   domain: string
   url: string | null

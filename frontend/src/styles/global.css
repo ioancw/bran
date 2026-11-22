@@ -1020,6 +1020,14 @@ a.cite:hover,
   text-decoration: none;
   outline: none;
 }
+/* A web address shown as its site (lib/markdown.ts). */
+.prose-md .link-chip .chip-ico {
+  width: 1.05em;
+  height: 1.05em;
+  margin: 0 5px 0 -1px;
+  border-radius: 3px;
+  vertical-align: -0.16em;
+}
 /* The source's number in the Sources row above the answer. */
 .prose-md .cite .cite-n {
   display: inline-block;
