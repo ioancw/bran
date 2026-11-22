@@ -249,14 +249,20 @@
             class="btn-outline"
             title="Just the report, as a page to read"
           >
-            <Icon name="book-open" size={13} />Reading view
+            <Icon name="book-open" size={13} />Read<span class="lbl">ing view</span>
           </a>
         {/if}
-        <button class="btn-outline" disabled={rerunning} onclick={rerun}>
-          <Icon name="refresh" size={13} />{rerunning ? 'Starting…' : 'Re-run'}
+        <button class="btn-outline" disabled={rerunning} onclick={rerun} aria-label="Run this again">
+          <Icon name="refresh" size={13} /><span class="lbl">{rerunning ? 'Starting…' : 'Re-run'}</span>
         </button>
-        <button class="btn-ghost danger" disabled={deleting} onclick={remove} title="Delete this run">
-          <Icon name="trash" size={13} />Delete
+        <button
+          class="btn-ghost danger"
+          disabled={deleting}
+          onclick={remove}
+          title="Delete this run"
+          aria-label="Delete this run"
+        >
+          <Icon name="trash" size={13} /><span class="lbl">Delete</span>
         </button>
       {/if}
     {/if}

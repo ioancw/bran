@@ -924,6 +924,52 @@
       display: none;
     }
   }
+  /* Phone width: each automation is a card. Its name and schedule lead, then
+     the agent and whether it is on; the rest is on its own page. */
+  @container (max-width: 560px) {
+    .runners-wrap thead {
+      display: none;
+    }
+    .runners-wrap table,
+    .runners-wrap tbody {
+      display: block;
+    }
+    .runners-wrap tr {
+      position: relative;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      column-gap: 12px;
+      row-gap: 10px;
+      padding: 14px 48px 14px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .runners-wrap tr:last-child {
+      border-bottom: 0;
+    }
+    .runners-wrap td {
+      height: auto;
+      padding: 0;
+      border: 0;
+    }
+    .runners-wrap td:first-child {
+      flex: 0 0 100%;
+    }
+    .runners-wrap .name-link {
+      font-size: 15px;
+    }
+    .runners-wrap td.c-agent {
+      display: block;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .runners-wrap td.c-del {
+      position: absolute;
+      top: 8px;
+      right: 6px;
+    }
+  }
   @media (max-width: 768px) {
     .fld.span2,
     .runner-form :global(.grid-cols-2) {

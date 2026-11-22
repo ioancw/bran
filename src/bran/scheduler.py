@@ -610,14 +610,31 @@ def _heartbeat(check_gap: bool = True) -> None:
         log.exception("scheduler heartbeat failed")
 
 
+# app_settings key prefix: the missed slot the user said not to run.
+_DISMISSED_KEY = "missed_dismissed:"
+
+
+def dismiss_missed(rec: ScheduleRecord) -> str | None:
+    """Stop reporting the slot this runner missed: the user does not want it
+    run. Returns the slot dismissed, or None when nothing was missed. A later
+    missed slot is reported afresh."""
+    from bran.persistence import set_setting
+
+    due = missed_slot(rec)
+    if due is not None:
+        set_setting(_DISMISSED_KEY + rec.id, due)
+    return due
+
+
 def missed_slot(rec: ScheduleRecord, now=None) -> str | None:
     """The latest moment (UTC ISO-8601) in the last week at which this
     recurring runner was due and has not run since, or None. It clears as soon
-    as the runner next runs, on schedule or by hand. A slot so recent that it
-    may still be about to start does not count."""
+    as the runner next runs, on schedule or by hand, or when the user
+    dismisses it. A slot so recent that it may still be about to start does
+    not count."""
     from datetime import datetime, timedelta, timezone
 
-    from bran.persistence import list_runs
+    from bran.persistence import get_setting, list_runs
 
     if not rec.enabled or rec.run_at:
         return None
@@ -638,6 +655,9 @@ def missed_slot(rec: ScheduleRecord, now=None) -> str | None:
             return None
         prior = list_runs(schedule_id=rec.id, limit=1)
         if prior and datetime.fromisoformat(prior[0].started_at) >= due:
+            return None
+        dismissed = get_setting(_DISMISSED_KEY + rec.id)
+        if dismissed and datetime.fromisoformat(dismissed) >= due:
             return None
     except (ValueError, TypeError):
         return None

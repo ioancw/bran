@@ -180,7 +180,9 @@
   {#snippet actions()}
     {#if runner && !editing}
       <button class="btn-outline" onclick={startEdit}><Icon name="pencil" size={13} />Edit</button>
-      <button class="btn-ghost danger" onclick={remove}><Icon name="trash" size={13} />Delete</button>
+      <button class="btn-ghost danger" onclick={remove} aria-label="Delete this automation"
+        ><Icon name="trash" size={13} /><span class="lbl">Delete</span></button
+      >
     {/if}
   {/snippet}
 

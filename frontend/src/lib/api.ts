@@ -267,6 +267,9 @@ export const api = {
     const r = await fetch(url, { method: 'DELETE' })
     if (!r.ok) await raiseFor(r, url)
   },
+  // The run an automation missed is not wanted: stop listing it.
+  dismissMissed: (name: string) =>
+    form<ScheduleRecord>(`/spa/schedules/${encodeURIComponent(name)}/dismiss-missed`, {}),
   setScheduleEnabled: (name: string, enabled: boolean) =>
     form<ScheduleRecord>(`/spa/schedules/${encodeURIComponent(name)}/enabled`, {
       enabled: enabled ? 'true' : 'false',

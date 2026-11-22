@@ -185,6 +185,20 @@ async def set_enabled(
     return schedule_dict(rec)
 
 
+@router.post("/schedules/{name}/dismiss-missed")
+def dismiss_missed_run(name: str) -> dict[str, Any]:
+    """The run this automation missed is not wanted: stop listing it under
+    "Needs attention". The next one it misses is listed as usual."""
+    from bran.persistence import get_schedule
+    from bran.scheduler import dismiss_missed
+
+    rec = get_schedule(name)
+    if rec is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"No schedule {name}")
+    dismiss_missed(rec)
+    return schedule_dict(rec)
+
+
 @router.delete("/schedules/{name}")
 async def remove_schedule(name: str) -> dict[str, Any]:
     if not remove_runner(name):

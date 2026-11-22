@@ -640,6 +640,16 @@ def test_missed_slot_is_the_last_fire_that_never_ran(client):
     listed = {s["name"]: s for s in client.get("/spa/schedules").json()}
     assert listed[never.name]["missed_at"] == sched.missed_slot(never)
 
+    # Dismissed: that slot is no longer reported; the next missed one is.
+    unwanted = _runner(daily)
+    slot = sched.missed_slot(unwanted, now)
+    r = client.post(f"/spa/schedules/{unwanted.name}/dismiss-missed")
+    assert r.status_code == 200 and r.json()["missed_at"] is None
+    assert sched.missed_slot(unwanted, now) is None
+    later = sched.missed_slot(unwanted, now + timedelta(days=1))
+    assert later and later > slot
+    assert client.post("/spa/schedules/no-such-runner/dismiss-missed").status_code == 404
+
     # It ran since (on time, late, or by hand): nothing is missed.
     ran = _runner(daily)
     done = RunRecord.new(agent="research", task="t", source="manual", schedule_id=ran.id)

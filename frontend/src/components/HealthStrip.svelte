@@ -3,6 +3,7 @@
   // the integrations, background-run slots in use, and spend. Renders nothing
   // until the snapshot arrives (and nothing at all if it fails).
   import type { HealthSnapshot } from '../lib/types'
+  import Icon from './Icon.svelte'
 
   let { health }: { health: HealthSnapshot | null } = $props()
 
@@ -22,10 +23,28 @@
   const caughtUp = $derived(health?.scheduler?.caught_up ?? [])
   const skipped = $derived(health?.scheduler?.skipped ?? [])
   const names = (rows: { name: string }[]) => rows.map((r) => r.name).join(', ')
+
+  // A phone shows one line (is anything wrong, and today's spend); tapping it
+  // shows the chips. Anything wrong shows them without being asked.
+  let open = $state(false)
+  const trouble = $derived(!!health && (!health.login.ok || skipped.length > 0))
+  const running = $derived(health?.slots.in_use ?? 0)
 </script>
 
 {#if health}
-  <div class="strip" aria-label="Status">
+  <div class="strip" class:open={open || trouble} aria-label="Status">
+    <button class="chip summary" aria-expanded={open || trouble} onclick={() => (open = !open)}>
+      <span
+        class="dot"
+        class:ok={!trouble && !running}
+        class:warn={!trouble && running > 0}
+        class:err={trouble}
+      ></span>
+      {trouble ? 'Needs attention' : running ? `${running} running` : 'All OK'} · Today {usd(
+        health.spend.today.cost,
+      )}
+      <Icon name="chevron-down" size={12} />
+    </button>
     <span class="chip" class:bad={!health.login.ok} title={loginTitle}>
       <span class="dot" class:ok={health.login.ok} class:err={!health.login.ok}></span>
       {health.login.ok ? 'Login' : 'Login expired'}
@@ -108,5 +127,27 @@
   }
   .chip.spend {
     font-variant-numeric: tabular-nums;
+  }
+  .summary {
+    display: none;
+    border: 0;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .strip.open .summary :global(.icon) {
+    transform: rotate(180deg);
+  }
+  @media (max-width: 768px) {
+    .summary {
+      display: inline-flex;
+      padding: 5px 11px;
+      font-size: 13px;
+    }
+    .strip:not(.open) .chip:not(.summary) {
+      display: none;
+    }
+    .strip {
+      margin-bottom: 14px;
+    }
   }
 </style>

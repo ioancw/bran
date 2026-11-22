@@ -88,6 +88,18 @@
   // asleep. Each stays here until it next runs.
   const missed = $derived(schedules.filter((s) => s.enabled && s.missed_at))
 
+  // "I don't want that one run": it leaves the list; the next miss returns.
+  async function dismissMissed(s: ScheduleRecord) {
+    const before = schedules
+    schedules = schedules.map((x) => (x.id === s.id ? { ...x, missed_at: null } : x))
+    try {
+      await api.dismissMissed(s.name)
+    } catch (e) {
+      schedules = before
+      toast(errorText(e), 'err')
+    }
+  }
+
   let starting = $state<string | null>(null)
   async function runMissed(s: ScheduleRecord) {
     if (starting) return
@@ -193,13 +205,17 @@
                     >{s.name}</a
                   >
                   <span class="pill warn">Did not run</span>
-                  <button
-                    class="btn-outline btn-sm ml-auto"
-                    disabled={!!starting}
-                    onclick={() => runMissed(s)}
-                  >
-                    <Icon name="play" size={12} />{starting === s.id ? 'Starting…' : 'Run now'}
-                  </button>
+                  <span class="att-actions ml-auto">
+                    <button
+                      class="btn-ghost btn-sm"
+                      disabled={!!starting}
+                      title="Don't run it; remove this notice"
+                      onclick={() => dismissMissed(s)}>Dismiss</button
+                    >
+                    <button class="btn-outline btn-sm" disabled={!!starting} onclick={() => runMissed(s)}>
+                      <Icon name="play" size={12} />{starting === s.id ? 'Starting…' : 'Run now'}
+                    </button>
+                  </span>
                   <span class="att-note"
                     >It was due {localDateTime(s.missed_at!)}, when bran was not running. Nothing has run
                     since.</span
@@ -379,6 +395,20 @@
   }
   .att.missed {
     border-color: color-mix(in srgb, var(--amber) 35%, var(--border));
+  }
+  .att-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  @media (max-width: 560px) {
+    /* The explanation first, then what to do about it. */
+    .att-note {
+      order: 2;
+    }
+    .att-actions {
+      order: 3;
+    }
   }
   .att-note {
     flex-basis: 100%;

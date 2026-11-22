@@ -590,6 +590,15 @@
     }
     .out-head {
       margin-bottom: 8px;
+      padding-right: 34px;
+    }
+    .output {
+      position: relative;
+    }
+    .star-btn {
+      position: absolute;
+      top: 10px;
+      right: 8px;
     }
   }
   .art-chip {

@@ -85,6 +85,8 @@
   })
 
   const parts = $derived(splitHeadline(run?.result ?? ''))
+  // On a phone the reviewer's notes start folded, so the report leads.
+  const phone = typeof matchMedia !== 'undefined' && matchMedia('(max-width: 768px)').matches
   const headline = $derived(parts.headline || runnerName || run?.agent || 'Report')
   const kicker = $derived(
     parts.headline ? runnerName || run?.agent || '' : runnerName ? (run?.agent ?? '') : '',
@@ -195,12 +197,17 @@
       </div>
 
       {#if verification?.status === 'done' && verification.pass === false && verification.issues?.length}
-        <div class="issues">
-          <div class="issues-title">The reviewer raised</div>
+        <details class="issues" open={!phone}>
+          <summary>
+            <span class="issues-title"
+              >The reviewer raised {verification.issues.length}
+              {verification.issues.length === 1 ? 'point' : 'points'}</span
+            ><Icon name="chevron-down" size={14} />
+          </summary>
           <ul>
             {#each verification.issues as issue, i (i)}<li>{issue}</li>{/each}
           </ul>
-        </div>
+        </details>
       {/if}
 
       {#if sites.length}
@@ -380,7 +387,30 @@
   .issues-title {
     font-weight: 600;
     color: var(--amber);
-    margin-bottom: 2px;
+  }
+  .issues summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    list-style: none;
+    cursor: pointer;
+    color: var(--amber);
+  }
+  .issues summary::-webkit-details-marker {
+    display: none;
+  }
+  .issues[open] summary {
+    margin-bottom: 4px;
+  }
+  .issues[open] summary :global(.icon) {
+    transform: rotate(180deg);
+  }
+  @media (max-width: 768px) {
+    /* The count line is enough until it is opened. */
+    .sites-row {
+      display: none;
+    }
   }
   .issues ul {
     margin: 0;
