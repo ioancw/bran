@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Form, HTTPException, Query, status
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
 from bran.agents import get_agent
 from bran.persistence import (
@@ -167,6 +167,45 @@ def run_transcript(run_id: str) -> dict[str, Any]:
         # run kept, or at least its prompt + final result.
         events = events_from_runs([rec])
     return {"run": run_dict(rec), "events": [attach_child_run(e) for e in events]}
+
+
+@router.get("/runs/{run_id}/export.html")
+def run_export_html(run_id: str) -> Response:
+    """The run's report as ONE self-contained HTML file: it opens anywhere,
+    offline, and prints cleanly to PDF (the engine behind save_document)."""
+    import re
+    from datetime import datetime
+
+    from bran.doc_export import DocAssetsMissing, render_document_html, slugify
+
+    rec = run_or_404(run_id)
+    text = (rec.result or "").strip()
+    if not text:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "This run has no report to download.")
+    # The report's own first heading is the document's title.
+    m = re.match(r"\s*#\s+(.+?)\s*(?:\n|$)", text)
+    title = m.group(1).strip() if m else f"{rec.agent} report"
+    body = text[m.end():] if m else text
+    try:
+        when = datetime.fromisoformat(rec.ended_at or rec.started_at).astimezone()
+        dated = f"{when.strftime('%A')} {when.day} {when.strftime('%B %Y, %H:%M')}"
+    except (TypeError, ValueError):
+        dated = ""
+    try:
+        html = render_document_html(title, body, subtitle=" · ".join(x for x in (rec.agent, dated) if x))
+    except DocAssetsMissing as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    # Named for who wrote it and when: short, and it sorts by date.
+    stamp = (rec.ended_at or rec.started_at or "")[:10]
+    name = "-".join(x for x in (slugify(rec.agent, "report"), stamp) if x)
+    return Response(
+        html,
+        media_type="text/html; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{name}.html"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.get("/runs/{run_id}/sources")

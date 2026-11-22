@@ -1,6 +1,7 @@
 <script lang="ts">
-  // Phone navigation: the three places you go most are one tap away, and the
-  // rest sit behind More (the sidebar, as a drawer). Hidden above phone width.
+  // Phone navigation: the places you go most are one tap away (the day, a
+  // new chat, your conversations, what the agents produced), and the rest sit
+  // behind More (the sidebar, as a drawer). Hidden above phone width.
   import { router, href, link } from '../lib/router.svelte'
   import Icon from './Icon.svelte'
 
@@ -20,46 +21,40 @@
       ? 'more'
       : seg[0] === undefined
         ? 'today'
-        : seg[0] === 'chat'
-          ? 'chat'
-          : seg[0] === 'outputs' || seg[0] === 'read'
-            ? 'outputs'
-            : 'more',
+        : seg[0] === 'chat' && !seg[1]
+          ? 'new'
+          : seg[0] === 'chat' || seg[0] === 'recents'
+            ? 'chats'
+            : seg[0] === 'outputs' || seg[0] === 'read'
+              ? 'outputs'
+              : 'more',
   )
+  const tabs = [
+    { key: 'today', label: 'Today', to: '/', icon: 'calendar' },
+    { key: 'new', label: 'New chat', to: '/chat', icon: 'square-pen' },
+    { key: 'chats', label: 'Chats', to: '/recents', icon: 'message-square' },
+    { key: 'outputs', label: 'Outputs', to: '/outputs', icon: 'inbox' },
+  ] as const
 </script>
 
 <nav class="tabbar" aria-label="Main">
-  <a
-    href={href('/')}
-    use:link
-    class="tab"
-    class:on={at === 'today'}
-    aria-current={at === 'today' ? 'page' : undefined}
-  >
-    <Icon name="calendar" size={21} /><span>Today</span>
-  </a>
-  <a
-    href={href('/chat')}
-    use:link
-    class="tab"
-    class:on={at === 'chat'}
-    aria-current={at === 'chat' ? 'page' : undefined}
-  >
-    <Icon name="message-square" size={21} /><span>Chat</span>
-  </a>
-  <a
-    href={href('/outputs')}
-    use:link
-    class="tab"
-    class:on={at === 'outputs'}
-    aria-current={at === 'outputs' ? 'page' : undefined}
-  >
-    <span class="tab-icon">
-      <Icon name="inbox" size={21} />
-      {#if unread}<span class="tab-badge" aria-label="{unread} new">{unread > 9 ? '9+' : unread}</span>{/if}
-    </span>
-    <span>Outputs</span>
-  </a>
+  {#each tabs as t (t.key)}
+    <a
+      href={href(t.to)}
+      use:link
+      class="tab"
+      class:on={at === t.key}
+      aria-current={at === t.key ? 'page' : undefined}
+    >
+      <span class="tab-icon">
+        <Icon name={t.icon} size={21} />
+        {#if t.key === 'outputs' && unread}<span class="tab-badge" aria-label="{unread} new"
+            >{unread > 9 ? '9+' : unread}</span
+          >{/if}
+      </span>
+      <span>{t.label}</span>
+    </a>
+  {/each}
   <button class="tab" class:on={at === 'more'} aria-expanded={moreOpen} onclick={onmore}>
     <Icon name="menu" size={21} /><span>More</span>
   </button>

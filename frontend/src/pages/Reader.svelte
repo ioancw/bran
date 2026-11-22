@@ -194,6 +194,13 @@
         {#if isAlertResult(run)}
           <span class="badge alert"><Icon name="bell" size={12} />Alert</span>
         {/if}
+        <a
+          class="btn-ghost btn-sm save"
+          href={'/spa/runs/' + encodeURIComponent(run.id) + '/export.html'}
+          download
+          title="Save this report as one HTML file: it opens anywhere and prints to PDF"
+          ><Icon name="download" size={13} />Download</a
+        >
       </div>
 
       {#if verification?.status === 'done' && verification.pass === false && verification.issues?.length}
@@ -383,6 +390,10 @@
     font-size: 14px;
     line-height: 1.55;
     color: var(--fg);
+  }
+  .save {
+    margin-left: auto;
+    text-decoration: none;
   }
   .issues-title {
     font-weight: 600;

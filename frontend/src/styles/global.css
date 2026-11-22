@@ -796,8 +796,8 @@ table.bran-table .mono {
   white-space: nowrap;
 }
 .page-header .subheading {
-  font-size: 13px;
-  color: var(--muted);
+  font-size: 15px;
+  color: var(--fg-dim);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

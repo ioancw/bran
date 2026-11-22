@@ -17,6 +17,7 @@
   import Toasts from './components/Toasts.svelte'
   import Today from './pages/Today.svelte'
   import Chat from './pages/Chat.svelte'
+  import Recents from './pages/Recents.svelte'
   import Runs from './pages/Runs.svelte'
   import Outputs from './pages/Outputs.svelte'
   import Artifacts from './pages/Artifacts.svelte'
@@ -258,6 +259,8 @@
       <Today />
     {:else if seg[0] === 'chat'}
       <Chat sessionId={seg[1] ?? null} />
+    {:else if seg[0] === 'recents'}
+      <Recents />
     {:else if seg[0] === 'outputs'}
       <Outputs />
     {:else if seg[0] === 'artifacts'}

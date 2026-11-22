@@ -167,7 +167,7 @@
 </script>
 
 <Page title="Today">
-  {#snippet subtitle()}{dateLabel}{/snippet}
+  {#snippet subtitle()}<span class="today-date">{dateLabel}</span>{/snippet}
 
   {#if error}<ErrorBanner {error} onretry={load} />{/if}
   {#if !loaded}
@@ -395,6 +395,12 @@
   }
   .att.missed {
     border-color: color-mix(in srgb, var(--amber) 35%, var(--border));
+  }
+  /* The day itself, set like a dateline. */
+  .today-date {
+    font-family: var(--font-prose);
+    font-size: 19px;
+    color: var(--fg);
   }
   .att-actions {
     display: flex;

@@ -570,6 +570,11 @@
     .palette-row kbd {
       display: none;
     }
+    /* Conversations have their own tab (and room to scroll) on a phone. */
+    .recents-head,
+    .recents {
+      display: none;
+    }
   }
 
   .side-actions {

@@ -248,3 +248,33 @@ def test_library_lists_project_files_and_loose_documents_newest_first(client):
     # The URL each entry gives is one the server actually serves.
     assert client.get(mine[1]["url"], headers=SAME).status_code == 200
     assert client.get(mine[0]["url"], headers=SAME).status_code == 200
+
+
+# --- a report as one file ---------------------------------------------------------
+
+def test_a_report_downloads_as_one_self_contained_html_file(client):
+    from bran.persistence import insert_run
+
+    rec = RunRecord(
+        id="run-export-1", agent="finance-news", task="brief", status="completed",
+        result="# Finance Briefing: Sunday\n\nSterling slipped. https://example.com/a?x=<1>\n",
+    )
+    rec.started_at = "2026-11-22T09:00:00+00:00"
+    rec.ended_at = "2026-11-22T09:03:00+00:00"
+    insert_run(rec)
+    r = client.get("/spa/runs/run-export-1/export.html", headers=SAME)
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+    assert r.headers["content-disposition"] == 'attachment; filename="finance-news-2026-11-22.html"'
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert "<title>Finance Briefing: Sunday</title>" in r.text
+    assert "finance-news · Sunday 22 November 2026" in r.text
+    # The heading became the title; the body is carried escaped, not as markup.
+    assert "Sterling slipped." in r.text and "x=&lt;1&gt;" in r.text
+    assert "# Finance Briefing" not in r.text
+    assert "http://" not in r.text.split("</head>")[0].replace("http://www.w3.org", "")
+
+    empty = RunRecord(id="run-export-2", agent="research", task="t", status="completed", result="")
+    insert_run(empty)
+    assert client.get("/spa/runs/run-export-2/export.html", headers=SAME).status_code == 404
+    assert client.get("/spa/runs/no-such-run/export.html", headers=SAME).status_code == 404
