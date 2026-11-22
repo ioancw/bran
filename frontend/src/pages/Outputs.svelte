@@ -10,6 +10,7 @@
   import { relativeTime, localDateTime } from '../lib/time'
   import { bumpActivity } from '../lib/workspace.svelte'
   import { isAlertResult, isSuperseded, verifyBadge } from '../lib/verification'
+  import { excerpt, splitHeadline } from '../lib/reading'
   import { toast } from '../lib/toast.svelte'
   import { sourceLabel, sourceHint } from '../lib/labels'
   import Page from '../components/Page.svelte'
@@ -383,6 +384,14 @@
                   onclick={(e) => toggleStar(r, e)}><Icon name="star" size={15} /></button
                 >
               </header>
+              <!-- Phone width: the card is a headline and a few lines that open
+                   the reading view; the full text and its actions live there. -->
+              <a href={href('/read/' + r.id)} use:link class="out-compact">
+                {#if splitHeadline(r.result ?? '').headline}<span class="oc-title"
+                    >{splitHeadline(r.result ?? '').headline}</span
+                  >{/if}
+                <span class="oc-text">{excerpt(r.result ?? '', 200)}</span>
+              </a>
               <div class="out-body reading-col" class:clamp={isLong(r.result ?? '') && !expanded[r.id]}>
                 <Prose text={r.result ?? ''} />
               </div>
@@ -544,6 +553,44 @@
   }
   .out-actions .spacer {
     flex: 1;
+  }
+  .out-compact {
+    display: none;
+  }
+  @media (max-width: 768px) {
+    .out-compact {
+      display: block;
+      color: inherit;
+      text-decoration: none;
+    }
+    .oc-title {
+      display: block;
+      font-family: var(--font-prose);
+      font-size: 18px;
+      font-weight: 600;
+      line-height: 1.3;
+      color: var(--fg-bright);
+      margin-bottom: 6px;
+    }
+    .oc-text {
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      font-size: 14px;
+      line-height: 1.5;
+      color: var(--fg-dim);
+    }
+    .out-body,
+    .more,
+    .out-actions,
+    .out-task {
+      display: none;
+    }
+    .out-head {
+      margin-bottom: 8px;
+    }
   }
   .art-chip {
     text-decoration: none;

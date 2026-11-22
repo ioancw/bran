@@ -562,6 +562,14 @@
     .side-collapse {
       display: none;
     }
+    .side-head {
+      padding-top: var(--safe-top);
+      height: calc(var(--header-h) + var(--safe-top));
+    }
+    /* No keyboard, no shortcut to advertise. */
+    .palette-row kbd {
+      display: none;
+    }
   }
 
   .side-actions {

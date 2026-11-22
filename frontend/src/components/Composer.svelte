@@ -324,7 +324,9 @@
             aria-haspopup="menu"
             aria-expanded={modelOpen}
           >
-            <Icon name="sparkles" size={13} />{modelLabel}<Icon name="chevron-down" size={12} />
+            <span class="model-icon" class:set={!!model}><Icon name="sparkles" size={13} /></span><span
+              class="model-label">{modelLabel}</span
+            ><Icon name="chevron-down" size={12} />
           </button>
           {#if modelOpen}
             <div class="model-menu card elev-md" role="menu" aria-label="Model">
@@ -446,6 +448,23 @@
   @media (max-width: 768px) {
     .composer-hint {
       display: none;
+    }
+  }
+  .model-icon {
+    display: inline-flex;
+  }
+  /* Phone, new chat: the Ask / Research / Agent switch shares the row, so the
+     model picker shrinks to its icon (tinted once a model is chosen) and Send
+     stays on the same line. */
+  @media (max-width: 768px) {
+    :global(.composer-footer:has(.mode-seg)) {
+      column-gap: 4px;
+    }
+    :global(.composer-footer:has(.mode-seg)) .model-label {
+      display: none;
+    }
+    :global(.composer-footer:has(.mode-seg)) .model-icon.set {
+      color: var(--accent);
     }
   }
   /* Narrow panes: the footer may wrap; the send button stays bottom-right. */

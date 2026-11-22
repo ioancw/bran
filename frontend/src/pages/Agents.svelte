@@ -100,8 +100,17 @@
     display: flex;
     align-items: baseline;
     gap: 8px;
-    /* keep the name/model row clear of the overlaid schedule button */
+    /* keep the name/model row clear of the overlaid schedule button: beside
+       it, and tall enough that the description starts below it */
     padding-right: 100px;
+    min-height: 26px;
+  }
+  @media (max-width: 768px) {
+    /* buttons are taller on touch screens */
+    .agent-head {
+      min-height: 40px;
+      align-items: center;
+    }
   }
   .agent-name {
     font-size: 14px;

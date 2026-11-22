@@ -9,6 +9,7 @@
   import { isSuperseded } from './lib/verification'
   import type { HealthSnapshot, RunRecord, Teammate } from './lib/types'
   import Sidebar from './components/Sidebar.svelte'
+  import TabBar from './components/TabBar.svelte'
   import ConfirmHost from './components/ConfirmHost.svelte'
   import CommandPalette from './components/CommandPalette.svelte'
   import CitePopover from './components/CitePopover.svelte'
@@ -147,6 +148,24 @@
     mainEl?.scrollTo(0, 0)
   })
 
+  // Phones: while something is being typed the keyboard is up, and the tab
+  // bar gives its room back (see TabBar and --tabbar-h).
+  function onFocusChange() {
+    const el = document.activeElement
+    const typing =
+      el instanceof HTMLTextAreaElement ||
+      (el instanceof HTMLInputElement && !['checkbox', 'radio', 'button', 'file'].includes(el.type))
+    document.documentElement.classList.toggle('typing', typing)
+  }
+  $effect(() => {
+    document.addEventListener('focusin', onFocusChange)
+    document.addEventListener('focusout', onFocusChange)
+    return () => {
+      document.removeEventListener('focusin', onFocusChange)
+      document.removeEventListener('focusout', onFocusChange)
+    }
+  })
+
   function retryAuth() {
     clearAuthError()
     void loadCounts()
@@ -272,6 +291,11 @@
     {/if}
   </main>
 </div>
+<TabBar
+  unread={navCounts.outputs}
+  moreOpen={sidebarOpen}
+  onmore={() => (sidebarOpen ? closeDrawer() : openDrawer())}
+/>
 <ConfirmHost />
 <CommandPalette />
 <CitePopover />

@@ -201,8 +201,8 @@
                     <Icon name="play" size={12} />{starting === s.id ? 'Starting…' : 'Run now'}
                   </button>
                   <span class="att-note"
-                    >It was due {localDateTime(s.missed_at!)}, when this computer was off or asleep. Nothing
-                    has run since.</span
+                    >It was due {localDateTime(s.missed_at!)}, when bran was not running. Nothing has run
+                    since.</span
                   >
                 </div>
               {/each}

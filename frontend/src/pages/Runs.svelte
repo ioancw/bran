@@ -194,7 +194,7 @@
               <td class="num mono c-dur">{fmtDuration(r.duration_ms)}</td>
               <td class="num mono c-cost">{fmtCost(r.total_cost_usd)}</td>
               <td class="text-dim task-cell">
-                <div class="task-line">{r.task}</div>
+                <a href={href('/runs/' + r.id)} use:link class="task-line task-link">{r.task}</a>
                 {#if r.status === 'failed' && (r.error_summary || r.error)}
                   <div class="task-err" title={r.error ?? ''}>{r.error_summary?.title ?? r.error}</div>
                   {#if r.error_summary?.hint}
@@ -262,6 +262,73 @@
     .c-agent,
     .c-start {
       display: none;
+    }
+  }
+  .task-link {
+    display: block;
+    color: inherit;
+    text-decoration: none;
+  }
+  /* Phone width: each run is a card, not a row. What it was asked comes first
+     (two lines), then how it went, who ran it and when. The id is dropped:
+     the task is the link. */
+  @container (max-width: 560px) {
+    .runs-wrap thead {
+      display: none;
+    }
+    .runs-wrap table,
+    .runs-wrap tbody {
+      display: block;
+    }
+    .runs-wrap tr {
+      position: relative;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      column-gap: 12px;
+      row-gap: 6px;
+      padding: 14px 48px 14px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .runs-wrap tr:last-child {
+      border-bottom: 0;
+    }
+    .runs-wrap td {
+      display: block;
+      height: auto;
+      padding: 0;
+      border: 0;
+      font-size: 13px;
+    }
+    .runs-wrap td:first-child {
+      display: none;
+    }
+    .runs-wrap td.task-cell {
+      order: -1;
+      flex: 0 0 100%;
+      width: auto;
+      max-width: none;
+    }
+    .runs-wrap .task-link {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      line-clamp: 2;
+      -webkit-box-orient: vertical;
+      white-space: normal;
+      color: var(--fg-bright);
+      font-size: 15px;
+      line-height: 1.35;
+    }
+    .runs-wrap td.c-agent,
+    .runs-wrap td.c-start {
+      display: block;
+      color: var(--muted) !important;
+    }
+    .runs-wrap td:last-child {
+      position: absolute;
+      top: 8px;
+      right: 6px;
+      width: auto !important;
     }
   }
   .id-cell {
