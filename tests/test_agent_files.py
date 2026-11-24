@@ -95,7 +95,10 @@ def test_shipped_agents_load():
 
 def test_orchestrator_subagents_derive_from_the_same_files():
     o = get_agent("orchestrator")
-    assert set(o.subagents) == {"research", "research-deep", "summariser", "finance-news"}
+    assert set(o.subagents) == {
+        "research", "research-deep", "summariser", "finance-news",
+        "filings-reader", "quant-analyst", "verifier", "watchlist-monitor",
+    }
     assert "Agent" in o.tools  # auto-granted: it has subagents
     r = get_agent("research")
     sub = o.subagents["research"]
@@ -113,9 +116,15 @@ def test_orchestrator_subagents_derive_from_the_same_files():
 def test_templates_and_servers():
     f = get_agent("finance-news")
     assert str(SETTINGS.briefings_dir) in f.system_prompt and "{{briefings_dir}}" not in f.system_prompt
-    assert set(f.mcp_servers) == {"bran_docs"} or set(f.mcp_servers) == {"bran_docs", "tavily"}
+    assert set(f.mcp_servers) - {"tavily"} == {"bran_docs", "bran_data"}
+    # `mcp__bran_data__*` in a file is every dataset and search tool, by name.
+    assert {"mcp__bran_data__query_dataset", "mcp__bran_data__search_briefings"} <= set(f.tools)
+    assert "mcp__bran_data__*" not in f.tools
     o = get_agent("orchestrator")
-    assert {"bran", "bran_docs"} <= set(o.mcp_servers)
+    assert {"bran", "bran_docs", "bran_data"} <= set(o.mcp_servers)
+    assert "bran_data" not in get_agent("summariser").mcp_servers
+    for name in ("orchestrator", "research", "research-deep"):
+        assert "## Tables and numbers" in get_agent(name).system_prompt
     assert servers_for(["Read"]) == {}
 
 

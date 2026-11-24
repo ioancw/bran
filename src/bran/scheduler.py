@@ -397,6 +397,18 @@ async def _fire(
         log.exception("schedule %s failed", schedule_name)
         failed = True
 
+    if not failed:
+        # A delivered briefing may have been saved to the briefings folder:
+        # read the levels it states into the market_levels dataset. Detached,
+        # and it only does anything when a briefing file is new or changed.
+        try:
+            from bran.background import spawn_background
+            from bran.market_levels import refresh_quietly
+
+            spawn_background(refresh_quietly(), name="market-levels")
+        except Exception:
+            log.exception("could not start the market levels refresh")
+
     retry_scheduled = False
     if failed and attempt < SETTINGS.runner_retries:
         retry_scheduled = _schedule_retry(
@@ -587,6 +599,36 @@ def _queue_catch_up(scheduler: AsyncIOScheduler, after_sleep: bool = False) -> N
             replace_existing=True,
             misfire_grace_time=None,
         )
+
+
+def fire_again(schedule_ids: list[str]) -> int:
+    """Fire each of these automations once, now: a restart cut their run off
+    (see bran.resume). One that the startup catch-up is already about to run
+    is left to it. Returns how many were queued."""
+    from datetime import datetime, timedelta, timezone
+
+    from apscheduler.triggers.date import DateTrigger
+
+    from bran.persistence import list_schedules
+
+    if _scheduler is None:
+        return 0
+    catching_up = {e["name"] for e in _startup_report.get("caught_up", [])}
+    by_id = {s.id: s for s in list_schedules()}
+    queued = 0
+    for sid in schedule_ids:
+        rec = by_id.get(sid)
+        if rec is None or not rec.enabled or rec.name in catching_up:
+            continue
+        log.warning("runner %s was cut off by a restart — running it again", rec.name)
+        _scheduler.add_job(
+            _fire,
+            trigger=DateTrigger(run_date=datetime.now(timezone.utc) + timedelta(seconds=8 + 10 * queued)),
+            args=(rec.agent, rec.task, rec.name, rec.project_id, rec.id, bool(rec.run_at), 0, None),
+            id=f"bran-resume:{rec.name}", replace_existing=True, misfire_grace_time=3600,
+        )
+        queued += 1
+    return queued
 
 
 def _heartbeat(check_gap: bool = True) -> None:

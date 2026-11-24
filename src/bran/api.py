@@ -218,25 +218,43 @@ def build_app(enable_scheduler: bool = True) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         # Crash recovery: any run left 'pending'/'running' is an orphan from a
-        # previous process — mark it failed so it doesn't show in-progress forever.
+        # previous process. Background work is picked up again; the rest is
+        # marked failed so it doesn't show in-progress forever (bran.resume).
+        recovery = None
         try:
-            from bran.persistence import reconcile_interrupted_runs
+            from bran import resume
 
-            n = reconcile_interrupted_runs()
-            if n:
-                logging.getLogger("bran.api").info("reconciled %d interrupted run(s) on startup", n)
+            recovery = resume.recover()
         except Exception:
-            logging.getLogger("bran.api").exception("run reconciliation failed")
+            logging.getLogger("bran.api").exception("run recovery failed")
+            try:
+                from bran.persistence import reconcile_interrupted_runs
+
+                reconcile_interrupted_runs()
+            except Exception:
+                logging.getLogger("bran.api").exception("run reconciliation failed")
+
+        def _resume_now() -> None:
+            if recovery is None:
+                return
+            try:
+                from bran import resume
+
+                resume.start(recovery)
+            except Exception:
+                logging.getLogger("bran.api").exception("could not restart interrupted runs")
 
         if enable_scheduler:
             from bran.scheduler import start_scheduler, stop_scheduler
 
             start_scheduler()
+            _resume_now()
             try:
                 yield
             finally:
                 stop_scheduler()
         else:
+            _resume_now()
             yield
 
     app = FastAPI(

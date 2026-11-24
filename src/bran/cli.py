@@ -271,6 +271,52 @@ def prune(
         console.print(f"[green]Vacuumed[/] — {before:,} → {after:,} bytes")
 
 
+@app.command("index-briefings")
+def index_briefings_cmd(
+    force: bool = typer.Option(False, "--force", help="Rebuild the index from nothing."),
+) -> None:
+    """Index the saved briefings for search (bran also does this on first search).
+
+    Safe to run as often as you like: only new and changed files are read.
+    """
+    from bran.search import fts5_available, index_briefings, sync_runs
+
+    done = index_briefings(force=force)
+    runs = sync_runs()
+    if not fts5_available():
+        console.print("[yellow]This SQLite has no full-text search; searches will scan instead.[/]")
+        return
+    console.print(
+        f"{done['files']} briefing file(s): {done['indexed']} indexed "
+        f"({done['sections']} sections), {done['removed']} removed. {runs} run(s) indexed."
+    )
+
+
+@app.command()
+def levels(
+    force: bool = typer.Option(False, "--force", help="Re-read every briefing, not just new ones."),
+    limit: int | None = typer.Option(None, "--limit", help="Read at most this many briefings now."),
+) -> None:
+    """Read the levels the briefings state into the market_levels dataset.
+
+    One small model call per new or changed briefing; a row is kept only if
+    its quote is in the briefing word for word and contains the number.
+    """
+    import asyncio
+
+    from bran.market_levels import refresh
+
+    done = asyncio.run(refresh(force=force, limit=limit))
+    console.print(
+        f"{done['briefings']} briefing(s): read {done['read']}, failed {done['failed']}; "
+        f"kept {done['kept']} level(s), dropped {done['dropped']}."
+    )
+    if done["dataset"]:
+        console.print(f"[green]market_levels[/] is {done['dataset']} with {done['rows']} row(s).")
+    else:
+        console.print("No levels found, so no dataset was written.")
+
+
 @app.command()
 def feedback(
     out: Path | None = typer.Option(
@@ -476,6 +522,19 @@ def schedule_rm(name: str = typer.Argument(...)) -> None:
 _SUBCOMMANDS = {"chat", "run", "ask", "agents", "serve", "backup", "schedule", "runs"}
 
 
+def _subcommands() -> set[str]:
+    """Every top-level command and group the app registers, plus the names
+    above. Read from the app so a new command cannot be mistaken for a prompt
+    (as `prune` and `feedback` once were: they were never added to the set)."""
+    names = set(_SUBCOMMANDS)
+    for cmd in app.registered_commands:
+        name = cmd.name or (cmd.callback.__name__.replace("_", "-") if cmd.callback else "")
+        if name:
+            names.add(name)
+    names.update(g.name for g in app.registered_groups if g.name)
+    return names
+
+
 def main() -> None:
     """CLI entry point.
 
@@ -496,7 +555,7 @@ def main() -> None:
     first_non_flag = next((a for a in args if not a.startswith("-")), None)
     is_help = any(a in {"-h", "--help"} for a in args)
 
-    if first_non_flag is not None and first_non_flag not in _SUBCOMMANDS and not is_help:
+    if first_non_flag is not None and first_non_flag not in _subcommands() and not is_help:
         idx = args.index(first_non_flag)
         sys.argv = [sys.argv[0], *args[:idx], "ask", "orchestrator", *args[idx:]]
 

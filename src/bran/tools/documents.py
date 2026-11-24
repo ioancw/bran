@@ -178,10 +178,12 @@ def _extract_text(data: bytes) -> tuple[str, int, int]:
     parts: list[str] = []
     for i in range(n):
         try:
-            parts.append(reader.pages[i].extract_text() or "")
+            page = (reader.pages[i].extract_text() or "").strip()
         except Exception as e:  # corrupt/odd page — keep going
-            parts.append(f"[error extracting page {i + 1}: {e}]")
-    return "\n\n".join(parts).strip(), n, total
+            page = f"[error extracting this page: {e}]"
+        # Each page is labelled so a reader can say where a figure is.
+        parts.append(f"[page {i + 1}]\n{page}" if page else "")
+    return "\n\n".join(p for p in parts if p).strip(), n, total
 
 
 @tool(
@@ -189,7 +191,8 @@ def _extract_text(data: bytes) -> tuple[str, int, int]:
     (
         "Extract the text of a PDF so you can read/summarise/analyse it. `source` "
         "is either a local file path (e.g. '/mnt/c/Users/.../report.pdf') or an "
-        "http(s) URL to a PDF. Returns the text (up to 50 pages). Use this for "
+        "http(s) URL to a PDF. Returns the text (up to 50 pages), each page "
+        "starting with a `[page N]` line so you can cite where something is. Use this for "
         "filings, papers, reports — the plain Read tool can't parse PDFs. If it "
         "comes back empty the PDF is likely scanned images (no OCR)."
     ),

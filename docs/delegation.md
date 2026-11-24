@@ -184,16 +184,27 @@ The substrate already exists: the project **working folder (`work_dir`)** + the
 **artifacts** table. Subagents can already write files there (the confinement
 hook admits `work_dir`; writes are recorded as artifacts).
 
-The minimal addition that makes this first-class is a least-privilege **`dataset`
-tool group** (same shape as `read_pdf` / `bran_docs`):
+This now exists as a least-privilege tool group, the **`bran_data`** server
+(`src/bran/tools/data.py`, engine in `src/bran/datasets.py`). An agent has it
+when its file lists `mcp__bran_data__*`:
 
-- `write_dataset(rows|path) → dataset_id`  (persists to `work_dir`, e.g. Parquet/DuckDB)
-- `dataset_head(id, n)` → preview + schema  (the cheap manifest)
-- `query_dataset(id, sql)` → new `dataset_id`  (DuckDB does the join/agg deterministically)
-- `render_dataset(id) → markdown | csv path`  (final presentation)
+- `write_dataset(name, rows | csv_path, source, caveats)` → handle + manifest
+- `dataset_head(dataset_id, n)` → the manifest again, with `n` rows
+- `list_datasets(query, project_only)` → what earlier runs stored
+- `query_dataset(sql)` → a NEW dataset: one SELECT over datasets named by
+  handle, run by DuckDB; the result records the SQL and its parents
+- `render_dataset(dataset_id, format)` → a markdown table, or a CSV in the
+  project's Files
 
-Agents then trade `dataset_id`s instead of pasting tables, and the orchestrator
-does set logic by handle.
+Rows live in bran's SQLite database (`datasets`, `dataset_rows`); DuckDB is the
+query engine only, and each query sees just the datasets its SQL names, loaded
+into a throwaway in-memory database with no file, network or extension access.
+The producing run and project are stamped from the run, never from the model.
+
+Agents trade handles instead of pasting tables, and the orchestrator does set
+logic by handle. The same server carries `search_runs` and `search_briefings`
+(`src/bran/search.py`): full-text search over past results and the saved
+briefings, so an agent can find what was produced before.
 
 ### Anti-patterns (the inverse of a clean design)
 

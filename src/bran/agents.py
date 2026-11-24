@@ -77,6 +77,10 @@ def _server_for_prefix(prefix: str) -> tuple[str, Any] | None:
         from bran.tools.team import team_server
 
         return "bran_team", team_server
+    if prefix == "bran_data":
+        from bran.tools.data import data_server
+
+        return "bran_data", data_server
     return None
 
 
@@ -87,6 +91,10 @@ def resolve_tools(tools: list[str]) -> list[str]:
     for t in tools:
         if t == "mcp__tavily__*":
             expanded = TAVILY_TOOLS if os.getenv("TAVILY_API_KEY") else []
+        elif t == "mcp__bran_data__*":
+            from bran.tools.data import TOOL_NAMES
+
+            expanded = list(TOOL_NAMES)
         elif t.startswith("mcp__tavily__") and not os.getenv("TAVILY_API_KEY"):
             expanded = []
         else:

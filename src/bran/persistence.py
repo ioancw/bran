@@ -190,6 +190,32 @@ CREATE TABLE IF NOT EXISTS answer_feedback (
     created_at  TEXT NOT NULL,
     PRIMARY KEY (session_id, answer_key)
 );
+
+-- Datasets: tables agents hand to each other by handle (see bran.datasets).
+-- One row of metadata here, the table's rows in dataset_rows. `columns` is
+-- the accurate schema ([{"name","type"}]); `run_id`/`project_id` are stamped
+-- from the producing run, never taken from the model; a derived dataset
+-- records the SQL and the datasets it came from.
+CREATE TABLE IF NOT EXISTS datasets (
+    id          TEXT PRIMARY KEY,           -- short handle, e.g. "ds_a1f3c9"
+    name        TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    columns     TEXT NOT NULL,
+    row_count   INTEGER NOT NULL,
+    run_id      TEXT,
+    project_id  TEXT,
+    source      TEXT NOT NULL DEFAULT '',   -- provenance: URL / file / "query"
+    caveats     TEXT NOT NULL DEFAULT '',
+    parent_ids  TEXT NOT NULL DEFAULT '[]', -- JSON: handles a query derived from
+    sql         TEXT NOT NULL DEFAULT '',   -- the query that produced it, if derived
+    created_at  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS dataset_rows (
+    dataset_id  TEXT NOT NULL,
+    row_idx     INTEGER NOT NULL,
+    data        TEXT NOT NULL,              -- one JSON object per row
+    PRIMARY KEY (dataset_id, row_idx)
+);
 """
 
 # Created after the tables AND after any migration has added the columns they
@@ -212,6 +238,8 @@ CREATE INDEX IF NOT EXISTS idx_chats_project   ON chats(project_id);
 CREATE INDEX IF NOT EXISTS idx_projects_updated ON projects(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_project_memories ON project_memories(project_id);
 CREATE INDEX IF NOT EXISTS idx_teammate_requests ON teammate_requests(teammate_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_datasets_created ON datasets(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_datasets_project ON datasets(project_id);
 """
 
 # Reentrant: store functions call each other while holding it (insert_run ->
@@ -1518,6 +1546,94 @@ def vacuum() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Datasets (see bran.datasets)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DatasetRecord:
+    id: str
+    name: str
+    columns: list[dict[str, str]]
+    row_count: int
+    description: str = ""
+    run_id: str | None = None
+    project_id: str | None = None
+    source: str = ""
+    caveats: str = ""
+    parent_ids: list[str] = field(default_factory=list)
+    sql: str = ""
+    created_at: str = field(default_factory=utcnow_iso)
+
+
+def _row_to_dataset(row: sqlite3.Row) -> DatasetRecord:
+    return DatasetRecord(
+        id=row["id"], name=row["name"], columns=json.loads(row["columns"]),
+        row_count=row["row_count"], description=row["description"], run_id=row["run_id"],
+        project_id=row["project_id"], source=row["source"], caveats=row["caveats"],
+        parent_ids=json.loads(row["parent_ids"] or "[]"), sql=row["sql"],
+        created_at=row["created_at"],
+    )
+
+
+def insert_dataset(record: DatasetRecord, rows: list[dict[str, Any]]) -> None:
+    """Store a dataset and its rows together, or not at all."""
+    with _lock, _conn() as conn, _tx(conn):
+        conn.execute(
+            """INSERT INTO datasets
+               (id, name, description, columns, row_count, run_id, project_id, source, caveats,
+                parent_ids, sql, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (record.id, record.name, record.description, json.dumps(record.columns),
+             record.row_count, record.run_id, record.project_id, record.source, record.caveats,
+             json.dumps(record.parent_ids), record.sql, record.created_at),
+        )
+        conn.executemany(
+            "INSERT INTO dataset_rows (dataset_id, row_idx, data) VALUES (?, ?, ?)",
+            ((record.id, i, json.dumps(row, ensure_ascii=False)) for i, row in enumerate(rows)),
+        )
+
+
+def get_dataset(dataset_id: str) -> DatasetRecord | None:
+    with _lock, _conn() as conn:
+        row = conn.execute("SELECT * FROM datasets WHERE id = ?", (dataset_id,)).fetchone()
+    return _row_to_dataset(row) if row else None
+
+
+def list_datasets(
+    query: str | None = None, project_id: str | None = None, limit: int = 20,
+) -> list[DatasetRecord]:
+    """Stored datasets, newest first; `query` matches a word in the name or
+    description."""
+    sql = "SELECT * FROM datasets"
+    where: list[str] = []
+    params: list[Any] = []
+    if query:
+        where.append("(instr(lower(name), lower(?)) > 0 OR instr(lower(description), lower(?)) > 0)")
+        params += [query, query]
+    if project_id:
+        where.append("project_id = ?")
+        params.append(project_id)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY created_at DESC, rowid DESC LIMIT ?"
+    params.append(max(1, int(limit)))
+    with _lock, _conn() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [_row_to_dataset(r) for r in rows]
+
+
+def dataset_rows_json(dataset_id: str, limit: int | None = None) -> list[str]:
+    """A dataset's rows in order, each as the JSON text it is stored as."""
+    sql = "SELECT data FROM dataset_rows WHERE dataset_id = ? ORDER BY row_idx"
+    params: list[Any] = [dataset_id]
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(max(0, int(limit)))
+    with _lock, _conn() as conn:
+        return [r[0] for r in conn.execute(sql, params).fetchall()]
+
+
+# ---------------------------------------------------------------------------
 # Schema versioning. A fresh file gets the current shape and the latest
 # version in one go; an existing file runs only the migrations it has not seen
 # (PRAGMA user_version counts them), each exactly once.
@@ -1617,11 +1733,16 @@ def _m5_teammate_requests(conn: sqlite3.Connection) -> None:
     step only marks the version at which an existing database gained it."""
 
 
+def _m6_datasets(conn: sqlite3.Connection) -> None:
+    """Datasets and their rows: `_TABLES` creates both; this step only marks
+    the version at which an existing database gained them."""
+
+
 # Append only. A migration never changes once released: a database that has
 # already run it will not run it again.
 _MIGRATIONS = (
     _m1_legacy_catch_up, _m2_events_to_table, _m3_answer_feedback, _m4_teammates,
-    _m5_teammate_requests,
+    _m5_teammate_requests, _m6_datasets,
 )
 
 
