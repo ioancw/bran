@@ -81,7 +81,7 @@ _DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 # Sections that are about the briefing, or repeat an earlier one: a figure
 # there is a correction being discussed or yesterday's number, not today's.
 _SKIP_SECTION = re.compile(
-    r"verification note|carried over|unchanged|method|feed timestamps|feeds unavailable", re.IGNORECASE
+    r"verification note|about this briefing|carried over|unchanged|method|feed timestamps|feeds unavailable", re.IGNORECASE
 )
 # Words that make a figure a bound or a rough one, when they sit just before it.
 _ROUGH = re.compile(

@@ -213,7 +213,10 @@ def _verification_prompt(
         "Judge ONLY: did the output actually do what the task asked (structure, "
         "scope, completeness), and is it internally consistent (no obvious "
         "fabrication, no placeholder/error text passed off as content)? Style "
-        "preferences are not failures. Reply with EXACTLY one JSON object, no "
+        "preferences are not failures. The report is read by a person: do not "
+        "ask for more caveats, disclaimers or notes about method, and do not "
+        "fail a section that is labelled as interpretation for interpreting. "
+        "Reply with EXACTLY one JSON object, no "
         "other text:\n"
         '{"pass": true|false, "issues": ["<each concrete problem>"], '
         '"feedback": "<one short paragraph for the agent to fix the issues>"}'
@@ -304,7 +307,16 @@ async def _run_verification(
             "A reviewer found problems with the report you produced for this "
             f"exact task:\n{feedback}\n"
             + ("".join(f"- {i}\n" for i in verdict["issues"]))
-            + "Produce the report again, fixing these issues."
+            + "Produce the report again, fixing these issues.\n"
+            # Without this the corrected report is written to the reviewer: it
+            # opens with a method note, lists its fixes and hedges every line.
+            "The report is for the user, who never sees this feedback. Fix the "
+            "problems in the content itself and say nothing about the review: "
+            "no mention of a reviewer or of feedback, no list of fixes, no "
+            "method note or disclaimer at the top, no account of how the "
+            "report was produced. Do not add caveats or tags to lines the "
+            "reviewer did not question. If a claim cannot be supported, "
+            "correct it or leave it out. Open with the content."
         )
         retry = await run_agent(
             agent, task, project_id=project_id, source="runner",

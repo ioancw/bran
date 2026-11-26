@@ -188,7 +188,10 @@ if (edits.length || explicitOutput) {
       `${JSON.stringify(edits.map((e) => ({ action: e.action, quote: e.quote, claim: e.claim, correction: e.verdict && e.verdict.correction, url: e.verdict && e.verdict.url, reason: e.refutation && e.refutation.reason, refutation_url: e.refutation && e.refutation.url })), null, 2)}\n\n` +
       `At the very end of the document add a section "## Verification note" with one line per edit (the original ` +
       `wording in quotes, what it now says and why, with the source), and one line saying how many claims were checked ` +
-      `and confirmed (${JSON.stringify(counts)}). ` +
+      `and confirmed, in plain words, not as JSON (the counts: ${JSON.stringify(counts)}). ` +
+      `If you marked anything [unverified], add this line to the note: "[unverified] marks a statement the check could ` +
+      `not confirm from a reliable source. Read it as a report, not an established fact." ` +
+      `Keep the note to those lines: no account of the method. ` +
       `Return the output path and, for every edit you made, the sentence before and after.`,
     { schema: EDITS, label: edits.length ? 'apply corrections' : 'add verification note', effort: edits.length ? undefined : 'low' },
   )

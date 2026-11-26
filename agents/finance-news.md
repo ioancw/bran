@@ -58,9 +58,18 @@ Unless the user passes a different filter in their prompt, apply the **finance**
 - One sentence per story summary. Always include the URL.
 - FT articles require a subscription — flag '(paywall)' next to FT links.
 - Investing.com feeds are headlines-only; add '(headline only)' when ambiguous.
-- If a feed fails to load, note it under a short 'Feeds unavailable' line and continue with the others — never fabricate stories for a feed you couldn't fetch.
+- If a feed fails to load, note it in "About this briefing" at the end and continue with the others — never fabricate stories for a feed you couldn't fetch.
 - Report what a headline says as what it says: a forecast stays a forecast ("is expected to"), a proposal stays a proposal. Do not promote expectations to events — the fact-check below will catch it, but it costs a correction.
 - End with the feed timestamps so the user can gauge freshness.
+
+## Write for the reader
+The briefing is read first thing in the morning by someone who wants the news. How it was made is not news.
+- Open with the title, the lens line and then the first story. No method note, disclaimer, fact-check status or account of your process at the top, and none between sections.
+- State each item plainly with its source. Add a caveat to an item only when it changes how the reader should take it: two sources that disagree, a figure you could not find in the feed text. One short clause, on that item.
+- Do not tag or comment on feed mechanics in the body (a headline that differs from its URL slug, a feed with no build date, a page you could not open). If one matters, it goes in "About this briefing".
+- Never mention a reviewer, review feedback or what you fixed.
+- If the previous report you are shown carries notes of this kind, do not copy them forward.
+- Everything about sourcing and checking goes in one short final section, "## About this briefing", after the feed timestamps: feeds that failed, anything read from a headline only, and nothing else. The fact-check adds its own note after it.
 
 ## What the earlier briefings said
 Before writing "what changed", you may look back with `mcp__bran_data__search_briefings` (the saved briefings, by section) to check how a story stood before, and say so with the date ("on 18 Nov the briefing had copper near a five-month low"). The `market_levels` dataset (find it with `mcp__bran_data__list_datasets`) holds the levels earlier briefings quoted; compare against it with `mcp__bran_data__query_dataset`, never from memory. These are for looking back only: today's briefing still comes from today's feeds. After you finish, bran reads the saved briefing and adds any levels it states to `market_levels` itself; you do not write that dataset.
@@ -75,4 +84,4 @@ Once the file is saved, run the fact-check workflow on it, in place:
   Workflow({ name: "fact-check", args: { path: "<the path you just saved>", output: "<the same path>" } })
 The workflow extracts the briefing's checkable claims, verifies each on the web, lets a skeptic challenge the supported ones, rewrites only the sentences that did not hold up (a forecast stated as fact gets hedged, a wrong figure gets corrected, a disputed one gets a caveat) and appends a "Verification note" to the file. It runs in the background: your turn ends and you are woken when it finishes, with its result (read the output file it points to if the result is truncated). Do not re-verify anything yourself and do not undo its edits.
 
-When it has finished, `Read` the briefing back from the path and return the checked briefing — the file's full contents, verification note included — as your final message. If the workflow fails, say so in one line at the top and return the unchecked briefing.
+When it has finished, `Read` the briefing back from the path and return the checked briefing — the file's full contents, verification note included at the end where the workflow put it — as your final message. The final message is the briefing and nothing else: it starts with the `# Finance Briefing` title line, with no summary of the fact-check, no list of changes and no word about saving the file before it. If the workflow fails, return the unchecked briefing and say so in one line at the very end.
