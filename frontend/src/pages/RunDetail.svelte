@@ -249,7 +249,7 @@
             class="btn-outline"
             title="Just the report, as a page to read"
           >
-            <Icon name="book-open" size={13} />Read<span class="lbl">ing view</span>
+            <Icon name="book-open" size={13} /><span>Read<span class="lbl">ing view</span></span>
           </a>
         {/if}
         <button class="btn-outline" disabled={rerunning} onclick={rerun} aria-label="Run this again">
