@@ -271,6 +271,13 @@ def build_app(enable_scheduler: bool = True) -> FastAPI:
 
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(SETTINGS.allowed_hosts))
 
+    # The page's script and styles are ~1 MB as text and a quarter of that
+    # compressed, which is what a phone on a relayed connection feels on a cold
+    # open. Live streams (text/event-stream) are left alone by this middleware.
+    from starlette.middleware.gzip import GZipMiddleware
+
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
+
     @app.get("/healthz", tags=["meta"])
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
@@ -306,7 +313,17 @@ def _mount_spa(app: FastAPI) -> None:
 
     assets = spa_dir / "assets"
     if assets.exists():
-        app.mount("/assets", StaticFiles(directory=str(assets)), name="spa-assets")
+        # A built file's name carries a hash of its contents, so it can be kept
+        # for good: a new build has new names. Without this the browser asks
+        # the server about every file on each open before it shows anything.
+        class _HashedAssets(StaticFiles):
+            async def get_response(self, path, scope):
+                response = await super().get_response(path, scope)
+                if response.status_code == 200:
+                    response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+                return response
+
+        app.mount("/assets", _HashedAssets(directory=str(assets)), name="spa-assets")
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     @app.get("/{path:path}", response_class=HTMLResponse, include_in_schema=False)
