@@ -1,0 +1,2 @@
+# Shell scripts are sent to the Linux server as they are: keep their line endings.
+*.sh text eol=lf
