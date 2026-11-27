@@ -26,7 +26,7 @@
   <div class="section-head">
     <button
       type="button"
-      class="section-toggle"
+      class="section-toggle tap"
       aria-expanded={expanded}
       onclick={() => (expanded = !expanded)}
     >

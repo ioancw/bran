@@ -25,7 +25,8 @@
       } catch (e) { /* private mode etc. — midnight is a fine fallback */ }
     </script>
     <link rel="icon" type="image/svg+xml" href="/static/crow.svg" />
-    <link rel="apple-touch-icon" href="/static/crow.svg" />
+    <!-- iPhones ignore an SVG here; the home-screen icon has to be a PNG. -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png" />
     <!-- Fonts are self-hosted (Fontsource, bundled by Vite) — no CDN. -->
   </head>
   <body>

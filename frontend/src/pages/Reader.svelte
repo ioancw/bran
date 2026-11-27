@@ -85,8 +85,6 @@
   })
 
   const parts = $derived(splitHeadline(run?.result ?? ''))
-  // On a phone the reviewer's notes start folded, so the report leads.
-  const phone = typeof matchMedia !== 'undefined' && matchMedia('(max-width: 768px)').matches
   const headline = $derived(parts.headline || runnerName || run?.agent || 'Report')
   const kicker = $derived(
     parts.headline ? runnerName || run?.agent || '' : runnerName ? (run?.agent ?? '') : '',
@@ -126,6 +124,15 @@
   })
   const back = $derived(backLink(router.from, chatName))
 
+  // The reviewer's notes sit folded after the report, so the report leads. The
+  // badge under the headline is the way to them.
+  let notes = $state<HTMLDetailsElement | null>(null)
+  function showNotes() {
+    if (!notes) return
+    notes.open = true
+    notes.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
   function discuss() {
     if (!run) return
     navigate('/chat?draft=' + encodeURIComponent(`Let's discuss the output of run ${run.id} (${headline}). `))
@@ -134,7 +141,7 @@
 
 <Page>
   {#snippet head()}
-    <a href={href(back.to)} use:link class="back"><Icon name="arrow-left" size={14} />{back.label}</a>
+    <a href={href(back.to)} use:link class="back tap"><Icon name="arrow-left" size={14} />{back.label}</a>
     <div class="ml-auto editions">
       {#if older}
         <a
@@ -186,7 +193,11 @@
         <span>{dateline(run.ended_at ?? run.started_at)}</span>
         <span>·</span>
         <span>{readMinutes(parts.body)} min read</span>
-        {#if badge}
+        {#if badge?.tone === 'note'}
+          <button type="button" class="badge note tap" title={badge.hint} onclick={showNotes}>
+            <Icon name="message-square" size={12} />{badge.label}
+          </button>
+        {:else if badge}
           <span class="badge {badge.tone}" title={badge.hint}>
             <Icon name={badge.tone === 'ok' ? 'shield-check' : 'alert-triangle'} size={12} />{badge.label}
           </span>
@@ -202,20 +213,6 @@
           ><Icon name="download" size={13} />Download</a
         >
       </div>
-
-      {#if verification?.status === 'done' && verification.pass === false && verification.issues?.length}
-        <details class="issues" open={!phone}>
-          <summary>
-            <span class="issues-title"
-              >The reviewer raised {verification.issues.length}
-              {verification.issues.length === 1 ? 'point' : 'points'}</span
-            ><Icon name="chevron-down" size={14} />
-          </summary>
-          <ul>
-            {#each verification.issues as issue, i (i)}<li>{issue}</li>{/each}
-          </ul>
-        </details>
-      {/if}
 
       {#if sites.length}
         <details class="sites">
@@ -237,6 +234,20 @@
       {/if}
 
       <div class="body"><Prose text={parts.body} {sources} /></div>
+
+      {#if verification?.status === 'done' && verification.pass === false && verification.issues?.length}
+        <details class="issues" bind:this={notes}>
+          <summary>
+            <span
+              >Reviewer notes: {verification.issues.length}
+              {verification.issues.length === 1 ? 'point' : 'points'} raised about this report</span
+            ><Icon name="chevron-down" size={14} />
+          </summary>
+          <ul>
+            {#each verification.issues as issue, i (i)}<li>{issue}</li>{/each}
+          </ul>
+        </details>
+      {/if}
 
       <footer class="foot">
         <button class="btn-outline" onclick={discuss}
@@ -382,22 +393,32 @@
     background: var(--red-soft);
     color: var(--red);
   }
+  .badge.note {
+    border: 0;
+    background: var(--surface2);
+    color: var(--fg-dim);
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .badge.note:hover {
+    color: var(--fg-bright);
+  }
   .issues {
-    margin: 0 0 16px;
-    padding: 10px 14px;
+    margin-top: 32px;
+    padding: 4px 14px;
+    border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    background: var(--amber-soft);
     font-size: 14px;
     line-height: 1.55;
-    color: var(--fg);
+    color: var(--fg-dim);
+    scroll-margin-top: 72px;
+  }
+  .issues + .foot {
+    margin-top: 16px;
   }
   .save {
     margin-left: auto;
     text-decoration: none;
-  }
-  .issues-title {
-    font-weight: 600;
-    color: var(--amber);
   }
   .issues summary {
     display: flex;
@@ -406,7 +427,9 @@
     gap: 8px;
     list-style: none;
     cursor: pointer;
-    color: var(--amber);
+    min-height: 40px;
+    font-weight: 500;
+    color: var(--fg-dim);
   }
   .issues summary::-webkit-details-marker {
     display: none;
@@ -425,7 +448,7 @@
   }
   .issues ul {
     margin: 0;
-    padding-left: 18px;
+    padding: 0 0 10px 18px;
   }
   .body {
     margin-top: 18px;

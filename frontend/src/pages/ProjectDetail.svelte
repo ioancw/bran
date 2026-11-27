@@ -272,7 +272,7 @@
             <div class="list-head">
               <div class="label-cap">Documents · {docs.length}</div>
               {#if docs.length > DOCS_SHOWN}
-                <a href={href('/artifacts')} use:link class="docs-all">All in Artifacts</a>
+                <a href={href('/artifacts')} use:link class="docs-all tap">All in Artifacts</a>
               {/if}
             </div>
             <div class="space-y-2">

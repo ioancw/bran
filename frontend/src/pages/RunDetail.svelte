@@ -320,13 +320,13 @@
                 </ul>
               {/if}
               {#if verification.retried_run_id}
-                <a href={href('/runs/' + verification.retried_run_id)} use:link class="verif-link">
+                <a href={href('/runs/' + verification.retried_run_id)} use:link class="verif-link tap">
                   <Icon name="corner-down-right" size={13} />Corrected attempt
                 </a>
               {/if}
             {/if}
             {#if verification.retry_of}
-              <a href={href('/runs/' + verification.retry_of)} use:link class="verif-link">
+              <a href={href('/runs/' + verification.retry_of)} use:link class="verif-link tap">
                 <Icon name="corner-down-right" size={13} />Original attempt
               </a>
             {/if}
@@ -366,14 +366,14 @@
           <h2 class="card-title">Origin</h2>
           <div class="space-y-1">
             {#if run.project_id}
-              <a href={href('/projects/' + run.project_id)} use:link class="origin-link">
+              <a href={href('/projects/' + run.project_id)} use:link class="origin-link tap">
                 <Icon name="folder" size={14} />{projectName(run.project_id)}
               </a>
             {:else}
               <div class="text-muted" style="font-size: 13px;">Standalone run</div>
             {/if}
             {#if run.session_id}
-              <a href={href('/chat/' + encodeURIComponent(run.session_id))} use:link class="origin-link">
+              <a href={href('/chat/' + encodeURIComponent(run.session_id))} use:link class="origin-link tap">
                 <Icon name="message-square" size={14} />Conversation
               </a>
             {/if}
@@ -436,7 +436,7 @@
             <!-- The transcript repeats the final answer at its tail; it's the
                  long form, collapsed by default once the result is on top. -->
             <button
-              class="transcript-toggle"
+              class="transcript-toggle tap"
               aria-expanded={showTranscript}
               onclick={() => (showTranscript = !showTranscript)}
             >
@@ -455,7 +455,7 @@
             <Timeline items={transcript} {children} />
           </div>
           <button
-            class="transcript-toggle"
+            class="transcript-toggle tap"
             aria-expanded={!showTranscript}
             onclick={() => (showTranscript = !showTranscript)}
           >

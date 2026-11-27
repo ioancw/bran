@@ -11,8 +11,8 @@ describe('verifyBadge', () => {
     expect(verifyBadge(run({ status: 'done', pass: true }))?.label).toBe('Verified')
     expect(verifyBadge(run({ status: 'done', pass: true, retry_of: 'a' }))?.label).toBe('Revised')
     expect(verifyBadge(run({ status: 'done', pass: false }))).toMatchObject({
-      label: 'Unverified',
-      tone: 'warn',
+      label: 'Reviewer notes',
+      tone: 'note',
     })
   })
   it('flags a report whose review could not run', () => {

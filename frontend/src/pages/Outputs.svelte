@@ -368,7 +368,7 @@
                     class="pill accent"
                     title="Delta report: only what changed since the last run">Delta</span
                   >{/if}
-                {#if badge}<span class="pill {badge.tone === 'ok' ? 'ok' : 'warn'}" title={badge.hint}
+                {#if badge}<span class="pill {badge.tone === 'note' ? 'mute' : badge.tone}" title={badge.hint}
                     >{badge.label}</span
                   >{/if}
                 <span class="text-muted out-task" title={r.task}

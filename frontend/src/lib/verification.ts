@@ -25,10 +25,16 @@ export function isSuperseded(r: RunRecord): boolean {
 }
 
 /** Badge for reading surfaces: Verified / Revised (passed after a retry) /
- * Unverified (failed review with no successful retry) / Not reviewed (the
- * review was due but could not run). Null = this run is not one that gets
- * reviewed. `hint` says what the label means, for a tooltip. */
-export function verifyBadge(r: RunRecord): { label: string; tone: 'ok' | 'warn'; hint: string } | null {
+ * Reviewer notes (the reviewer raised points that no rewrite settled) / Not
+ * reviewed (the review was due but could not run). Null = this run is not one
+ * that gets reviewed. `hint` says what the label means, for a tooltip.
+ *
+ * "Reviewer notes" is deliberately not "Unverified": the reviewer judges how a
+ * report is written, while `[unverified]` inside a report marks a single fact
+ * the fact-check could not confirm. A report can have notes and sound facts. */
+export function verifyBadge(
+  r: RunRecord,
+): { label: string; tone: 'ok' | 'warn' | 'note'; hint: string } | null {
   const v = verificationOf(r)
   if (!v) return null
   if (v.status !== 'done')
@@ -41,5 +47,9 @@ export function verifyBadge(r: RunRecord): { label: string; tone: 'ok' | 'warn';
     return v.retry_of
       ? { label: 'Revised', tone: 'ok', hint: 'Rewritten after a reviewer found problems, then passed' }
       : { label: 'Verified', tone: 'ok', hint: 'A reviewer agent checked this report' }
-  return { label: 'Unverified', tone: 'warn', hint: 'A reviewer agent found problems with this report' }
+  return {
+    label: 'Reviewer notes',
+    tone: 'note',
+    hint: 'A reviewer agent raised points about this report; they are listed at the end of it',
+  }
 }

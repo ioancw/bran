@@ -239,7 +239,7 @@
         <section>
           <div class="sec-head">
             <span class="label-cap">{deliveriesLabel}</span>
-            <a href={href('/outputs')} use:link class="ml-auto sec-more"
+            <a href={href('/outputs')} use:link class="ml-auto sec-more tap"
               >All outputs<Icon name="arrow-right" size={13} /></a
             >
           </div>
@@ -261,7 +261,7 @@
                         class="pill accent"
                         title="Delta report: only what changed since the last run">Delta</span
                       >{/if}
-                    {#if badge}<span class="pill {badge.tone === 'ok' ? 'ok' : 'warn'}" title={badge.hint}
+                    {#if badge}<span class="pill {badge.tone === 'note' ? 'mute' : badge.tone}" title={badge.hint}
                         >{badge.label}</span
                       >{/if}
                     <span class="ml-auto meta" title={localDateTime(r.started_at)}
@@ -331,7 +331,7 @@
               </div>
             {/if}
           </div>
-          <a href={href('/runs')} use:link class="sec-more" style="margin-top: 12px;"
+          <a href={href('/runs')} use:link class="sec-more tap" style="margin-top: 12px;"
             >Activity log<Icon name="arrow-right" size={13} /></a
           >
         </div>

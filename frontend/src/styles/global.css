@@ -1767,6 +1767,48 @@ a.cite:hover .cite-n {
   table.bran-table td {
     height: 44px;
   }
+  .seg {
+    gap: 6px;
+  }
+  .seg-btn {
+    height: 34px;
+    padding: 0 12px;
+    font-size: 13px;
+  }
+  .msg-action-btn {
+    min-height: 34px;
+    padding: 6px 10px;
+  }
+  .msg-action-btn.icon-only {
+    min-width: 36px;
+    justify-content: center;
+  }
+  .composer-send {
+    width: 36px;
+    height: 36px;
+  }
+  /* Small text links keep their size on the page; the area that takes a tap
+     grows around them. `.tap` is for links styled inside a component. */
+  .tap,
+  .btn-text,
+  .prose-md a.cite {
+    position: relative;
+  }
+  .tap::after,
+  .btn-text::after,
+  .prose-md a.cite::after {
+    content: '';
+    position: absolute;
+    inset: -12px -4px;
+  }
+  /* iPhone Safari zooms the page, and leaves it zoomed, when a focused field's
+     text is smaller than 16px. This has to win over every component's own
+     field size, hence !important. */
+  input:not([type='checkbox'], [type='radio'], [type='range']),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
 }
 @media (min-width: 769px) {
   .sidebar.open {
